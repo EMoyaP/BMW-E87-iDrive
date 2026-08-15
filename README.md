@@ -21,7 +21,7 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.10.1 — validación previa a hardware**.
+Versión actual: **1.11.0 — validación previa a hardware**.
 
 El proyecto compila e instala en un emulador Android 15/API 35 a 1280×720. La instalación definitiva en la radio está
 pendiente de:
@@ -49,10 +49,19 @@ No se publica por ahora una APK de producción. Los APK locales y las claves de 
 - Apertura del destino en Google Maps u otra aplicación compatible.
 - Caché móvil de 150 km y actualización local de precios cada diez minutos mientras la app está visible.
 - Diagnóstico pasivo de paquetes, componentes, broadcasts y ajustes potencialmente relacionados con JCRK01/CYA.
-- `USB DEBUG` con selector seguro de carpeta, captura guiada, autoguardado cada cinco segundos y copia interna de
-  recuperación para identificar únicamente las señales que JCRK01/CYA exponga realmente a Android.
+- `USB DEBUG` con asistente visual paso a paso, candidatos clasificados en directo, selector seguro de carpeta,
+  autoguardado cada cinco segundos y copia interna de recuperación. La clasificación ayuda a interpretar únicamente
+  las señales que JCRK01/CYA exponga realmente a Android; no declara códigos propietarios como confirmados.
 - Sonda opcional, exclusivamente de lectura, para propiedades públicas de Android Automotive.
 - Exportación local del informe de diagnóstico.
+
+### Asistente visual USB DEBUG
+
+![USB DEBUG clasificando un candidato fuerte](docs/screenshots/bmw-e87-usb-wizard-live-strong-v1.11.0.png)
+
+El color verde significa **candidato fuerte pendiente de validar**, no código CAN confirmado. El archivo exportado
+conserva la línea base, los cambios, la fuente y la explicación de la puntuación para poder revisar la captura sin
+instalar herramientas auxiliares.
 
 ## Principios de seguridad
 
@@ -100,6 +109,8 @@ carcasa o nombre comercial similar.
 | `MediaSessionProvider` | Metadatos multimedia y de radio mediante API estándar |
 | `BluetoothDeviceProvider` | Estado Bluetooth público, sin escaneo ni conexión |
 | `DiagnosticEngine` | Inventario y correlación pasiva del firmware |
+| `UsbDebugWizardDialog` | Asistente visual, temporización y candidatos en directo |
+| `DiagnosticCandidateClassifier` | Puntuación reproducible sin convertir candidatos en mapeos |
 | `AppRepository` | Asignación persistente de aplicaciones y accesos rápidos |
 
 El proyecto usa Java y las APIs del framework Android, sin dependencias de ejecución de terceros, WebView ni código
@@ -163,8 +174,9 @@ Medido en emulador Android 15/API 35 a 1280×720; la radio física puede comport
 
 | Medida | Resultado observado |
 |---|---:|
-| APK debug | 2.335.428 bytes |
+| APK debug | 2.355.598 bytes |
 | PSS estabilizado | 45–51 MB |
+| PSS con asistente USB activo | 52,5 MB |
 | Arranque frío | 1,47–1,53 s |
 | Caché Diésel/150 km en Madrid | 143.522 bytes |
 | Descarga nacional Diésel | 4.302.377 bytes |

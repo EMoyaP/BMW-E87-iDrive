@@ -1,6 +1,7 @@
 package com.ug.e87idrive;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
@@ -44,10 +45,9 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
+@SuppressLint("SetTextI18n") // This fixed Spanish automotive UI is intentionally assembled in code.
 public class MainActivity extends Activity {
     private static final int REQUEST_USB_DIAGNOSTIC_DIRECTORY = 301;
-    private static final long USB_DIAGNOSTIC_FLUSH_MS = 5_000L;
-    private static final long USB_DIAGNOSTIC_MAX_MS = 10 * 60_000L;
     private int BG, PANEL, PANEL2, ACCENT, BLUE, TEXT, MUTED, LINE;
     private SharedPreferences vehiclePreferences, uiPreferences;
     private AppRepository apps;
@@ -69,20 +69,12 @@ public class MainActivity extends Activity {
     private FuelStationProvider fuelStations;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
+    private UsbDebugWizardDialog activeUsbWizard;
     private String lastCorrelationReport = "";
-    private String usbCaptureLabel = "";
     private boolean foreground;
     private boolean usbCaptureRunning;
     private boolean startUsbCaptureAfterPicker;
     private int mediaRefreshTick;
-    private final Runnable usbDiagnosticFlush = new Runnable() {
-        @Override public void run() {
-            if (!usbCaptureRunning || usbDiagnostics == null) return;
-            usbDiagnostics.updateSession(buildUsbDiagnosticReport("EN CURSO", ""));
-            handler.postDelayed(this, USB_DIAGNOSTIC_FLUSH_MS);
-        }
-    };
-    private final Runnable usbDiagnosticTimeout = () -> finishUsbCapture(null, null, null, true);
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -138,7 +130,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        if (usbCaptureRunning) finishUsbCapture(null, null, null, true);
+        if (activeUsbWizard != null && activeUsbWizard.isRunning()) activeUsbWizard.finishFromHost();
         handler.removeCallbacksAndMessages(null);
         diagnostics.stopPassiveProbe();
         bluetoothState.stop();
@@ -895,9 +887,7 @@ public class MainActivity extends Activity {
         stop.setOnClickListener(v -> {
             if (!diagnostics.isCorrelationRunning()) { toast("No hay una sesión activa"); return; }
             if (usbCaptureRunning) {
-                finishUsbCapture(reportView, start, stop, false);
-                usb.setText("USB DEBUG");
-                usbStatus.setText(usbDiagnostics.directorySummary());
+                if (activeUsbWizard != null) activeUsbWizard.stopAndSave();
                 return;
             }
             lastCorrelationReport = diagnostics.stopCorrelation();
@@ -929,19 +919,17 @@ public class MainActivity extends Activity {
         }
         String[] options = usbCaptureRunning
                 ? new String[]{"Detener y guardar captura", "Guardar snapshot ahora"}
-                : new String[]{"Iniciar captura guiada", "Guardar informe ahora", "Cambiar carpeta USB",
+                : new String[]{"Abrir asistente visual", "Guardar informe ahora", "Cambiar carpeta USB",
                 "Olvidar autorización USB"};
         new AlertDialog.Builder(this).setTitle("USB DEBUG")
                 .setItems(options, (d, which) -> {
                     if (usbCaptureRunning) {
                         if (which == 0) {
-                            finishUsbCapture(reportView, start, stop, false);
-                            usb.setText("USB DEBUG");
-                            usbStatus.setText(usbDiagnostics.directorySummary());
+                            if (activeUsbWizard != null) activeUsbWizard.stopAndSave();
                         }
                         else if (which == 1) saveUsbSnapshot();
                     } else {
-                        if (which == 0) chooseUsbCorrelation(reportView, start, stop, usb, usbStatus);
+                        if (which == 0) showUsbDebugWizard(reportView, start, stop, usb, usbStatus);
                         else if (which == 1) saveUsbSnapshot();
                         else if (which == 2) selectUsbDirectory(false);
                         else {
@@ -953,61 +941,53 @@ public class MainActivity extends Activity {
                 }).setNegativeButton("CANCELAR", null).show();
     }
 
-    private void chooseUsbCorrelation(TextView reportView, Button start, Button stop, Button usb,
-                                      TextView usbStatus) {
+    private void showUsbDebugWizard(TextView reportView, Button start, Button stop, Button usb,
+                                    TextView usbStatus) {
         if (diagnostics.isCorrelationRunning()) {
             toast("Detén primero la sesión de correlación actual");
             return;
         }
-        String[] options = {"Luces: posición / cruce / largas / antiniebla", "Freno de mano",
-                "Puertas: probar una cada vez", "Cinturón del conductor", "Temperatura exterior",
-                "Climatizador: temperaturas", "Climatizador: ventilador", "PDC / marcha atrás", "Otra señal"};
-        new AlertDialog.Builder(this).setTitle("Captura USB · detenido · una señal cada vez")
-                .setItems(options, (d, which) -> startUsbCapture(options[which], reportView, start, stop, usb, usbStatus))
-                .setNegativeButton("CANCELAR", null).show();
-    }
+        activeUsbWizard = new UsbDebugWizardDialog(this, diagnostics, usbDiagnostics,
+                new UsbDebugWizardDialog.Host() {
+                    @Override public String buildBaseReport() { return buildDiagnosticReport(); }
 
-    private void startUsbCapture(String label, TextView reportView, Button start, Button stop, Button usb,
-                                 TextView usbStatus) {
-        usbCaptureLabel = label;
-        usbCaptureRunning = true;
-        diagnostics.startPassiveProbe();
-        vehicleData.start();
-        diagnostics.startCorrelation(label);
-        String initial = buildUsbDiagnosticReport("INICIADA", "");
-        usbDiagnostics.startSession(label, initial, this::usbCallback);
-        handler.removeCallbacks(usbDiagnosticFlush);
-        handler.removeCallbacks(usbDiagnosticTimeout);
-        handler.postDelayed(usbDiagnosticFlush, USB_DIAGNOSTIC_FLUSH_MS);
-        handler.postDelayed(usbDiagnosticTimeout, USB_DIAGNOSTIC_MAX_MS);
-        reportView.setText(diagnostics.correlationState() + "\n\n" + buildDiagnosticReport());
-        start.setEnabled(false);
-        stop.setEnabled(true);
-        usb.setText("USB DEBUG · ACTIVO");
-        usbStatus.setText("Grabando «" + label + "» · autoguardado cada 5 s");
-    }
+                    @Override public void ensureDiagnosticSourcesStarted() {
+                        diagnostics.startPassiveProbe();
+                        vehicleData.start();
+                    }
 
-    private void finishUsbCapture(TextView reportView, Button start, Button stop, boolean timedOut) {
-        if (!usbCaptureRunning) return;
-        handler.removeCallbacks(usbDiagnosticFlush);
-        handler.removeCallbacks(usbDiagnosticTimeout);
-        lastCorrelationReport = diagnostics.stopCorrelation();
-        String finalReport = buildUsbDiagnosticReport(timedOut ? "FINALIZADA POR LÍMITE DE 10 MIN" : "FINALIZADA",
-                lastCorrelationReport);
-        usbCaptureRunning = false;
-        usbDiagnostics.finishSession(finalReport, this::usbCallback);
-        if (!foreground) {
-            diagnostics.stopPassiveProbe();
-            vehicleData.stop();
-        }
-        if (reportView != null) reportView.setText(lastCorrelationReport + "\n\n" + buildDiagnosticReport());
-        if (start != null) start.setEnabled(true);
-        if (stop != null) stop.setEnabled(false);
-        usbCaptureLabel = "";
+                    @Override public void stopDiagnosticSourcesIfBackground() {
+                        if (!foreground) {
+                            diagnostics.stopPassiveProbe();
+                            vehicleData.stop();
+                        }
+                    }
+
+                    @Override public void onCaptureStateChanged(boolean running, String status) {
+                        runOnUiThread(() -> {
+                            usbCaptureRunning = running;
+                            if (usb != null) usb.setText(running ? "USB DEBUG · ACTIVO" : "USB DEBUG");
+                            if (usbStatus != null) usbStatus.setText(status);
+                            if (start != null) start.setEnabled(!running);
+                            if (stop != null) stop.setEnabled(running || diagnostics.isCorrelationRunning());
+                        });
+                    }
+
+                    @Override public void onFinished(String finalCorrelationReport) {
+                        runOnUiThread(() -> {
+                            lastCorrelationReport = finalCorrelationReport;
+                            if (reportView != null) reportView.setText(lastCorrelationReport + "\n\n"
+                                    + buildDiagnosticReport());
+                        });
+                    }
+
+                    @Override public void message(String value) { runOnUiThread(() -> toast(value)); }
+                }, PANEL, PANEL2, TEXT, MUTED, LINE, BLUE, ACCENT);
+        activeUsbWizard.showPlanPicker();
     }
 
     private void saveUsbSnapshot() {
-        usbDiagnostics.saveReport("snapshot", buildUsbDiagnosticReport("SNAPSHOT", lastCorrelationReport),
+        usbDiagnostics.saveReport("snapshot", buildUsbSnapshotReport(),
                 this::usbCallback);
     }
 
@@ -1017,16 +997,11 @@ public class MainActivity extends Activity {
         catch (Exception error) { toast("La radio no dispone de selector de almacenamiento: " + error.getMessage()); }
     }
 
-    private String buildUsbDiagnosticReport(String stage, String correlationReport) {
-        StringBuilder out = new StringBuilder(32_000);
-        out.append("IDRIVE USB DEBUG · JCRK01/CYA · SOLO LECTURA\n");
-        out.append("Estado: ").append(stage).append('\n');
-        out.append("Prueba: ").append(usbCaptureLabel.isEmpty() ? "snapshot general" : usbCaptureLabel).append('\n');
-        out.append("Importante: este archivo contiene únicamente señales visibles para la APK. ")
-                .append("No es una captura CAN/UART en bruto.\n\n");
-        out.append(buildDiagnosticReport());
-        if (correlationReport != null && !correlationReport.isEmpty()) out.append("\n\n").append(correlationReport);
-        return out.toString();
+    private String buildUsbSnapshotReport() {
+        return "IDRIVE USB DEBUG · SNAPSHOT · JCRK01/CYA · SOLO LECTURA\n"
+                + "No contiene tramas CAN/UART ni códigos propietarios confirmados.\n\n"
+                + buildDiagnosticReport()
+                + (lastCorrelationReport.isEmpty() ? "" : "\n\n" + lastCorrelationReport);
     }
 
     private void usbCallback(boolean success, String message) {
@@ -1326,7 +1301,7 @@ public class MainActivity extends Activity {
             return;
         }
         toast("Carpeta de diagnóstico autorizada");
-        if (begin) toast("Pulsa USB DEBUG para elegir la señal que vas a probar");
+        if (begin) showUsbDebugWizard(null, null, null, null, null);
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## 1.11.0 — 15/08/2026
+
+- `USB DEBUG` incorpora un asistente visual a pantalla grande con preparación, progreso y maniobras concretas para
+  luces/intermitentes, freno de mano, las cuatro puertas y portón, cinturón, temperatura exterior, climatización,
+  ventilador, marcha atrás/PDC y una señal libre.
+- Cada maniobra toma su propia línea base, exige tres segundos de estabilización y permite repetir u omitir el paso.
+  Los candidatos aparecen en directo como fuertes, medios o débiles según fuente, cambio, repetición y coincidencia
+  semántica; nunca se presentan como códigos CAN confirmados.
+- El TXT USB incluye el resultado ordenado de cada paso, valores anterior/actual, número de cambios, fuente y criterio
+  de puntuación. Se mantienen el autoguardado de cinco segundos, el límite de diez minutos y la copia interna.
+- Se añadieron pruebas unitarias del clasificador y del catálogo de nueve planes guiados, incluida la carrocería E87
+  de cuatro puertas más portón.
+- La sonda Android Automotive pública intenta además `ENV_OUTSIDE_TEMPERATURE`, `GEAR_SELECTION`/`CURRENT_GEAR`,
+  `HVAC_TEMPERATURE_SET`, `HVAC_FAN_SPEED` y `HVAC_POWER_ON`. Los permisos privilegiados denegados quedan registrados;
+  no se escriben propiedades ni se promueve ninguna observación propietaria a dato de vehículo.
+
 ## 1.10.1 — 15/08/2026
 
 - Se hicieron visibles en la portada de GitHub las atribuciones de BMW, iDrive, el emblema, las denominaciones de

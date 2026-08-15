@@ -114,10 +114,13 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         if (!running || propertyManager == null) return;
         long now = System.currentTimeMillis();
         readVehicleSpeed(now);
+        readExteriorTemperature(now);
+        readReverse(now);
         readParkingBrake(now);
         readDoors(now);
         readDriverSeatbelt(now);
         readLights(now);
+        readClimate(now);
         publishReport();
         notifyIfValuesChanged();
         Handler current = handler;
@@ -140,6 +143,35 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         diagnostics.recordVehicleObservation("speed_mps", metersPerSecond,
                 VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
         put(VehicleField.SPEED, kmh, now);
+    }
+
+    private void readExteriorTemperature(long now) {
+        Number value = asNumber(readGlobal("ENV_OUTSIDE_TEMPERATURE", Float.class));
+        if (value == null) {
+            clear(VehicleField.EXTERIOR_TEMPERATURE);
+            return;
+        }
+        diagnostics.recordVehicleObservation("temp_ext.celsius", value,
+                VehicleSource.ANDROID_AUTOMOTIVE.name() + ".ENV_OUTSIDE_TEMPERATURE");
+        put(VehicleField.EXTERIOR_TEMPERATURE, value.doubleValue(), now);
+    }
+
+    private void readReverse(long now) {
+        Number selected = asNumber(readGlobal("GEAR_SELECTION", Integer.class));
+        String property = "GEAR_SELECTION";
+        if (selected == null) {
+            selected = asNumber(readGlobal("CURRENT_GEAR", Integer.class));
+            property = "CURRENT_GEAR";
+        }
+        Integer reverse = vehicleGearId("GEAR_REVERSE");
+        if (selected == null || reverse == null) {
+            clear(VehicleField.REVERSE);
+            return;
+        }
+        int gear = selected.intValue();
+        diagnostics.recordVehicleObservation("gear.raw", gear,
+                VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
+        put(VehicleField.REVERSE, gear == reverse ? "Activa" : "Inactiva", now);
     }
 
     private void readParkingBrake(long now) {
@@ -196,9 +228,66 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         put(VehicleField.LIGHTS, state, now);
     }
 
+    private void readClimate(long now) {
+        AreaRead temperatures = readAreas("HVAC_TEMPERATURE_SET", Float.class);
+        if (temperatures.readable && !temperatures.values.isEmpty()) {
+            recordAreaValues("climate_temp", "HVAC_TEMPERATURE_SET", temperatures);
+            put(VehicleField.CLIMATE_TEMPERATURE, summarizeNumbers(temperatures.values, " °C"), now);
+        } else clear(VehicleField.CLIMATE_TEMPERATURE);
+
+        AreaRead fans = readAreas("HVAC_FAN_SPEED", Integer.class);
+        if (fans.readable && !fans.values.isEmpty()) {
+            recordAreaValues("climate_fan", "HVAC_FAN_SPEED", fans);
+            put(VehicleField.CLIMATE_FAN, summarizeNumbers(fans.values, ""), now);
+        } else clear(VehicleField.CLIMATE_FAN);
+
+        AreaRead power = readAreas("HVAC_POWER_ON", Boolean.class);
+        if (power.readable && !power.values.isEmpty()) {
+            recordAreaValues("climate_power", "HVAC_POWER_ON", power);
+            boolean anyOn = false;
+            for (Object value : power.values.values()) if (Boolean.TRUE.equals(value)) anyOn = true;
+            put(VehicleField.CLIMATE_STATE, anyOn ? "Encendido" : "Apagado", now);
+        } else clear(VehicleField.CLIMATE_STATE);
+    }
+
+    private void recordAreaValues(String field, String property, AreaRead areas) {
+        for (Map.Entry<Integer, Object> entry : areas.values.entrySet()) {
+            diagnostics.recordVehicleObservation(field + ".area_0x"
+                            + Integer.toHexString(entry.getKey()), entry.getValue(),
+                    VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
+        }
+    }
+
+    private Object summarizeNumbers(Map<Integer, Object> values, String suffix) {
+        if (values.size() == 1) {
+            Object only = values.values().iterator().next();
+            if (only instanceof Number && suffix.isEmpty()) return ((Number) only).intValue();
+            if (only instanceof Number) return ((Number) only).doubleValue();
+            return String.valueOf(only);
+        }
+        StringBuilder summary = new StringBuilder();
+        for (Object value : values.values()) {
+            if (summary.length() > 0) summary.append(" / ");
+            if (value instanceof Float || value instanceof Double) {
+                summary.append(String.format(java.util.Locale.ROOT, "%.1f", ((Number) value).doubleValue()));
+            } else summary.append(value);
+        }
+        return summary.append(suffix).toString();
+    }
+
     private boolean isOn(Integer value) { return value != null && value == 1; }
     private Integer asInteger(Object value) { return value instanceof Integer ? (Integer) value : null; }
     private Number asNumber(Object value) { return value instanceof Number ? (Number) value : null; }
+
+    private Integer vehicleGearId(String name) {
+        try {
+            Class<?> gears = Class.forName("android.car.VehicleGear");
+            return gears.getField(name).getInt(null);
+        } catch (Throwable error) {
+            setCapability(name, "constante de marcha no disponible: " + shortError(error));
+            return null;
+        }
+    }
 
     private Object readGlobal(String name, Class<?> type) {
         return readArea(name, type, 0);

@@ -63,6 +63,12 @@ Módulo pasivo integrado:
 - conserva timestamp, acción y extras acotados;
 - permite sesiones manuales de correlación y genera un informe exportable.
 
+`UsbDebugWizardDialog` divide cada prueba en instrucciones definidas por `UsbDebugWizard`. Cada paso obtiene su propia
+línea base y presenta en directo evidencias de propiedades públicas de vehículo, broadcasts recibidos y cambios
+legibles de `Settings`. `DiagnosticCandidateClassifier` asigna una puntuación explicable por fuente, transición,
+repetición y coincidencia con la prueba. Esta clasificación solo ayuda a revisar el TXT: nunca activa por sí misma un
+adaptador CAN, escribe un mapeo persistente ni transmite datos al vehículo.
+
 ## Integración CAN futura
 `VehicleDataRepository` es el punto de integración. Cuando una prueba en la unidad identifique un servicio/broadcast real de JCRK01/CYA y se pueda documentar con evidencia, se añade un adaptador específico sin cambiar la UI. Los extras genéricos no se promocionan automáticamente a datos CAN.
 

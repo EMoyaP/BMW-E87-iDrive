@@ -131,16 +131,29 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
 3. La primera vez, pulsar `SELECCIONAR USB`, elegir `IDRIVE_DEBUG` en el selector de Android y confirmar `USAR ESTA
    CARPETA`. Esta autorización queda guardada para reinicios posteriores mientras el identificador del volumen siga
    siendo válido.
-4. Volver a `USB DEBUG > Iniciar captura guiada` y elegir **una sola señal**. Mantener el estado inicial tres segundos,
-   cambiarlo al menos tres veces con pausas de tres segundos y pulsar `DETENER` antes de pasar a la siguiente señal.
-5. Para puertas, hacer un archivo independiente por cada puerta y portón. Para luces, recorrer apagadas, posición,
-   cruce, largas y antiniebla. Para clima, separar temperaturas y ventilador. Para PDC/marcha atrás, usar ayudante y un
-   obstáculo seguro; no desplazarse ni mirar la pantalla durante la maniobra.
-6. Repetir hasta obtener archivos separados para luces, freno, cada puerta, cinturón, temperatura exterior,
-   temperaturas de clima, ventilador y PDC/marcha atrás. La captura se actualiza cada cinco segundos y termina sola a
-   los diez minutos para evitar listeners olvidados.
-7. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
+4. El asistente visual se abre automáticamente después de autorizar la carpeta. En usos posteriores, entrar en
+   `USB DEBUG > Abrir asistente visual` y elegir una prueba. La pantalla inicial indica el estado exacto que debe quedar
+   preparado antes de tomar la línea base.
+5. Pulsar `EMPEZAR` y seguir una sola instrucción cada vez. El botón de avance se habilita tras tres segundos. La zona
+   inferior muestra en directo hasta seis candidatos con valor anterior/actual, fuente y clasificación:
+   - **FUERTE, verde:** evidencia útil por fuente, semántica o repetición; todavía no es un código confirmado.
+   - **MEDIO, ámbar:** cambio plausible que conviene repetir.
+   - **DÉBIL, gris:** evento de contexto o ruido posiblemente no relacionado.
+6. Si se accionó el mando antes de leer la instrucción, pulsar `REPETIR PASO`: se descarta ese intento y se toma una
+   línea base nueva. Usar `OMITIR` para antiniebla, PDC u otra maniobra no disponible. `CAPTURADO · SIGUIENTE` conserva
+   la evidencia y muestra la siguiente acción.
+7. El plan de puertas recorre conductor, acompañante, traseras izquierda/derecha y portón, abriendo y cerrando cada
+   elemento por separado. El plan de luces incluye posición, cruce, largas, ambos intermitentes, antiniebla opcional,
+   emergencia y restauración. Freno y cinturón repiten el ciclo para mejorar la correlación.
+8. Para PDC/marcha atrás es obligatorio un ayudante, coche inmóvil, pie en el freno y freno de mano aplicado. Si se
+   prueba distancia, el ayudante acerca manualmente un objeto amplio al sensor; el coche no se desplaza. Confirmar al
+   final que cámara, radar y pitidos OEM siguen funcionando normalmente.
+9. La captura se actualiza cada cinco segundos y finaliza automáticamente a los diez minutos. `DETENER Y GUARDAR`
+   conserva los pasos realizados aunque no se haya terminado el plan.
+10. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
    USB se desconectó antes de tiempo, usar `EXPORTAR` para recuperar el último estado conservado internamente.
-8. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
+11. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
    broadcasts registrados, ajustes legibles o Android Automotive público. En ese caso se necesitará inspeccionar las
    APK OEM exportadas o una captura autorizada por ADB; no se probarán APIs o índices de otra plataforma a ciegas.
+12. Solo aceptar un candidato como base de una futura implementación si repite el mismo patrón en al menos tres ciclos,
+   no cambia al accionar otra función y el informe identifica paquete/acción o propiedad, clave, valores y unidad.

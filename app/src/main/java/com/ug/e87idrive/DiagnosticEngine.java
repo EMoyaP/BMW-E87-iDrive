@@ -28,9 +28,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
 
 /** Passive, read-only discovery for an unknown JCRK01/CYA Android build. */
@@ -115,8 +117,63 @@ public final class DiagnosticEngine {
 
     public synchronized String correlationState() {
         if (correlation == null) return "Sin sesión de correlación activa.";
-        return "Capturando «" + correlation.label + "» desde " + formatTime(correlation.startedAt)
-                + ". Haz la prueba con el vehículo detenido y pulsa DETENER.";
+        String step = correlation.activeStep == null ? "" : " · paso «" + correlation.activeStep.label + "»";
+        return "Capturando «" + correlation.label + "»" + step + " desde " + formatTime(correlation.startedAt)
+                + ". Haz la prueba con el vehículo detenido.";
+    }
+
+    /** Starts a visual-wizard step with a fresh observable baseline. */
+    public synchronized void startCorrelationStep(String label, List<String> expectedTokens) {
+        if (correlation == null) return;
+        CorrelationStep step = new CorrelationStep(label, System.currentTimeMillis(),
+                new LinkedHashMap<>(observed), snapshotSettings(true), expectedTokens);
+        correlation.activeStep = step;
+        addStableVisibleCandidates(step);
+    }
+
+    /** Discards the current attempt and takes a new baseline for the same instruction. */
+    public synchronized void repeatCorrelationStep() {
+        if (correlation == null || correlation.activeStep == null) return;
+        CorrelationStep current = correlation.activeStep;
+        startCorrelationStep(current.label, current.expectedTokens);
+    }
+
+    /** Stores the ranked evidence for the current wizard step. */
+    public synchronized String finishCorrelationStep(boolean skipped) {
+        if (correlation == null || correlation.activeStep == null) return "(sin paso activo)";
+        CorrelationStep step = correlation.activeStep;
+        step.endedAt = System.currentTimeMillis();
+        String report = stepReport(step, skipped);
+        correlation.completedStepReports.add(report);
+        correlation.activeStep = null;
+        return report;
+    }
+
+    public synchronized List<LiveCandidate> liveCandidates() {
+        if (correlation == null || correlation.activeStep == null) return Collections.emptyList();
+        return rankCandidates(correlation.activeStep);
+    }
+
+    private List<LiveCandidate> rankCandidates(CorrelationStep step) {
+        List<LiveCandidate> ranked = new ArrayList<>();
+        for (CandidateEvidence evidence : step.candidates.values()) {
+            DiagnosticCandidateClassifier.Score score = DiagnosticCandidateClassifier.score(
+                    evidence.sourceKind, evidence.key, evidence.baseline, evidence.current,
+                    evidence.changes, evidence.distinctValues.size(), evidence.stableVisible,
+                    step.expectedTokens);
+            ranked.add(new LiveCandidate(evidence.key, evidence.sourceLabel, evidence.baseline,
+                    evidence.current, evidence.changes, evidence.distinctValues.size(),
+                    evidence.lastSeenAt, score.value, score.confidence, score.reason));
+        }
+        Collections.sort(ranked, (a, b) -> {
+            int byScore = Integer.compare(b.score, a.score);
+            return byScore != 0 ? byScore : Long.compare(b.lastSeenAt, a.lastSeenAt);
+        });
+        return ranked.size() <= 8 ? ranked : new ArrayList<>(ranked.subList(0, 8));
+    }
+
+    public synchronized long currentCorrelationStepStartedAt() {
+        return correlation == null || correlation.activeStep == null ? 0L : correlation.activeStep.startedAt;
     }
 
     public String getObservedValue(String key) {
@@ -200,7 +257,7 @@ public final class DiagnosticEngine {
             observed.put("last_action", action);
             observed.put("last_timestamp", formatTime(now));
             for (Map.Entry<String, String> entry : values.entrySet()) {
-                observed.put("broadcast." + entry.getKey(), entry.getValue());
+                observed.put("broadcast." + action + "." + entry.getKey(), entry.getValue());
             }
             addEvent(new DiagnosticEvent(now, action, values));
         }
@@ -285,9 +342,86 @@ public final class DiagnosticEngine {
         return false;
     }
 
-    private void addEvent(DiagnosticEvent event) {
+    private synchronized void addEvent(DiagnosticEvent event) {
         events.add(event);
         while (events.size() > MAX_EVENTS) events.remove(0);
+        collectStepEvidence(event);
+    }
+
+    private void collectStepEvidence(DiagnosticEvent event) {
+        if (correlation == null || correlation.activeStep == null) return;
+        CorrelationStep step = correlation.activeStep;
+        if (event.timestamp < step.startedAt) return;
+        if ("vehicle.read_only".equals(event.action)) {
+            String field = event.extras.get("field");
+            String value = event.extras.get("value");
+            if (field != null && value != null) {
+                String provider = event.extras.get("source");
+                observeCandidate(step, "vehicle", "vehicle/" + nullToUnknown(provider),
+                        "vehicle." + field, value, event.timestamp);
+            }
+            return;
+        }
+        if (event.action.startsWith("settings.")) {
+            String name = event.extras.get("key");
+            String value = event.extras.get("value");
+            if (name != null && value != null) {
+                observeCandidate(step, "settings", event.action, event.action + "." + name,
+                        value, event.timestamp);
+            }
+            return;
+        }
+        if (event.extras.isEmpty()) {
+            observeCandidate(step, "event", event.action, "event." + event.action,
+                    "recibido", event.timestamp);
+            return;
+        }
+        for (Map.Entry<String, String> extra : event.extras.entrySet()) {
+            observeCandidate(step, "broadcast", event.action,
+                    "broadcast." + event.action + "." + extra.getKey(), extra.getValue(), event.timestamp);
+        }
+    }
+
+    private void addStableVisibleCandidates(CorrelationStep step) {
+        for (Map.Entry<String, String> entry : step.observedBaseline.entrySet()) {
+            String key = entry.getKey();
+            if (key.endsWith(".source") || key.endsWith("timestamp") || !matchesExpected(key, step.expectedTokens)) {
+                continue;
+            }
+            String kind = key.startsWith("vehicle.") ? "vehicle"
+                    : key.startsWith("settings.") ? "settings"
+                    : key.startsWith("broadcast.") ? "broadcast" : "event";
+            String source = "vehicle".equals(kind) ? step.observedBaseline.get(key + ".source") : kind;
+            CandidateEvidence evidence = new CandidateEvidence(kind, nullToUnknown(source), key,
+                    entry.getValue(), entry.getValue(), step.startedAt, true);
+            evidence.distinctValues.add(entry.getValue());
+            step.candidates.put(key, evidence);
+        }
+    }
+
+    private void observeCandidate(CorrelationStep step, String sourceKind, String sourceLabel,
+                                  String key, String value, long timestamp) {
+        CandidateEvidence evidence = step.candidates.get(key);
+        if (evidence == null) {
+            String baseline = sourceKind.equals("settings")
+                    ? step.settingsBaseline.get(key.startsWith("settings.") ? key.substring(9) : key)
+                    : step.observedBaseline.get(key);
+            evidence = new CandidateEvidence(sourceKind, sourceLabel, key, baseline, value, timestamp, false);
+            if (baseline != null && evidence.distinctValues.size() < 12) evidence.distinctValues.add(baseline);
+            step.candidates.put(key, evidence);
+        }
+        if (!value.equals(evidence.current)) evidence.changes++;
+        else if (evidence.changes == 0 && !value.equals(evidence.baseline)) evidence.changes = 1;
+        evidence.current = value;
+        evidence.lastSeenAt = timestamp;
+        if (evidence.distinctValues.size() < 12) evidence.distinctValues.add(value);
+    }
+
+    private static boolean matchesExpected(String key, List<String> tokens) {
+        if (tokens == null || tokens.isEmpty()) return false;
+        String lower = key.toLowerCase(Locale.ROOT);
+        for (String token : tokens) if (lower.contains(token.toLowerCase(Locale.ROOT))) return true;
+        return false;
     }
 
     private void startInventoryScan() {
@@ -486,7 +620,41 @@ public final class DiagnosticEngine {
             out.append(entry.getKey()).append(": ").append(entry.getValue()).append(" -> (ausente)\n");
         }
         if (!settingChanged) out.append("(sin cambios relevantes)\n");
+        if (!session.completedStepReports.isEmpty()) {
+            out.append("\nRESULTADOS DEL ASISTENTE VISUAL\n");
+            for (String step : session.completedStepReports) out.append('\n').append(step);
+        }
+        if (session.activeStep != null) {
+            session.activeStep.endedAt = session.endedAt;
+            out.append("\n").append(stepReport(session.activeStep, false));
+        }
         out.append("\nInterpretación: los cambios son observaciones Android, no una prueba de que exista una API CAN.\n");
+        return out.toString();
+    }
+
+    private String stepReport(CorrelationStep step, boolean skipped) {
+        StringBuilder out = new StringBuilder();
+        out.append("PASO GUIADO: ").append(step.label).append('\n');
+        out.append("Intervalo: ").append(formatTime(step.startedAt)).append(" -> ")
+                .append(formatTime(step.endedAt == 0 ? System.currentTimeMillis() : step.endedAt)).append('\n');
+        out.append("Resultado indicado por el usuario: ").append(skipped ? "OMITIDO" : "REALIZADO").append('\n');
+        List<LiveCandidate> candidates = rankCandidates(step);
+        if (candidates.isEmpty()) {
+            out.append("Candidatos: ninguno visible para una APK normal.\n");
+        } else {
+            out.append("CANDIDATOS CLASIFICADOS (no son códigos CAN confirmados)\n");
+            int position = 1;
+            for (LiveCandidate candidate : candidates) {
+                out.append(position++).append(". [").append(candidate.confidence).append(' ')
+                        .append(candidate.score).append("] ").append(candidate.key).append('\n');
+                out.append("   fuente=").append(candidate.source).append("  valor=")
+                        .append(candidate.baseline == null ? "(sin línea base)" : candidate.baseline)
+                        .append(" -> ").append(candidate.current).append("  cambios=")
+                        .append(candidate.changes).append("  distintos=").append(candidate.distinctValues).append('\n');
+                out.append("   criterio=").append(candidate.reason).append('\n');
+            }
+        }
+        out.append("Validación pendiente: repetir al menos tres ciclos y comprobar que otra función no produce el mismo cambio.\n");
         return out.toString();
     }
 
@@ -500,6 +668,8 @@ public final class DiagnosticEngine {
         format.setTimeZone(TimeZone.getDefault());
         return format.format(new Date(millis));
     }
+
+    private static String nullToUnknown(String value) { return value == null ? "unknown" : value; }
 
     private static Map<String, List<String>> roleNeedles() {
         Map<String, List<String>> map = new LinkedHashMap<>();
@@ -528,6 +698,8 @@ public final class DiagnosticEngine {
         final long startedAt;
         final Map<String, String> baseline;
         final Map<String, String> settingsBaseline;
+        final List<String> completedStepReports = new ArrayList<>();
+        CorrelationStep activeStep;
         long endedAt;
 
         CorrelationSession(String label, long startedAt, Map<String, String> baseline,
@@ -537,5 +709,86 @@ public final class DiagnosticEngine {
             this.baseline = baseline;
             this.settingsBaseline = settingsBaseline;
         }
+    }
+
+    private static final class CorrelationStep {
+        final String label;
+        final long startedAt;
+        final Map<String, String> observedBaseline;
+        final Map<String, String> settingsBaseline;
+        final List<String> expectedTokens;
+        final Map<String, CandidateEvidence> candidates = new LinkedHashMap<>();
+        long endedAt;
+
+        CorrelationStep(String label, long startedAt, Map<String, String> observedBaseline,
+                        Map<String, String> settingsBaseline, List<String> expectedTokens) {
+            this.label = label;
+            this.startedAt = startedAt;
+            this.observedBaseline = observedBaseline;
+            this.settingsBaseline = settingsBaseline;
+            this.expectedTokens = expectedTokens == null ? Collections.emptyList()
+                    : new ArrayList<>(expectedTokens);
+        }
+    }
+
+    private static final class CandidateEvidence {
+        final String sourceKind;
+        final String sourceLabel;
+        final String key;
+        final String baseline;
+        String current;
+        int changes;
+        final Set<String> distinctValues = new LinkedHashSet<>();
+        long lastSeenAt;
+        final boolean stableVisible;
+
+        CandidateEvidence(String sourceKind, String sourceLabel, String key, String baseline,
+                          String current, long lastSeenAt, boolean stableVisible) {
+            this.sourceKind = sourceKind;
+            this.sourceLabel = sourceLabel;
+            this.key = key;
+            this.baseline = baseline;
+            this.current = current;
+            this.lastSeenAt = lastSeenAt;
+            this.stableVisible = stableVisible;
+        }
+    }
+
+    public static final class LiveCandidate {
+        private final String key;
+        private final String source;
+        private final String baseline;
+        private final String current;
+        private final int changes;
+        private final int distinctValues;
+        private final long lastSeenAt;
+        private final int score;
+        private final String confidence;
+        private final String reason;
+
+        LiveCandidate(String key, String source, String baseline, String current, int changes,
+                      int distinctValues, long lastSeenAt, int score, String confidence, String reason) {
+            this.key = key;
+            this.source = source;
+            this.baseline = baseline;
+            this.current = current;
+            this.changes = changes;
+            this.distinctValues = distinctValues;
+            this.lastSeenAt = lastSeenAt;
+            this.score = score;
+            this.confidence = confidence;
+            this.reason = reason;
+        }
+
+        public String key() { return key; }
+        public String source() { return source; }
+        public String baseline() { return baseline; }
+        public String current() { return current; }
+        public int changes() { return changes; }
+        public int distinctValues() { return distinctValues; }
+        public long lastSeenAt() { return lastSeenAt; }
+        public int score() { return score; }
+        public String confidence() { return confidence; }
+        public String reason() { return reason; }
     }
 }

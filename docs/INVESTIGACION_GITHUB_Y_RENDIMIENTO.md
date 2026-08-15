@@ -86,3 +86,17 @@ Incluso entonces, el primer adaptador será exclusivamente de lectura. Cualquier
 - Una prueba completa en Android 15 creó, reescribió en segundo plano y cerró un TXT de 6.229 bytes sin excepciones.
   La escritura se limita a 0,2 Hz, la sesión a diez minutos y los eventos en memoria a 500. El PSS mostrado durante el
   diagnóstico fue aproximadamente 50 MiB y el APK debug 1.10.0 quedó en torno a 2,34 MB.
+
+## Asistente visual y propiedades AAOS verificadas (1.11.0)
+
+- Los nombres `ENV_OUTSIDE_TEMPERATURE`, `GEAR_SELECTION`, `CURRENT_GEAR`, `HVAC_TEMPERATURE_SET`, `HVAC_FAN_SPEED` y
+  `HVAC_POWER_ON` se verificaron en el código fuente oficial
+  [`VehiclePropertyIds`](https://android.googlesource.com/platform/packages/services/Car/+/refs/heads/main/car-lib/src/android/car/VehiclePropertyIds.java).
+  Los permisos declarados se contrastaron con las constantes oficiales de
+  [`Car`](https://android.googlesource.com/platform/packages/services/Car/+/refs/heads/main/car-lib/src/android/car/Car.java).
+- Las propiedades de clima, puertas, asientos y luces suelen exigir permisos `signature|privileged`; declararlas no
+  permite que una APK instalada por el usuario los obtenga. La sonda registra `bloqueada por permiso del fabricante`
+  y no intenta elevar privilegios ni escribir propiedades.
+- El asistente refresca como máximo cada 750 ms una lista limitada a ocho candidatos y reescribe el TXT cada cinco
+  segundos. No añade un nuevo sondeo de MCU/CAN. La prueba 1280×720 con un candidato cambiando mostró 52.493 KB PSS;
+  el aumento frente al panel normal se debe principalmente al diálogo y sus vistas temporales.
