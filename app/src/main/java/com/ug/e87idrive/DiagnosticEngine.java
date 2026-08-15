@@ -100,7 +100,7 @@ public final class DiagnosticEngine {
 
     public synchronized void startCorrelation(String label) {
         correlation = new CorrelationSession(label, System.currentTimeMillis(), new LinkedHashMap<>(observed),
-                snapshotRelevantSettings());
+                snapshotSettings(true));
     }
 
     public synchronized String stopCorrelation() {
@@ -169,6 +169,21 @@ public final class DiagnosticEngine {
         if (report != null && !report.trim().isEmpty()) platformVehicleReport = report;
     }
 
+    /** Records only values obtained from a verified, read-only Android provider. */
+    public synchronized void recordVehicleObservation(String key, Object value, String source) {
+        if (key == null || value == null) return;
+        String observedKey = "vehicle." + key;
+        String compact = compactValue(value);
+        String previous = observed.put(observedKey, compact);
+        observed.put(observedKey + ".source", source == null ? "unknown" : compactValue(source));
+        if (compact.equals(previous)) return;
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("field", key);
+        values.put("value", compact);
+        values.put("source", source == null ? "unknown" : compactValue(source));
+        addEvent(new DiagnosticEvent(System.currentTimeMillis(), "vehicle.read_only", values));
+    }
+
     private void recordBroadcast(Intent intent) {
         long now = System.currentTimeMillis();
         String action = intent.getAction() == null ? "(sin acción)" : intent.getAction();
@@ -187,8 +202,7 @@ public final class DiagnosticEngine {
             for (Map.Entry<String, String> entry : values.entrySet()) {
                 observed.put("broadcast." + entry.getKey(), entry.getValue());
             }
-            events.add(new DiagnosticEvent(now, action, values));
-            while (events.size() > MAX_EVENTS) events.remove(0);
+            addEvent(new DiagnosticEvent(now, action, values));
         }
     }
 
@@ -206,7 +220,8 @@ public final class DiagnosticEngine {
     private void recordSettingChange(Uri uri) {
         if (uri == null) return;
         String key = uri.getLastPathSegment();
-        if (key == null || !interestingSetting(key)) return;
+        if (key == null || sensitiveSetting(key)) return;
+        if (!interestingSetting(key) && !isCorrelationRunning()) return;
         String namespace = uri.toString().startsWith(Settings.Global.CONTENT_URI.toString()) ? "global" : "system";
         String value = null;
         try {
@@ -221,15 +236,14 @@ public final class DiagnosticEngine {
             observed.put("settings.last_change", namespace + "." + key);
             observed.put("settings.last_value", extras.get("value"));
             observed.put("settings.last_timestamp", formatTime(now));
-            events.add(new DiagnosticEvent(now, "settings." + namespace, extras));
-            while (events.size() > MAX_EVENTS) events.remove(0);
+            addEvent(new DiagnosticEvent(now, "settings." + namespace, extras));
         }
     }
 
-    private Map<String, String> snapshotRelevantSettings() {
+    private Map<String, String> snapshotSettings(boolean includeAll) {
         Map<String, String> snapshot = new LinkedHashMap<>();
-        appendSettings(snapshot, "system", Settings.System.CONTENT_URI);
-        appendSettings(snapshot, "global", Settings.Global.CONTENT_URI);
+        appendSettings(snapshot, "system", Settings.System.CONTENT_URI, includeAll);
+        appendSettings(snapshot, "global", Settings.Global.CONTENT_URI, includeAll);
         int night = context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         snapshot.put("runtime.ui_mode_night", String.valueOf(night));
         try { snapshot.put("runtime.screen_brightness", String.valueOf(Settings.System.getInt(
@@ -239,7 +253,7 @@ public final class DiagnosticEngine {
         return snapshot;
     }
 
-    private void appendSettings(Map<String, String> target, String namespace, Uri uri) {
+    private void appendSettings(Map<String, String> target, String namespace, Uri uri, boolean includeAll) {
         try (Cursor cursor = context.getContentResolver().query(uri, new String[]{"name", "value"}, null, null, null)) {
             if (cursor == null) return;
             int nameColumn = cursor.getColumnIndex("name");
@@ -247,7 +261,7 @@ public final class DiagnosticEngine {
             int count = 0;
             while (cursor.moveToNext() && count < 1_000) {
                 String name = nameColumn < 0 ? null : cursor.getString(nameColumn);
-                if (name == null || !interestingSetting(name)) continue;
+                if (name == null || sensitiveSetting(name) || (!includeAll && !interestingSetting(name))) continue;
                 String value = valueColumn < 0 ? null : cursor.getString(valueColumn);
                 target.put(namespace + "." + name, compactValue(value == null ? "(null)" : value));
                 count++;
@@ -261,6 +275,19 @@ public final class DiagnosticEngine {
                 "belt", "reverse", "backcar", "vehicle", "car_", "mcu", "canbus", "headlight"};
         for (String token : tokens) if (lower.contains(token)) return true;
         return false;
+    }
+
+    private boolean sensitiveSetting(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        String[] tokens = {"password", "passwd", "secret", "token", "credential", "android_id",
+                "device_id", "advertising_id", "bluetooth_address", "mac_address", "wifi_config", "ssid"};
+        for (String token : tokens) if (lower.contains(token)) return true;
+        return false;
+    }
+
+    private void addEvent(DiagnosticEvent event) {
+        events.add(event);
+        while (events.size() > MAX_EVENTS) events.remove(0);
     }
 
     private void startInventoryScan() {
@@ -443,7 +470,7 @@ public final class DiagnosticEngine {
         }
         if (count == 0) out.append("(ninguno)\n");
         out.append("\nCAMBIOS EN AJUSTES ANDROID RELEVANTES\n");
-        Map<String, String> currentSettings = snapshotRelevantSettings();
+        Map<String, String> currentSettings = snapshotSettings(true);
         boolean settingChanged = false;
         for (Map.Entry<String, String> entry : currentSettings.entrySet()) {
             String oldValue = session.settingsBaseline.get(entry.getKey());
@@ -452,6 +479,11 @@ public final class DiagnosticEngine {
                 out.append(entry.getKey()).append(": ").append(oldValue == null ? "(ausente)" : oldValue)
                         .append(" -> ").append(entry.getValue()).append('\n');
             }
+        }
+        for (Map.Entry<String, String> entry : session.settingsBaseline.entrySet()) {
+            if (currentSettings.containsKey(entry.getKey())) continue;
+            settingChanged = true;
+            out.append(entry.getKey()).append(": ").append(entry.getValue()).append(" -> (ausente)\n");
         }
         if (!settingChanged) out.append("(sin cambios relevantes)\n");
         out.append("\nInterpretación: los cambios son observaciones Android, no una prueba de que exista una API CAN.\n");

@@ -30,6 +30,17 @@ aparezcan Android/build, MCU, CANBUS/Hiworld y versión de la APK CAN. Ocultar n
 6. Repetir observando si el sistema cambia brillo o modo noche. El diagnóstico registrará cambios relevantes de
    `Settings.System/Global`; esto puede revelar el puente de iluminación aunque no exista un broadcast CAN visible.
 
+### Velocidad y prioridad de fuente
+
+1. No es necesario ni seguro superar 120 km/h para probar el cambio de color; esa transición se valida con datos
+   sintéticos en emulador, no conduciendo.
+2. En la radio, exportar el diagnóstico tras recibir velocidad y buscar `vehicle.speed.source`. Si indica
+   `ANDROID_AUTOMOTIVE`, esa lectura de vehículo tiene prioridad. Si no existe o está bloqueada, la UI debe indicar GPS
+   como fallback y nunca presentar una lectura antigua durante más de diez segundos.
+3. Si el sistema OEM muestra velocidad pero la APK solo obtiene GPS, realizar una captura USB `Otra señal` con ayuda de
+   un acompañante y sin manejar la pantalla durante la marcha. No se asignará ningún código hasta repetirlo y confirmar
+   su escala y unidad.
+
 ## 3. Freno de mano
 
 1. Iniciar correlación `Freno de mano`.
@@ -104,10 +115,32 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
 
 ## 10. Radio y emisora actual
 
-1. Abrir `Ajustes > Acceso a contenido multimedia` y autorizar BMW E87 iDrive.
+1. Abrir `Ajustes > Acceso a contenido multimedia` y autorizar iDrive.
 2. Mantener pulsada la tarjeta Radio y asignar la aplicación OEM real si la detección automática no acierta.
-3. Abrir la radio OEM, sintonizar una emisora con RDS y volver a BMW E87 iDrive.
+3. Abrir la radio OEM, sintonizar una emisora con RDS y volver a iDrive.
 4. Esperar hasta dos segundos: debe aparecer el título, frecuencia o texto que la aplicación OEM publique.
 5. Cambiar de emisora y comprobar que la tarjeta se actualiza; tocarla debe regresar a la radio OEM.
 6. Si aparece `Emisora no expuesta`, exportar el diagnóstico con la radio reproduciendo. Ese resultado significa que
    no existe una MediaSession/notificación pública utilizable; no deducir índices CAN ni comandos MCU.
+
+## 11. Captura USB DEBUG
+
+1. Formatear una memoria USB en un formato que la radio ya pueda leer y crear en ella una carpeta `IDRIVE_DEBUG`.
+2. Con el coche inmovilizado, conectar la USB antes de abrir iDrive. Entrar en `CAN / MCU · Diagnóstico` y pulsar
+   `USB DEBUG`.
+3. La primera vez, pulsar `SELECCIONAR USB`, elegir `IDRIVE_DEBUG` en el selector de Android y confirmar `USAR ESTA
+   CARPETA`. Esta autorización queda guardada para reinicios posteriores mientras el identificador del volumen siga
+   siendo válido.
+4. Volver a `USB DEBUG > Iniciar captura guiada` y elegir **una sola señal**. Mantener el estado inicial tres segundos,
+   cambiarlo al menos tres veces con pausas de tres segundos y pulsar `DETENER` antes de pasar a la siguiente señal.
+5. Para puertas, hacer un archivo independiente por cada puerta y portón. Para luces, recorrer apagadas, posición,
+   cruce, largas y antiniebla. Para clima, separar temperaturas y ventilador. Para PDC/marcha atrás, usar ayudante y un
+   obstáculo seguro; no desplazarse ni mirar la pantalla durante la maniobra.
+6. Repetir hasta obtener archivos separados para luces, freno, cada puerta, cinturón, temperatura exterior,
+   temperaturas de clima, ventilador y PDC/marcha atrás. La captura se actualiza cada cinco segundos y termina sola a
+   los diez minutos para evitar listeners olvidados.
+7. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
+   USB se desconectó antes de tiempo, usar `EXPORTAR` para recuperar el último estado conservado internamente.
+8. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
+   broadcasts registrados, ajustes legibles o Android Automotive público. En ese caso se necesitará inspeccionar las
+   APK OEM exportadas o una captura autorizada por ADB; no se probarán APIs o índices de otra plataforma a ciegas.

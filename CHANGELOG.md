@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 1.10.1 — 15/08/2026
+
+- Se hicieron visibles en la portada de GitHub las atribuciones de BMW, iDrive, el emblema, las denominaciones de
+  modelo y las restantes marcas de terceros. `NOTICE.md` y `LICENSE-ASSETS.md` identifican además los recursos que
+  contienen esos elementos y aclaran que quedan fuera de las licencias del repositorio.
+- El valor de velocidad, su lectura en la fila y el arco activo del velocímetro se muestran en verde hasta 120 km/h y
+  en naranja por encima. Sin una lectura real se conserva el estado neutro `—`.
+- Se añadió lectura opcional y de solo lectura de `PERF_VEHICLE_SPEED_DISPLAY`/`PERF_VEHICLE_SPEED` mediante Android
+  Automotive público, convirtiendo m/s a km/h y registrando propiedad, valor y fuente en el diagnóstico.
+- Una velocidad de vehículo reciente tiene ahora prioridad sobre GPS; GPS se utiliza únicamente como fallback. Las
+  lecturas de vehículo mayores de tres segundos y las GPS mayores de diez se descartan para evitar valores congelados.
+- `CAR_SPEED` solo se solicita en sistemas que declaran la característica Automotive. No se interpreta como velocidad
+  ningún extra o índice JCRK01/CYA que todavía no haya sido confirmado en la unidad física.
+
+## 1.10.0 — 15/08/2026
+
+- Se añadió `USB DEBUG` al diagnóstico integrado. Detecta volúmenes extraíbles montados y utiliza el selector oficial
+  de Android para que el usuario autorice una carpeta sin solicitar acceso general al almacenamiento.
+- Las capturas se guardan como TXT fechado, se actualizan cada cinco segundos y conservan una copia interna de
+  recuperación si la USB se retira o falla durante la prueba.
+- La captura guiada incluye luces, freno, puertas, cinturón, temperatura, climatización, PDC/marcha atrás y una señal
+  libre. Mantiene las sondas pasivas al quedar la app oculta y se detiene automáticamente a los diez minutos.
+- Durante una sesión explícita se comparan también claves legibles no preclasificadas de `Settings.System/Global`,
+  omitiendo nombres potencialmente sensibles. Fuera de debug se mantiene el filtro ligero anterior.
+- Los cambios leídos mediante Android Automotive público se incorporan al registro con campo, valor y fuente. No se
+  leen tramas CAN/UART, `logcat` global ni índices `com.syu`, y no se envían órdenes propietarias.
+
+## 1.9.1 — 15/08/2026
+
+- El nombre visible en el launcher se acortó a `iDrive`; la aplicación continúa siendo una actividad normal y no se
+  registra como launcher `HOME`.
+- Se sustituyó el icono genérico por un emblema BMW sobre fondo azul marino, con margen seguro para máscaras
+  circulares y redondeadas. También se declaró como `roundIcon` para launchers que utilicen esa variante.
+- El recurso empaquetado se optimizó a 512×512 para limitar su impacto en tamaño y memoria; el máster se conserva en
+  `docs/assets/generated`.
+
 ## 1.9.0 — 15/08/2026
 
 - La tarjeta `Radio` abre al tocarla la aplicación OEM detectada o asignada; una pulsación larga permite corregir

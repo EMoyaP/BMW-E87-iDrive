@@ -70,3 +70,19 @@ servicio propio de actualización en segundo plano.
 Un código solo pasa a producción cuando el informe de la unidad permite fijar: paquete y versión de APK CANBUS,
 clase/servicio o acción, clave/índice, tipo, rango, unidad y al menos tres ciclos de correlación sin falsos positivos.
 Incluso entonces, el primer adaptador será exclusivamente de lectura. Cualquier API que permita escribir queda fuera.
+
+## Captura USB y límites de Android 15 (1.10.0)
+
+- Android representa USB y SD como `StorageVolume`, pero una APK normal necesita que el usuario elija una carpeta con
+  [`ACTION_OPEN_DOCUMENT_TREE`](https://developer.android.com/training/data-storage/shared/documents-files). El permiso
+  URI se conserva con `takePersistableUriPermission`; no se solicitan permisos generales de archivos.
+- `StorageVolume.createOpenDocumentTreeIntent()` solo propone el volumen inicial: el selector puede permitir otra
+  ubicación y la app debe respetar la elegida. En JCRK01/CYA habrá que confirmar que su proveedor de documentos muestra
+  ambas tomas USB.
+- Desde Android 4.1, solo aplicaciones privilegiadas pueden leer el `logcat` global con `READ_LOGS`. La APK instalada
+  por el usuario guarda sus propias observaciones; no finge que puede interceptar el registro de MCU/CANBUS.
+- FYT Launcher Mod demuestra un registrador de índices `DataCanbus.DATA[]`, pero depende de `com.syu` y del APK CANBUS
+  FYT instalado. Ese mecanismo no se incorpora a JCRK01/CYA sin evidencia del firmware físico.
+- Una prueba completa en Android 15 creó, reescribió en segundo plano y cerró un TXT de 6.229 bytes sin excepciones.
+  La escritura se limita a 0,2 Hz, la sesión a diez minutos y los eventos en memoria a 500. El PSS mostrado durante el
+  diagnóstico fue aproximadamente 50 MiB y el APK debug 1.10.0 quedó en torno a 2,34 MB.

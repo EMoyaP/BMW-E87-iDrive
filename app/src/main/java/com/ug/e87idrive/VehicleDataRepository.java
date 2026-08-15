@@ -9,6 +9,8 @@ import java.util.Set;
  * The current passive diagnostic engine deliberately does not map arbitrary extras to CAN fields.
  */
 public final class VehicleDataRepository implements VehicleDataProvider {
+    private static final long VEHICLE_SPEED_MAX_AGE_MS = 3_000L;
+    private static final long GPS_SPEED_MAX_AGE_MS = 10_000L;
     private final GpsSpeedProvider gps;
     private final DiagnosticEngine diagnostics;
     private final AndroidAutomotiveProvider automotive;
@@ -21,11 +23,15 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     }
 
     @Override public VehicleValue<?> get(VehicleField field) {
-        if (field == VehicleField.SPEED && gps.getLastValue() != null) {
+        VehicleValue<?> standardValue = automotive.get(field);
+        if (standardValue.isAvailable()
+                && (field != VehicleField.SPEED || standardValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
+            return standardValue;
+        }
+        if (field == VehicleField.SPEED && gps.getLastValue() != null
+                && System.currentTimeMillis() - gps.getLastTimestamp() <= GPS_SPEED_MAX_AGE_MS) {
             return VehicleValue.available(gps.getLastValue(), VehicleSource.GPS, gps.getLastTimestamp());
         }
-        VehicleValue<?> standardValue = automotive.get(field);
-        if (standardValue.isAvailable()) return standardValue;
         // No vendor value is returned until a confirmed, device-specific mapping exists.
         return VehicleValue.unavailable();
     }

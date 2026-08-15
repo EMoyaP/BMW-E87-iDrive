@@ -11,11 +11,17 @@ GPS, gasolineras cercanas y diagnóstico pasivo del entorno de la radio.
 La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaza el launcher, no se registra como
 `HOME`, no arranca automáticamente y no transmite órdenes al CANBUS o a la MCU.
 
+> **Proyecto independiente y no oficial.** BMW, iDrive, el emblema BMW y las denominaciones de modelos pertenecen a
+> BMW AG o a sus entidades vinculadas. Se emplean únicamente para identificar el vehículo y el contexto técnico; no
+> implican aprobación ni patrocinio. Las marcas y logotipos de terceros —incluido el emblema usado en el icono— no se
+> licencian con este repositorio. Consulta [Avisos y atribuciones](NOTICE.md) y
+> [Licencia de recursos](LICENSE-ASSETS.md).
+
 ![Interfaz BMW E87 iDrive](docs/screenshots/bmw-e87-ui-v1.9.0-radio.png)
 
 ## Estado del proyecto
 
-Versión actual: **1.9.0 — validación previa a hardware**.
+Versión actual: **1.10.1 — validación previa a hardware**.
 
 El proyecto compila e instala en un emulador Android 15/API 35 a 1280×720. La instalación definitiva en la radio está
 pendiente de:
@@ -36,12 +42,15 @@ No se publica por ahora una APK de producción. Los APK locales y las claves de 
 - Lectura opcional de título, artista y carátula mediante `MediaSession`, sin enviar controles multimedia.
 - Lectura de emisora/RDS cuando la aplicación de radio lo publica mediante APIs Android estándar.
 - Nombre del teléfono cuando Android expone públicamente la conexión Bluetooth.
-- Velocidad GPS y proveedor desacoplado para futuros datos del vehículo verificados.
+- Velocidad de vehículo pública cuando Android Automotive la expone, con prioridad sobre el respaldo GPS y fuente
+  identificada. El valor y arco son verdes hasta 120 km/h y naranjas por encima.
 - Tarjeta de gasolineras con combustible y radio configurables.
 - Selección de la estación más barata y la más cercana, calculada localmente respecto al GPS.
 - Apertura del destino en Google Maps u otra aplicación compatible.
 - Caché móvil de 150 km y actualización local de precios cada diez minutos mientras la app está visible.
 - Diagnóstico pasivo de paquetes, componentes, broadcasts y ajustes potencialmente relacionados con JCRK01/CYA.
+- `USB DEBUG` con selector seguro de carpeta, captura guiada, autoguardado cada cinco segundos y copia interna de
+  recuperación para identificar únicamente las señales que JCRK01/CYA exponga realmente a Android.
 - Sonda opcional, exclusivamente de lectura, para propiedades públicas de Android Automotive.
 - Exportación local del informe de diagnóstico.
 
@@ -57,7 +66,8 @@ La aplicación:
 - no llama a APIs `com.syu`, Microntek, Junsun u otros protocolos no verificados;
 - no modifica perfiles Hiworld, MCU, parámetros de fábrica o definición de sockets;
 - no intercepta marcha atrás, cámara, PDC, climatización ni audio OEM;
-- detiene GPS, Bluetooth, red y diagnóstico cuando deja de estar en primer plano;
+- detiene GPS, Bluetooth, red y diagnóstico cuando deja de estar en primer plano, salvo durante una captura USB
+  iniciada expresamente y limitada a diez minutos;
 - utiliza Android Automotive únicamente si el sistema ofrece sus APIs públicas y permisos de lectura.
 
 Las cajas CAN y firmwares Android no utilizan un protocolo universal. Un índice o paquete observado en otra plataforma
@@ -138,7 +148,7 @@ permanente que no se almacene en Git.
 
 ## Primera configuración
 
-1. Instala una APK release firmada y abre `BMW E87 iDrive` desde el launcher normal de la radio.
+1. Instala una APK release firmada y abre `iDrive` desde el launcher normal de la radio.
 2. Concede ubicación para GPS y gasolineras.
 3. En Android 12–15, concede `Dispositivos cercanos` si deseas mostrar el terminal Bluetooth.
 4. Habilita el acceso a notificaciones solo si deseas leer MediaSession, carátula o RDS publicado.
@@ -153,7 +163,7 @@ Medido en emulador Android 15/API 35 a 1280×720; la radio física puede comport
 
 | Medida | Resultado observado |
 |---|---:|
-| APK debug | 2.013.907 bytes |
+| APK debug | 2.335.428 bytes |
 | PSS estabilizado | 45–51 MB |
 | Arranque frío | 1,47–1,53 s |
 | Caché Diésel/150 km en Madrid | 143.522 bytes |
@@ -185,6 +195,8 @@ propietarias sin evidencia reproducible de la unidad exacta. Los problemas de se
 - Atribuciones, exclusiones y marcas: [NOTICE.md](NOTICE.md).
 
 Esta licencia permite estudio, modificación y uso no comercial, pero **no es una licencia open source aprobada por la
-OSI**. Para licencias o usos comerciales es necesario contactar con el titular del copyright.
+OSI**. La licencia del código y la licencia de recursos no conceden derechos sobre las marcas, emblemas o diseños de
+terceros. Para licencias o usos comerciales del código es necesario contactar con el titular del copyright; para usar
+marcas de terceros puede ser necesaria además la autorización de sus respectivos titulares.
 
 Copyright 2026 Eugenio Moya Pérez.

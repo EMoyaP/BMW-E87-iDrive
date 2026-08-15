@@ -11,6 +11,7 @@
     <!-- Optional public Android Automotive reads. This does not grant privileged OEM properties. -->
     <uses-permission android:name="android.car.permission.CAR_INFO"/>
     <uses-permission android:name="android.car.permission.CAR_POWERTRAIN"/>
+    <uses-permission android:name="android.car.permission.CAR_SPEED"/>
     <uses-feature android:name="android.hardware.type.automotive" android:required="false"/>
     <!-- Required by the integrated package/component diagnostic on this sideloaded head unit. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -26,8 +27,9 @@
 
     <application
         android:theme="@style/AppTheme"
-        android:label="BMW E87 iDrive"
-        android:icon="@drawable/ic_launcher"
+        android:label="iDrive"
+        android:icon="@drawable/ic_launcher_bmw_v2"
+        android:roundIcon="@drawable/ic_launcher_bmw_v2"
         android:allowBackup="true">
 
         <activity
@@ -43,7 +45,7 @@
 
         <service
             android:name=".MediaNotificationListener"
-            android:label="BMW E87 iDrive · multimedia"
+            android:label="iDrive · multimedia"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="false">
             <intent-filter>

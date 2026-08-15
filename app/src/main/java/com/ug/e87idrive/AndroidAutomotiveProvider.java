@@ -113,6 +113,7 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
     private void poll() {
         if (!running || propertyManager == null) return;
         long now = System.currentTimeMillis();
+        readVehicleSpeed(now);
         readParkingBrake(now);
         readDoors(now);
         readDriverSeatbelt(now);
@@ -121,6 +122,24 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         notifyIfValuesChanged();
         Handler current = handler;
         if (running && current != null) current.postDelayed(this::poll, POLL_MS);
+    }
+
+    private void readVehicleSpeed(long now) {
+        Number value = asNumber(readGlobal("PERF_VEHICLE_SPEED_DISPLAY", Float.class));
+        String property = "PERF_VEHICLE_SPEED_DISPLAY";
+        if (value == null) {
+            value = asNumber(readGlobal("PERF_VEHICLE_SPEED", Float.class));
+            property = "PERF_VEHICLE_SPEED";
+        }
+        if (value == null) {
+            clear(VehicleField.SPEED);
+            return;
+        }
+        double metersPerSecond = value.doubleValue();
+        double kmh = Math.abs(metersPerSecond) * 3.6d;
+        diagnostics.recordVehicleObservation("speed_mps", metersPerSecond,
+                VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
+        put(VehicleField.SPEED, kmh, now);
     }
 
     private void readParkingBrake(long now) {
@@ -179,6 +198,7 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
     private boolean isOn(Integer value) { return value != null && value == 1; }
     private Integer asInteger(Object value) { return value instanceof Integer ? (Integer) value : null; }
+    private Number asNumber(Object value) { return value instanceof Number ? (Number) value : null; }
 
     private Object readGlobal(String name, Class<?> type) {
         return readArea(name, type, 0);
@@ -261,8 +281,9 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         return cause.getClass().getSimpleName() + ": " + message.replace('\n', ' ');
     }
 
-    private synchronized void put(VehicleField field, String value, long now) {
+    private synchronized void put(VehicleField field, Object value, long now) {
         values.put(field, VehicleValue.available(value, VehicleSource.ANDROID_AUTOMOTIVE, now));
+        diagnostics.recordVehicleObservation(field.key(), value, VehicleSource.ANDROID_AUTOMOTIVE.name());
     }
 
     private synchronized void clear(VehicleField field) { values.remove(field); }

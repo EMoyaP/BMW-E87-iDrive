@@ -8,8 +8,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 19
-        versionName "1.9.0"
+        versionCode 22
+        versionName "1.10.1"
     }
 
     compileOptions {

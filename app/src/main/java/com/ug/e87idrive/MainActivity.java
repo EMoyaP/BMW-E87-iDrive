@@ -45,6 +45,9 @@ import java.util.Date;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
+    private static final int REQUEST_USB_DIAGNOSTIC_DIRECTORY = 301;
+    private static final long USB_DIAGNOSTIC_FLUSH_MS = 5_000L;
+    private static final long USB_DIAGNOSTIC_MAX_MS = 10 * 60_000L;
     private int BG, PANEL, PANEL2, ACCENT, BLUE, TEXT, MUTED, LINE;
     private SharedPreferences vehiclePreferences, uiPreferences;
     private AppRepository apps;
@@ -65,9 +68,21 @@ public class MainActivity extends Activity {
     private MediaSessionProvider media;
     private FuelStationProvider fuelStations;
     private BluetoothDeviceProvider bluetoothState;
+    private UsbDiagnosticRecorder usbDiagnostics;
     private String lastCorrelationReport = "";
+    private String usbCaptureLabel = "";
     private boolean foreground;
+    private boolean usbCaptureRunning;
+    private boolean startUsbCaptureAfterPicker;
     private int mediaRefreshTick;
+    private final Runnable usbDiagnosticFlush = new Runnable() {
+        @Override public void run() {
+            if (!usbCaptureRunning || usbDiagnostics == null) return;
+            usbDiagnostics.updateSession(buildUsbDiagnosticReport("EN CURSO", ""));
+            handler.postDelayed(this, USB_DIAGNOSTIC_FLUSH_MS);
+        }
+    };
+    private final Runnable usbDiagnosticTimeout = () -> finishUsbCapture(null, null, null, true);
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -76,6 +91,7 @@ public class MainActivity extends Activity {
         uiPreferences = getSharedPreferences("ui", MODE_PRIVATE);
         apps = new AppRepository(this);
         diagnostics = new DiagnosticEngine(this);
+        usbDiagnostics = new UsbDiagnosticRecorder(this);
         fuelStations = new FuelStationProvider(this, this::refreshFuelWidget);
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
@@ -112,19 +128,23 @@ public class MainActivity extends Activity {
 
     @Override protected void onPause() {
         foreground = false;
-        diagnostics.stopPassiveProbe();
         bluetoothState.stop();
         fuelStations.stop();
-        vehicleData.stop();
+        if (!usbCaptureRunning) {
+            diagnostics.stopPassiveProbe();
+            vehicleData.stop();
+        }
         super.onPause();
     }
 
     @Override protected void onDestroy() {
+        if (usbCaptureRunning) finishUsbCapture(null, null, null, true);
         handler.removeCallbacksAndMessages(null);
         diagnostics.stopPassiveProbe();
         bluetoothState.stop();
         fuelStations.close();
         vehicleData.stop();
+        if (usbDiagnostics != null) usbDiagnostics.close();
         super.onDestroy();
     }
 
@@ -690,7 +710,15 @@ public class MainActivity extends Activity {
         TextView label = txt(vehiclePanelLabel(field), 13, value == null ? MUTED : TEXT, false);
         label.setPadding(dp(8), 0, 0, 0);
         row.addView(label, lp(0, -1, 1));
-        TextView reading = txt(value == null ? "—" : value, 13, value == null ? MUTED : TEXT, false);
+        int readingColor = value == null ? MUTED : TEXT;
+        if (field == VehicleField.SPEED && value != null) {
+            VehicleValue<?> speed = vehicleData.get(VehicleField.SPEED);
+            if (speed.isAvailable() && speed.value() instanceof Double) {
+                readingColor = ((Double) speed.value()) > 120d
+                        ? Color.rgb(246, 126, 13) : Color.rgb(72, 196, 118);
+            }
+        }
+        TextView reading = txt(value == null ? "—" : value, 13, readingColor, false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         row.addView(reading, lp(dp(92), -1));
         return row;
@@ -853,11 +881,25 @@ public class MainActivity extends Activity {
         actions.addView(export, lp(0, dp(54), 1));
         actions.addView(share, lp(0, dp(54), 1));
         box.addView(actions);
+        LinearLayout usbRow = horizontal();
+        TextView usbStatus = txt(usbDiagnostics.directorySummary(), 10, MUTED, false);
+        usbStatus.setPadding(dp(12), 0, dp(8), 0);
+        usbStatus.setGravity(Gravity.CENTER_VERTICAL);
+        Button usb = dialogButton(usbCaptureRunning ? "USB DEBUG · ACTIVO" : "USB DEBUG");
+        usbRow.addView(usbStatus, lp(0, dp(48), 1));
+        usbRow.addView(usb, lp(dp(230), dp(48)));
+        box.addView(usbRow);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Diagnóstico JCRK01 / CYA")
                 .setView(box).setPositiveButton("CERRAR", null).create();
         start.setOnClickListener(v -> chooseCorrelation(dialog, reportView, start, stop));
         stop.setOnClickListener(v -> {
             if (!diagnostics.isCorrelationRunning()) { toast("No hay una sesión activa"); return; }
+            if (usbCaptureRunning) {
+                finishUsbCapture(reportView, start, stop, false);
+                usb.setText("USB DEBUG");
+                usbStatus.setText(usbDiagnostics.directorySummary());
+                return;
+            }
             lastCorrelationReport = diagnostics.stopCorrelation();
             reportView.setText(lastCorrelationReport + "\n\n" + buildDiagnosticReport());
             start.setEnabled(true);
@@ -865,8 +907,130 @@ public class MainActivity extends Activity {
         });
         export.setOnClickListener(v -> saveDiagnostic(true));
         share.setOnClickListener(v -> shareDiagnostic());
-        dialog.setOnShowListener(v -> { stop.setEnabled(false); resize(dialog, .86f, .86f); });
+        usb.setOnClickListener(v -> usbDiagnosticMenu(reportView, start, stop, usb, usbStatus));
+        dialog.setOnShowListener(v -> {
+            stop.setEnabled(diagnostics.isCorrelationRunning());
+            start.setEnabled(!diagnostics.isCorrelationRunning());
+            resize(dialog, .86f, .88f);
+        });
         dialog.show();
+    }
+
+    private void usbDiagnosticMenu(TextView reportView, Button start, Button stop, Button usb,
+                                   TextView usbStatus) {
+        if (!usbDiagnostics.hasDirectoryPermission()) {
+            new AlertDialog.Builder(this).setTitle("Preparar memoria USB")
+                    .setMessage(usbDiagnostics.removableVolumeDescription() + "\n\n"
+                            + "Android abrirá su selector de carpetas. Elige una carpeta de la memoria USB y pulsa "
+                            + "USAR ESTA CARPETA. La app no solicita acceso al resto del almacenamiento.")
+                    .setPositiveButton("SELECCIONAR USB", (d, w) -> selectUsbDirectory(true))
+                    .setNegativeButton("CANCELAR", null).show();
+            return;
+        }
+        String[] options = usbCaptureRunning
+                ? new String[]{"Detener y guardar captura", "Guardar snapshot ahora"}
+                : new String[]{"Iniciar captura guiada", "Guardar informe ahora", "Cambiar carpeta USB",
+                "Olvidar autorización USB"};
+        new AlertDialog.Builder(this).setTitle("USB DEBUG")
+                .setItems(options, (d, which) -> {
+                    if (usbCaptureRunning) {
+                        if (which == 0) {
+                            finishUsbCapture(reportView, start, stop, false);
+                            usb.setText("USB DEBUG");
+                            usbStatus.setText(usbDiagnostics.directorySummary());
+                        }
+                        else if (which == 1) saveUsbSnapshot();
+                    } else {
+                        if (which == 0) chooseUsbCorrelation(reportView, start, stop, usb, usbStatus);
+                        else if (which == 1) saveUsbSnapshot();
+                        else if (which == 2) selectUsbDirectory(false);
+                        else {
+                            usbDiagnostics.forgetDirectory();
+                            usbStatus.setText(usbDiagnostics.directorySummary());
+                            toast("Autorización USB eliminada");
+                        }
+                    }
+                }).setNegativeButton("CANCELAR", null).show();
+    }
+
+    private void chooseUsbCorrelation(TextView reportView, Button start, Button stop, Button usb,
+                                      TextView usbStatus) {
+        if (diagnostics.isCorrelationRunning()) {
+            toast("Detén primero la sesión de correlación actual");
+            return;
+        }
+        String[] options = {"Luces: posición / cruce / largas / antiniebla", "Freno de mano",
+                "Puertas: probar una cada vez", "Cinturón del conductor", "Temperatura exterior",
+                "Climatizador: temperaturas", "Climatizador: ventilador", "PDC / marcha atrás", "Otra señal"};
+        new AlertDialog.Builder(this).setTitle("Captura USB · detenido · una señal cada vez")
+                .setItems(options, (d, which) -> startUsbCapture(options[which], reportView, start, stop, usb, usbStatus))
+                .setNegativeButton("CANCELAR", null).show();
+    }
+
+    private void startUsbCapture(String label, TextView reportView, Button start, Button stop, Button usb,
+                                 TextView usbStatus) {
+        usbCaptureLabel = label;
+        usbCaptureRunning = true;
+        diagnostics.startPassiveProbe();
+        vehicleData.start();
+        diagnostics.startCorrelation(label);
+        String initial = buildUsbDiagnosticReport("INICIADA", "");
+        usbDiagnostics.startSession(label, initial, this::usbCallback);
+        handler.removeCallbacks(usbDiagnosticFlush);
+        handler.removeCallbacks(usbDiagnosticTimeout);
+        handler.postDelayed(usbDiagnosticFlush, USB_DIAGNOSTIC_FLUSH_MS);
+        handler.postDelayed(usbDiagnosticTimeout, USB_DIAGNOSTIC_MAX_MS);
+        reportView.setText(diagnostics.correlationState() + "\n\n" + buildDiagnosticReport());
+        start.setEnabled(false);
+        stop.setEnabled(true);
+        usb.setText("USB DEBUG · ACTIVO");
+        usbStatus.setText("Grabando «" + label + "» · autoguardado cada 5 s");
+    }
+
+    private void finishUsbCapture(TextView reportView, Button start, Button stop, boolean timedOut) {
+        if (!usbCaptureRunning) return;
+        handler.removeCallbacks(usbDiagnosticFlush);
+        handler.removeCallbacks(usbDiagnosticTimeout);
+        lastCorrelationReport = diagnostics.stopCorrelation();
+        String finalReport = buildUsbDiagnosticReport(timedOut ? "FINALIZADA POR LÍMITE DE 10 MIN" : "FINALIZADA",
+                lastCorrelationReport);
+        usbCaptureRunning = false;
+        usbDiagnostics.finishSession(finalReport, this::usbCallback);
+        if (!foreground) {
+            diagnostics.stopPassiveProbe();
+            vehicleData.stop();
+        }
+        if (reportView != null) reportView.setText(lastCorrelationReport + "\n\n" + buildDiagnosticReport());
+        if (start != null) start.setEnabled(true);
+        if (stop != null) stop.setEnabled(false);
+        usbCaptureLabel = "";
+    }
+
+    private void saveUsbSnapshot() {
+        usbDiagnostics.saveReport("snapshot", buildUsbDiagnosticReport("SNAPSHOT", lastCorrelationReport),
+                this::usbCallback);
+    }
+
+    private void selectUsbDirectory(boolean beginCaptureAfterSelection) {
+        startUsbCaptureAfterPicker = beginCaptureAfterSelection;
+        try { startActivityForResult(usbDiagnostics.directoryPickerIntent(), REQUEST_USB_DIAGNOSTIC_DIRECTORY); }
+        catch (Exception error) { toast("La radio no dispone de selector de almacenamiento: " + error.getMessage()); }
+    }
+
+    private String buildUsbDiagnosticReport(String stage, String correlationReport) {
+        StringBuilder out = new StringBuilder(32_000);
+        out.append("IDRIVE USB DEBUG · JCRK01/CYA · SOLO LECTURA\n");
+        out.append("Estado: ").append(stage).append('\n');
+        out.append("Prueba: ").append(usbCaptureLabel.isEmpty() ? "snapshot general" : usbCaptureLabel).append('\n');
+        out.append("Importante: este archivo contiene únicamente señales visibles para la APK. ")
+                .append("No es una captura CAN/UART en bruto.\n\n");
+        out.append(buildDiagnosticReport());
+        if (correlationReport != null && !correlationReport.isEmpty()) out.append("\n\n").append(correlationReport);
+        return out.toString();
+    }
+
+    private void usbCallback(boolean success, String message) {
+        runOnUiThread(() -> toast(message));
     }
 
     private void chooseCorrelation(AlertDialog dialog, TextView reportView, Button start, Button stop) {
@@ -921,7 +1085,7 @@ public class MainActivity extends Activity {
         String[] options = {"Datos del vehículo", "Gasolineras: combustible y radio", "Accesos rápidos", "Cambiar Multimedia", "Cambiar Radio",
                 "Cambiar Navegación", "Cambiar Android Auto", "Cambiar Teléfono / Bluetooth",
                 "Acceso a contenido multimedia", "Diagnóstico JCRK01/CYA", "Modo día / noche", "Restaurar configuración"};
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Ajustes BMW E87 iDrive")
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Ajustes iDrive")
                 .setItems(options, (d, which) -> {
                     switch (which) {
                         case 0: vehicleModal(); break;
@@ -1140,7 +1304,29 @@ public class MainActivity extends Activity {
                 requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION}, 100);
             }
+        } else requestCarSpeedIfNeeded();
+    }
+
+    private void requestCarSpeedIfNeeded() {
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) return;
+        String permission = "android.car.permission.CAR_SPEED";
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return;
+        if (uiPreferences.getBoolean("asked_car_speed", false)) return;
+        uiPreferences.edit().putBoolean("asked_car_speed", true).apply();
+        requestPermissions(new String[]{permission}, 101);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_USB_DIAGNOSTIC_DIRECTORY) return;
+        boolean begin = startUsbCaptureAfterPicker;
+        startUsbCaptureAfterPicker = false;
+        if (resultCode != RESULT_OK || !usbDiagnostics.acceptDirectoryResult(data)) {
+            toast("No se autorizó una carpeta escribible para USB DEBUG");
+            return;
         }
+        toast("Carpeta de diagnóstico autorizada");
+        if (begin) toast("Pulsa USB DEBUG para elegir la señal que vas a probar");
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
@@ -1149,6 +1335,10 @@ public class MainActivity extends Activity {
         if (requestCode == 100) {
             bluetoothState.stop();
             bluetoothState.start();
+            vehicleData.stop();
+            vehicleData.start();
+            requestCarSpeedIfNeeded();
+        } else if (requestCode == 101) {
             vehicleData.stop();
             vehicleData.start();
         }
@@ -1178,6 +1368,8 @@ public class MainActivity extends Activity {
             try (FileWriter writer = new FileWriter(output)) {
                 writer.write(buildDiagnosticReport());
                 if (includeCorrelation && !lastCorrelationReport.isEmpty()) writer.write("\n\n" + lastCorrelationReport);
+                String recovery = usbDiagnostics.recoveryReport();
+                if (!recovery.isEmpty()) writer.write("\n\nCOPIA DE RECUPERACIÓN USB DEBUG\n\n" + recovery);
             }
             toast("Diagnóstico guardado en " + output.getAbsolutePath());
         } catch (Exception e) { toast("No se pudo guardar: " + e.getMessage()); }
@@ -1191,6 +1383,8 @@ public class MainActivity extends Activity {
             try (FileWriter writer = new FileWriter(output)) {
                 writer.write(buildDiagnosticReport());
                 if (!lastCorrelationReport.isEmpty()) writer.write("\n\n" + lastCorrelationReport);
+                String recovery = usbDiagnostics.recoveryReport();
+                if (!recovery.isEmpty()) writer.write("\n\nCOPIA DE RECUPERACIÓN USB DEBUG\n\n" + recovery);
             }
             Uri uri = Uri.parse("content://" + getPackageName() + ".diagnostic/" + output.getName());
             Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain")
@@ -1445,6 +1639,10 @@ public class MainActivity extends Activity {
 
     /** Gauge draws only actual GPS speed when it is available; otherwise the value stays unavailable. */
     private static final class SpeedGaugeView extends View {
+        private static final double GREEN_LIMIT_KMH = 120d;
+        private static final double GAUGE_MAX_KMH = 260d;
+        private static final int SPEED_GREEN = Color.rgb(72, 196, 118);
+        private static final int SPEED_ORANGE = Color.rgb(246, 126, 13);
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF arc = new RectF();
         private Double speed;
@@ -1472,6 +1670,21 @@ public class MainActivity extends Activity {
             paint.setColor(Color.rgb(126, 157, 187));
             canvas.drawArc(arc, 205, 130, false, paint);
             arc.inset(-size * .035f, -size * .035f);
+            Double displaySpeed = speed != null && Double.isFinite(speed) ? Math.max(0d, speed) : null;
+            if (displaySpeed != null && displaySpeed > 0d) {
+                double clamped = Math.min(displaySpeed, GAUGE_MAX_KMH);
+                float greenSweep = (float) (270d * Math.min(clamped, GREEN_LIMIT_KMH) / GAUGE_MAX_KMH);
+                paint.setStrokeWidth(Math.max(3f, size * .020f));
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                paint.setColor(SPEED_GREEN);
+                canvas.drawArc(arc, 135, greenSweep, false, paint);
+                if (clamped > GREEN_LIMIT_KMH) {
+                    float orangeSweep = (float) (270d * (clamped - GREEN_LIMIT_KMH) / GAUGE_MAX_KMH);
+                    paint.setColor(SPEED_ORANGE);
+                    canvas.drawArc(arc, 135 + greenSweep, orangeSweep, false, paint);
+                }
+                paint.setStrokeCap(Paint.Cap.BUTT);
+            }
             for (int i = 0; i <= 30; i++) {
                 double radians = Math.toRadians(135 + i * (270d / 30d));
                 float outer = size * .49f;
@@ -1484,12 +1697,13 @@ public class MainActivity extends Activity {
                 paint.setColor(i > 26 ? Color.rgb(231, 74, 34) : Color.rgb(73, 159, 244));
                 canvas.drawLine(x1, y1, x2, y2, paint);
             }
-            String value = speed == null ? "—" : String.format(Locale.getDefault(), "%.0f", speed);
+            String value = displaySpeed == null ? "—" : String.format(Locale.getDefault(), "%.0f", displaySpeed);
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
             paint.setTextSize(size * .29f);
-            paint.setColor(Color.rgb(243, 246, 249));
+            paint.setColor(displaySpeed == null ? Color.rgb(243, 246, 249)
+                    : displaySpeed > GREEN_LIMIT_KMH ? SPEED_ORANGE : SPEED_GREEN);
             canvas.drawText(value, centerX, centerY + size * .08f, paint);
             paint.setTextSize(size * .105f);
             paint.setColor(Color.rgb(154, 170, 186));
