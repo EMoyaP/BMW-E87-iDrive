@@ -100,3 +100,13 @@ Incluso entonces, el primer adaptador será exclusivamente de lectura. Cualquier
 - El asistente refresca como máximo cada 750 ms una lista limitada a ocho candidatos y reescribe el TXT cada cinco
   segundos. No añade un nuevo sondeo de MCU/CAN. La prueba 1280×720 con un candidato cambiando mostró 52.493 KB PSS;
   el aumento frente al panel normal se debe principalmente al diálogo y sus vistas temporales.
+
+## Historial persistente de candidatos (1.11.1)
+
+- Se utiliza un único JSON privado con escritura transaccional `AtomicFile`; no se añadió base de datos, servicio,
+  dependencia de ejecución ni permiso. Solo se escribe al completar o guardar un paso, no durante cada refresco.
+- El límite es 200 candidatos, 20 sesiones, 16 pasos y 16 valores por candidato. Las observaciones débiles se descartan
+  y las cadenas se truncan a 240 caracteres, por lo que el almacenamiento y su lectura inicial quedan acotados.
+- En Android 15 se verificó una captura fuerte de prueba (`off → on`), la conservación tras finalizar el proceso y
+  volver a abrir la app, su inclusión en el informe y el borrado con confirmación. El archivo de una entrada ocupó
+  526 bytes; el PSS se estabilizó en 46.392 KB y el APK debug ocupa 2.360.999 bytes.

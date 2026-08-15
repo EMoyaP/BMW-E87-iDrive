@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 1.11.1 — 15/08/2026
+
+- Los candidatos medios y fuertes del asistente `USB DEBUG` se guardan de forma atómica en el almacenamiento privado
+  de la aplicación y se agregan entre sesiones distintas, incluso después de reiniciar la radio o actualizar la APK.
+- El registro distingue `OBSERVADO`, `REPETIDO` y `LISTO PARA REVISAR`. Este último exige tres sesiones diferentes
+  con evidencia fuerte, pero nunca activa automáticamente un mapeo ni presenta la señal como confirmada.
+- `USB DEBUG > Ver candidatos guardados` permite revisar valores, pasos, fuente, puntuación e historial sin conectar
+  la memoria USB. El borrado exige confirmación y no afecta a los TXT exportados.
+- El historial está acotado a 200 candidatos, 20 sesiones y 16 valores por candidato para mantener constantes el uso
+  de disco y memoria. Se incluye también en cada informe de diagnóstico y captura USB.
+
 ## 1.11.0 — 15/08/2026
 
 - `USB DEBUG` incorpora un asistente visual a pantalla grande con preparación, progreso y maniobras concretas para

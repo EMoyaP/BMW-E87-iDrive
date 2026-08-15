@@ -914,13 +914,14 @@ public class MainActivity extends Activity {
                             + "Android abrirá su selector de carpetas. Elige una carpeta de la memoria USB y pulsa "
                             + "USAR ESTA CARPETA. La app no solicita acceso al resto del almacenamiento.")
                     .setPositiveButton("SELECCIONAR USB", (d, w) -> selectUsbDirectory(true))
+                    .setNeutralButton("VER CANDIDATOS", (d, w) -> showStoredCandidates())
                     .setNegativeButton("CANCELAR", null).show();
             return;
         }
         String[] options = usbCaptureRunning
                 ? new String[]{"Detener y guardar captura", "Guardar snapshot ahora"}
-                : new String[]{"Abrir asistente visual", "Guardar informe ahora", "Cambiar carpeta USB",
-                "Olvidar autorización USB"};
+                : new String[]{"Abrir asistente visual", "Ver candidatos guardados", "Guardar informe ahora",
+                "Cambiar carpeta USB", "Olvidar autorización USB"};
         new AlertDialog.Builder(this).setTitle("USB DEBUG")
                 .setItems(options, (d, which) -> {
                     if (usbCaptureRunning) {
@@ -930,8 +931,9 @@ public class MainActivity extends Activity {
                         else if (which == 1) saveUsbSnapshot();
                     } else {
                         if (which == 0) showUsbDebugWizard(reportView, start, stop, usb, usbStatus);
-                        else if (which == 1) saveUsbSnapshot();
-                        else if (which == 2) selectUsbDirectory(false);
+                        else if (which == 1) showStoredCandidates();
+                        else if (which == 2) saveUsbSnapshot();
+                        else if (which == 3) selectUsbDirectory(false);
                         else {
                             usbDiagnostics.forgetDirectory();
                             usbStatus.setText(usbDiagnostics.directorySummary());
@@ -939,6 +941,36 @@ public class MainActivity extends Activity {
                         }
                     }
                 }).setNegativeButton("CANCELAR", null).show();
+    }
+
+    private void showStoredCandidates() {
+        ScrollView scroll = new ScrollView(this);
+        TextView content = txt(diagnostics.storedCandidateReport(), 12, TEXT, false);
+        content.setTextIsSelectable(true);
+        content.setPadding(dp(18), dp(12), dp(18), dp(18));
+        scroll.addView(content);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Candidatos guardados · " + diagnostics.storedCandidateCount())
+                .setView(scroll)
+                .setPositiveButton("CERRAR", null)
+                .setNeutralButton("BORRAR HISTORIAL", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            resize(dialog, .82f, .82f);
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v ->
+                    new AlertDialog.Builder(this)
+                            .setTitle("¿Borrar candidatos guardados?")
+                            .setMessage("Se eliminará el historial interno. Los TXT ya exportados a la USB no se modifican.")
+                            .setPositiveButton("BORRAR", (confirm, which) -> {
+                                diagnostics.clearStoredCandidates();
+                                content.setText(diagnostics.storedCandidateReport());
+                                dialog.setTitle("Candidatos guardados · 0");
+                                toast("Historial interno eliminado");
+                            })
+                            .setNegativeButton("CANCELAR", null)
+                            .show());
+        });
+        dialog.show();
     }
 
     private void showUsbDebugWizard(TextView reportView, Button start, Button stop, Button usb,

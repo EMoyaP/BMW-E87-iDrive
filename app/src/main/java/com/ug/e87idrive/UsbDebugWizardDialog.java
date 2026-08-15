@@ -354,7 +354,7 @@ public final class UsbDebugWizardDialog {
         handler.removeCallbacks(refresh);
         handler.removeCallbacks(flush);
         handler.removeCallbacks(timeout);
-        if (diagnostics.currentCorrelationStepStartedAt() != 0) diagnostics.finishCorrelationStep(true);
+        if (diagnostics.currentCorrelationStepStartedAt() != 0) diagnostics.finishCorrelationStep(true, true);
         String correlationReport = diagnostics.stopCorrelation();
         running = false;
         finished = true;
@@ -368,8 +368,9 @@ public final class UsbDebugWizardDialog {
         progress.setProgress(plan.steps().size());
         progressLabel.setText("Prueba terminada · " + plan.title());
         instructionTitle.setText("Captura guardada");
-        instruction.setText("Los candidatos se han escrito en el TXT de la USB y en la copia interna de recuperación. "
-                + "Un candidato fuerte todavía debe repetirse y revisarse antes de crear un mapeo.");
+        instruction.setText("Los candidatos medios y fuertes se han añadido al historial interno; el informe también "
+                + "se ha escrito en la USB y en la copia de recuperación. Puedes revisarlos en USB DEBUG > Ver "
+                + "candidatos guardados. Ninguno se activa automáticamente como mapeo.");
         liveStatus.setText("FINALIZADA · ya puedes cerrar o realizar otra prueba desde USB DEBUG");
         liveStatus.setTextColor(green);
         repeat.setEnabled(false);

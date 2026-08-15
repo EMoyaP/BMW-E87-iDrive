@@ -150,10 +150,18 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
    final que cámara, radar y pitidos OEM siguen funcionando normalmente.
 9. La captura se actualiza cada cinco segundos y finaliza automáticamente a los diez minutos. `DETENER Y GUARDAR`
    conserva los pasos realizados aunque no se haya terminado el plan.
-10. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
+10. Al completar un paso no omitido, sus candidatos medios y fuertes quedan también en el registro privado de la app.
+   Entrar en `USB DEBUG > Ver candidatos guardados` para comprobar sus valores y estado. Una sesión interrumpida con
+   `DETENER Y GUARDAR` conserva la evidencia parcial; `OMITIR` descarta la evidencia incidental del paso.
+11. Repetir la misma prueba en tres sesiones distintas. La misma señal fuerte debe pasar de `OBSERVADO` a `REPETIDO`
+   y después a `LISTO PARA REVISAR`; nunca debe aparecer como confirmada ni cambiar por sí sola la UI del vehículo.
+12. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
    USB se desconectó antes de tiempo, usar `EXPORTAR` para recuperar el último estado conservado internamente.
-11. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
+13. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
    broadcasts registrados, ajustes legibles o Android Automotive público. En ese caso se necesitará inspeccionar las
    APK OEM exportadas o una captura autorizada por ADB; no se probarán APIs o índices de otra plataforma a ciegas.
-12. Solo aceptar un candidato como base de una futura implementación si repite el mismo patrón en al menos tres ciclos,
+14. Solo aceptar un candidato como base de una futura implementación si repite el mismo patrón en al menos tres ciclos,
    no cambia al accionar otra función y el informe identifica paquete/acción o propiedad, clave, valores y unidad.
+15. Usar `BORRAR HISTORIAL` únicamente después de copiar los TXT. El borrado requiere confirmación, no modifica la USB
+   y no puede recuperarse salvo desde un informe exportado. Desinstalar la app o borrar sus datos también elimina este
+   registro.

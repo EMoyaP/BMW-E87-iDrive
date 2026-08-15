@@ -39,6 +39,7 @@ import java.util.TimeZone;
 public final class DiagnosticEngine {
     private static final int MAX_EVENTS = 500;
     private final Context context;
+    private final DiagnosticCandidateStore candidateStore;
     private final Map<String, String> observed = new LinkedHashMap<>();
     private final List<DiagnosticEvent> events = new ArrayList<>();
     private BroadcastReceiver receiver;
@@ -64,6 +65,7 @@ public final class DiagnosticEngine {
 
     public DiagnosticEngine(Context context) {
         this.context = context.getApplicationContext();
+        candidateStore = new DiagnosticCandidateStore(this.context);
     }
 
     public void startPassiveProbe() {
@@ -140,11 +142,20 @@ public final class DiagnosticEngine {
 
     /** Stores the ranked evidence for the current wizard step. */
     public synchronized String finishCorrelationStep(boolean skipped) {
+        return finishCorrelationStep(skipped, !skipped);
+    }
+
+    /** Stores an interrupted step when the user explicitly chooses to preserve partial evidence. */
+    public synchronized String finishCorrelationStep(boolean skipped, boolean persistCandidates) {
         if (correlation == null || correlation.activeStep == null) return "(sin paso activo)";
         CorrelationStep step = correlation.activeStep;
         step.endedAt = System.currentTimeMillis();
-        String report = stepReport(step, skipped);
+        List<LiveCandidate> ranked = rankCandidates(step);
+        String report = stepReport(step, skipped, ranked);
         correlation.completedStepReports.add(report);
+        if (persistCandidates) {
+            candidateStore.record(correlation.label, step.label, correlation.startedAt, ranked);
+        }
         correlation.activeStep = null;
         return report;
     }
@@ -175,6 +186,12 @@ public final class DiagnosticEngine {
     public synchronized long currentCorrelationStepStartedAt() {
         return correlation == null || correlation.activeStep == null ? 0L : correlation.activeStep.startedAt;
     }
+
+    public synchronized String storedCandidateReport() { return candidateStore.buildReport(); }
+
+    public synchronized int storedCandidateCount() { return candidateStore.size(); }
+
+    public synchronized void clearStoredCandidates() { candidateStore.clear(); }
 
     public String getObservedValue(String key) {
         // Deliberately empty until a real JCRK01/CYA mapping is identified on this unit.
@@ -210,6 +227,8 @@ public final class DiagnosticEngine {
         for (Map.Entry<String, String> entry : observed.entrySet()) {
             out.append(entry.getKey()).append(" = ").append(entry.getValue()).append('\n');
         }
+
+        out.append('\n').append(candidateStore.buildReport());
 
         out.append("\nACCIONES PASIVAS ESCUCHADAS\n");
         for (String action : CANDIDATE_ACTIONS) out.append(action).append('\n');
@@ -626,19 +645,18 @@ public final class DiagnosticEngine {
         }
         if (session.activeStep != null) {
             session.activeStep.endedAt = session.endedAt;
-            out.append("\n").append(stepReport(session.activeStep, false));
+            out.append("\n").append(stepReport(session.activeStep, false, rankCandidates(session.activeStep)));
         }
         out.append("\nInterpretación: los cambios son observaciones Android, no una prueba de que exista una API CAN.\n");
         return out.toString();
     }
 
-    private String stepReport(CorrelationStep step, boolean skipped) {
+    private String stepReport(CorrelationStep step, boolean skipped, List<LiveCandidate> candidates) {
         StringBuilder out = new StringBuilder();
         out.append("PASO GUIADO: ").append(step.label).append('\n');
         out.append("Intervalo: ").append(formatTime(step.startedAt)).append(" -> ")
                 .append(formatTime(step.endedAt == 0 ? System.currentTimeMillis() : step.endedAt)).append('\n');
         out.append("Resultado indicado por el usuario: ").append(skipped ? "OMITIDO" : "REALIZADO").append('\n');
-        List<LiveCandidate> candidates = rankCandidates(step);
         if (candidates.isEmpty()) {
             out.append("Candidatos: ninguno visible para una APK normal.\n");
         } else {

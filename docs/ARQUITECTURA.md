@@ -69,6 +69,13 @@ legibles de `Settings`. `DiagnosticCandidateClassifier` asigna una puntuación e
 repetición y coincidencia con la prueba. Esta clasificación solo ayuda a revisar el TXT: nunca activa por sí misma un
 adaptador CAN, escribe un mapeo persistente ni transmite datos al vehículo.
 
+`DiagnosticCandidateStore` conserva únicamente candidatos medios y fuertes en un JSON privado escrito mediante
+`AtomicFile`. Agrupa por prueba y clave, cuenta sesiones distintas y mantiene valores, pasos, fuente y puntuación. El
+registro está limitado a 200 entradas, 20 sesiones y 16 valores por entrada. Tras tres sesiones fuertes marca la
+evidencia como `LISTO PARA REVISAR`, no como confirmada; el almacén no es consultado por `VehicleDataRepository` ni
+puede modificar estados de la UI. Sobrevive a reinicios y actualizaciones con el mismo `applicationId`, pero se elimina
+al borrar los datos o desinstalar la aplicación.
+
 ## Integración CAN futura
 `VehicleDataRepository` es el punto de integración. Cuando una prueba en la unidad identifique un servicio/broadcast real de JCRK01/CYA y se pueda documentar con evidencia, se añade un adaptador específico sin cambiar la UI. Los extras genéricos no se promocionan automáticamente a datos CAN.
 
