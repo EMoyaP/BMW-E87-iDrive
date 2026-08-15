@@ -1,0 +1,32 @@
+# Gradle and Android build output
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+.externalNativeBuild/
+.cxx/
+captures/
+
+# Signing material and local secrets
+*.jks
+*.keystore
+*.p12
+*.pem
+keystore.properties
+signing.properties
+secrets.properties
+.env
+.env.*
+
+# Installable artifacts are published only as reviewed GitHub releases
+*.apk
+*.aab
+*.ap_
+dist/
+
+# Runtime diagnostics and editor/OS files
+e87_diagnostic.txt
+*.log
+.DS_Store
+Thumbs.db

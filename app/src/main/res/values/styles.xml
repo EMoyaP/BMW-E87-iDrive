@@ -1,0 +1,23 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:alertDialogTheme">@style/BmwDialogTheme</item>
+    </style>
+
+    <style name="BmwDialogTheme" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@color/panel</item>
+        <item name="android:colorBackground">@color/panel</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowTitleStyle">@style/BmwDialogTitle</item>
+    </style>
+
+    <style name="BmwDialogTitle" parent="@android:style/TextAppearance.Material.Headline">
+        <item name="android:textColor">@color/text</item>
+    </style>
+</resources>
