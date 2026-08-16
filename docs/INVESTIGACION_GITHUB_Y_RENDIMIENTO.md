@@ -2,7 +2,7 @@
 
 Fecha de revisión: 2026-08-16.
 
-## Validación 1.13.4 sobre las APK exportadas de la unidad
+## Validación 1.13.5 sobre las APK exportadas de la unidad
 
 - `com.jancar.services.car.CarService` y `com.jancar.services.radio.RadioService` se consumen mediante componentes,
   descriptores y transacciones getter comprobados en las APK exportadas. No se usa `BIND_AUTO_CREATE`, no se registra

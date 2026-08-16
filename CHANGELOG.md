@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## 1.13.5 — 16/08/2026
+
+- Se corrige el inspector CAN para ocultar los sentinelas OEM `Integer.MIN_VALUE` y su equivalente `float`; ya no se
+  interpretan como luces de emergencia, puertas abiertas o cinturones sin abrochar.
+- Se corrige la escritura SAF de USB DEBUG: el informe usa el modo estándar `w` del proveedor de documentos, compatible
+  con los selectores de almacenamiento de estas radios.
+- Los estados de puertas y cinturón procedentes de `CabinInfo` quedan en modo observación hasta validar en esta unidad
+  el significado de sus valores 0/1. La fila inferior conserva únicamente estados publicados por una fuente verificada.
+- La velocidad valida discrepancias entre CAN, JCRK01/CYA y GPS para rechazar una muestra CAN estancada de 14 km/h
+  cuando el resto de fuentes confirma que el vehículo está parado.
+- `EXPORTAR` dentro del diagnóstico guarda ahora directamente en la carpeta USB autorizada el informe y el registro de
+  sesión; si no hay carpeta autorizada, abre el selector USB. Se mantiene la copia interna de recuperación.
+- La radio muestra `Sin información RDS` cuando solo está disponible la frecuencia, sin el texto técnico de procedencia.
+- La lectura multimedia busca también sesiones/notificaciones estándar de Spotify y SpeedPlay cuando existen; los
+  controles solo se habilitan si Android publica acciones compatibles.
+- El acceso de gasolineras intenta también redes IP Android con capacidad INTERNET aunque la radio no las marque como
+  validadas, conservando caché y límites de tiempo si la petición falla.
+
 ## 1.13.4 — 16/08/2026
 
 - Se añadió al diagnóstico el botón `DATOS CAN EN VIVO · FUENTES`.

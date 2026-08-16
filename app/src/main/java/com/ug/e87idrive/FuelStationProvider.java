@@ -358,7 +358,7 @@ public final class FuelStationProvider {
     private FetchResult fetchStations(String endpoint, Location center, int retainRadiusKm)
             throws Exception {
         Network network = validatedNetwork();
-        if (network == null) throw new IllegalStateException("Android no publica una red validada");
+        if (network == null) throw new IllegalStateException("Android no publica una red IP utilizable");
         HttpURLConnection connection = (HttpURLConnection) network.openConnection(new URL(endpoint));
         activeConnection = connection;
         connection.setRequestMethod("GET");
@@ -532,7 +532,12 @@ public final class FuelStationProvider {
         return validatedNetwork() != null;
     }
 
-    /** Uses the default validated network first, then any other validated Android network. */
+    /**
+     * Uses a validated network first, then any Android network that advertises
+     * INTERNET. Some head units mark the phone/PAN link as unvalidated even
+     * though URL traffic works; the request itself remains bounded and cached
+     * on failure.
+     */
     private Network validatedNetwork() {
         if (connectivityManager == null) return null;
         try {
@@ -541,8 +546,19 @@ public final class FuelStationProvider {
             for (Network candidate : connectivityManager.getAllNetworks()) {
                 if (isValidated(candidate)) return candidate;
             }
+            if (hasInternetCapability(activeNetwork)) return activeNetwork;
+            for (Network candidate : connectivityManager.getAllNetworks()) {
+                if (hasInternetCapability(candidate)) return candidate;
+            }
         } catch (Exception ignored) { }
         return null;
+    }
+
+    private boolean hasInternetCapability(Network network) {
+        if (network == null) return false;
+        NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+        return capabilities != null
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
     }
 
     private boolean isValidated(Network network) {
@@ -575,7 +591,12 @@ public final class FuelStationProvider {
     public String networkDiagnostic() {
         StringBuilder out = new StringBuilder("RED PARA GASOLINERAS\n");
         out.append("red activa=").append(networkLabel()).append('\n');
-        out.append("Internet validado por Android=").append(hasActiveInternet()).append('\n');
+        Network selected = validatedNetwork();
+        NetworkCapabilities selectedCapabilities = selected == null ? null
+                : connectivityManager.getNetworkCapabilities(selected);
+        out.append("red IP utilizable publicada por Android=").append(selected != null).append('\n');
+        out.append("Internet validado por Android=").append(selectedCapabilities != null
+                && selectedCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)).append('\n');
         if (connectivityManager != null) try {
             Network[] networks = connectivityManager.getAllNetworks();
             out.append("redes publicadas por Android=").append(networks.length).append('\n');

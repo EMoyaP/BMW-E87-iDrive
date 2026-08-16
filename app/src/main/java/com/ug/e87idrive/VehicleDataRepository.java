@@ -32,6 +32,7 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     }
 
     @Override public VehicleValue<?> get(VehicleField field) {
+        if (field == VehicleField.SPEED) return selectSpeed();
         VehicleValue<?> canbusValue = canbus.get(field);
         if (canbusValue.isAvailable()
                 && (field != VehicleField.SPEED || canbusValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
@@ -55,6 +56,60 @@ public final class VehicleDataRepository implements VehicleDataProvider {
         // No vendor value is returned until a confirmed, device-specific mapping exists.
         return selected(field, VehicleValue.unavailable());
     }
+
+    /**
+     * Speed is the one value for which this unit currently exposes a stale CAN
+     * sample (14 km/h while the instrument cluster is stopped). Prefer a
+     * current Jancar/vehicle value when it disagrees materially with CAN, and
+     * use GPS as a zero-speed sanity check. This keeps CAN as a source without
+     * painting a false moving speed on the dashboard.
+     */
+    private VehicleValue<?> selectSpeed() {
+        VehicleValue<?> canValue = canbus.get(VehicleField.SPEED);
+        VehicleValue<?> jancarValue = jancar.get(VehicleField.SPEED);
+        VehicleValue<?> automotiveValue = automotive.get(VehicleField.SPEED);
+        VehicleValue<?> gpsValue = gps.getLastValue() == null ? VehicleValue.unavailable()
+                : VehicleValue.available(gps.getLastValue(), VehicleSource.GPS, gps.getLastTimestamp());
+
+        boolean canFresh = canValue.isAvailable() && canValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS;
+        boolean jancarFresh = jancarValue.isAvailable() && jancarValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS;
+        if (canFresh && jancarFresh && numeric(jancarValue.value())
+                && Math.abs(number(canValue.value()) - number(jancarValue.value())) > 3d) {
+            AppSessionLog.event("VELOCIDAD", "CAN=" + canValue.value()
+                    + " · Jancar=" + jancarValue.value() + " · se usa Jancar por discrepancia");
+            return selected(VehicleField.SPEED, jancarValue);
+        }
+        if (canFresh) {
+            if (jancarFresh && numeric(jancarValue.value())
+                    && Math.abs(number(canValue.value()) - number(jancarValue.value())) <= 3d) {
+                return selected(VehicleField.SPEED, canValue);
+            }
+            // A fresh GPS zero is useful for rejecting the known low-speed CAN
+            // outlier when the car is physically stopped.
+            if (gpsValue.isAvailable() && gpsValue.ageMs() <= GPS_SPEED_MAX_AGE_MS
+                    && numeric(gpsValue.value()) && number(gpsValue.value()) == 0d
+                    && number(canValue.value()) > 3d && number(canValue.value()) < 30d) {
+                AppSessionLog.event("VELOCIDAD", "CAN=" + canValue.value()
+                        + " · GPS=0 · se usa GPS por discrepancia en parada");
+                return selected(VehicleField.SPEED, gpsValue);
+            }
+            return selected(VehicleField.SPEED, canValue);
+        }
+        if (jancarFresh) return selected(VehicleField.SPEED, jancarValue);
+        if (automotiveValue.isAvailable() && automotiveValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS) {
+            return selected(VehicleField.SPEED, automotiveValue);
+        }
+        if (gpsValue.isAvailable() && gpsValue.ageMs() <= GPS_SPEED_MAX_AGE_MS) {
+            return selected(VehicleField.SPEED, gpsValue);
+        }
+        return selected(VehicleField.SPEED, VehicleValue.unavailable());
+    }
+
+    private static boolean numeric(Object value) {
+        return value instanceof Number && Double.isFinite(((Number) value).doubleValue());
+    }
+
+    private static double number(Object value) { return ((Number) value).doubleValue(); }
 
     private VehicleValue<?> selected(VehicleField field, VehicleValue<?> value) {
         String selection = value.isAvailable()
@@ -164,7 +219,7 @@ public final class VehicleDataRepository implements VehicleDataProvider {
                     .append(" · edad=").append(value.ageMs()).append(" ms");
             out.append('\n');
         }
-        out.append("Prioridad de velocidad: CanBusManager OEM verificado, Jancar OEM, Android Automotive y después GPS (máx. 10 s).\n\n");
+        out.append("Velocidad: CAN se conserva si coincide; ante discrepancia material se valida con Jancar y GPS para evitar muestras estancadas.\n\n");
         out.append(canbus.capabilityReport()).append('\n');
         out.append(jancar.capabilityReport()).append('\n');
         out.append(gps.diagnosticReport());

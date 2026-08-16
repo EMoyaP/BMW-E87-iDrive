@@ -70,6 +70,18 @@ public final class MediaNotificationListener extends NotificationListenerService
         return latest;
     }
 
+    static Snapshot latestForPackages(String... packageNames) {
+        Snapshot latest = null;
+        if (packageNames == null) return null;
+        for (String packageName : packageNames) {
+            Snapshot candidate = latestForPackage(packageName);
+            if (candidate != null && (latest == null || candidate.postedAt > latest.postedAt)) {
+                latest = candidate;
+            }
+        }
+        return latest;
+    }
+
     static boolean isConnected() { return connected; }
 
     static String diagnosticSummary() {

@@ -146,7 +146,7 @@ final class JancarRadioProvider {
             String formatted = frequency(band, frequency);
             publish(new Snapshot(true, band, frequency, band == 1 ? "FM" : "AM",
                     ps.isEmpty() ? formatted : ps, ps.isEmpty()
-                    ? "Frecuencia publicada por RadioService"
+                    ? "Sin información RDS"
                     : formatted + " · RDS/PS OEM"));
         } else publish(new Snapshot(false, band, frequency, "RADIO", "", "Sin frecuencia OEM"));
         Handler target = worker;

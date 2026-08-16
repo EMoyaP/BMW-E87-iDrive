@@ -358,7 +358,11 @@ public final class UsbDiagnosticRecorder {
 
     private void writeDocument(Uri document, String report) throws Exception {
         ContentResolver resolver = context.getContentResolver();
-        try (OutputStream stream = resolver.openOutputStream(document, "wt")) {
+        // SAF supports the documented write modes "w", "wa", "rw" and "rwt";
+        // "wt" is rejected by several Android 13/15 document providers used
+        // by aftermarket head units and was making USB DEBUG appear to export
+        // successfully while producing no file.
+        try (OutputStream stream = resolver.openOutputStream(document, "w")) {
             if (stream == null) throw new IllegalStateException("No se pudo abrir el archivo para escritura");
             try (OutputStreamWriter writer = new OutputStreamWriter(stream, StandardCharsets.UTF_8)) {
                 writer.write(report);

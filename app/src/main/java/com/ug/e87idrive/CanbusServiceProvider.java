@@ -185,13 +185,21 @@ final class CanbusServiceProvider implements VehicleDataProvider {
     }
 
     private static void appendInt(StringBuilder out, int[] count, String name, int value, boolean includeZero) {
+        if (value == Integer.MIN_VALUE) {
+            if (includeZero) out.append(name).append(" = NO EXPUESTO (Integer.MIN_VALUE)\n");
+            return;
+        }
         if (!includeZero && value == 0) return;
         out.append(name).append(" = ").append(value).append('\n');
         count[0]++;
     }
 
     private static void appendFloat(StringBuilder out, int[] count, String name, float value, boolean includeZero) {
-        if (!Float.isFinite(value) || (!includeZero && value == 0f)) return;
+        if (!Float.isFinite(value) || value == (float) Integer.MIN_VALUE) {
+            if (includeZero) out.append(name).append(" = NO EXPUESTO (sentinel OEM)\n");
+            return;
+        }
+        if (!includeZero && value == 0f) return;
         out.append(name).append(" = ").append(value).append('\n');
         count[0]++;
     }
@@ -398,21 +406,35 @@ final class CanbusServiceProvider implements VehicleDataProvider {
     }
 
     private void applyLight(Light l, long now) {
-        if (l.left != 0 || l.right != 0 || l.emergency != 0) {
-            String state = l.emergency != 0 ? "Emergencia"
-                    : l.left != 0 && l.right != 0 ? "Intermitentes"
-                    : l.left != 0 ? "Intermitente izq." : "Intermitente der.";
+        // Integer.MIN_VALUE is the OEM's unpublished sentinel. It must not become
+        // "emergency" merely because it is non-zero.
+        boolean leftKnown = l.left != Integer.MIN_VALUE;
+        boolean rightKnown = l.right != Integer.MIN_VALUE;
+        boolean emergencyKnown = l.emergency != Integer.MIN_VALUE;
+        if (!leftKnown && !rightKnown && !emergencyKnown) {
+            clear(VehicleField.LIGHTS);
+            return;
+        }
+        if ((leftKnown && l.left != 0) || (rightKnown && l.right != 0)
+                || (emergencyKnown && l.emergency != 0)) {
+            boolean emergency = emergencyKnown && l.emergency != 0;
+            boolean left = leftKnown && l.left != 0;
+            boolean right = rightKnown && l.right != 0;
+            String state = emergency ? "Emergencia"
+                    : left && right ? "Intermitentes"
+                    : left ? "Intermitente izq." : "Intermitente der.";
             put(VehicleField.LIGHTS, state, now);
         } else clear(VehicleField.LIGHTS);
     }
 
     private void applyCabin(Cabin c, long now) {
-        int open = (c.bonnet != 0 ? 1 : 0) + (c.fl != 0 ? 1 : 0) + (c.fr != 0 ? 1 : 0)
-                + (c.rl != 0 ? 1 : 0) + (c.rr != 0 ? 1 : 0) + (c.trunk != 0 ? 1 : 0);
-        put(VehicleField.DOORS, open == 0 ? "Cerradas" : open == 1 ? "1 abierta" : open + " abiertas", now);
-        if (c.leftBelt == 0 && c.rightBelt == 0) put(VehicleField.SEATBELT, "Abrochado", now);
-        else if (c.leftBelt != 0 || c.rightBelt != 0) put(VehicleField.SEATBELT, "Sin abrochar", now);
-        else clear(VehicleField.SEATBELT);
+        // The exported Parcel fields are visible, but this unit does not publish
+        // their 0/1 semantics in a public contract. Do not turn an unverified
+        // value such as frDoorStatus=1 into a false dashboard warning. The
+        // verified Jancar getters remain the UI source until a guided capture
+        // identifies these CAN values on this exact vehicle.
+        clear(VehicleField.DOORS);
+        clear(VehicleField.SEATBELT);
     }
 
     private void clearCabin() {

@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
     private boolean startUsbCaptureAfterPicker;
     private boolean exportOemAfterPicker;
     private boolean exportFullAfterPicker;
+    private boolean exportSnapshotAfterPicker;
     private int mediaRefreshTick;
     private String lastMediaLog = "";
 
@@ -1087,7 +1088,7 @@ public class MainActivity extends Activity {
             start.setEnabled(true);
             stop.setEnabled(false);
         });
-        export.setOnClickListener(v -> saveDiagnostic(true));
+        export.setOnClickListener(v -> exportDiagnosticNow());
         permissions.setOnClickListener(v -> permissionsModal());
         share.setOnClickListener(v -> shareDiagnostic());
         usb.setOnClickListener(v -> usbDiagnosticMenu(reportView, start, stop, usb, usbStatus));
@@ -1316,6 +1317,21 @@ public class MainActivity extends Activity {
     private void saveUsbSnapshot() {
         usbDiagnostics.saveReport("snapshot", buildUsbSnapshotReport(),
                 this::usbCallback);
+    }
+
+    private void exportDiagnosticNow() {
+        if (usbDiagnostics.hasDirectoryPermission()) {
+            saveUsbSnapshot();
+            return;
+        }
+        exportSnapshotAfterPicker = true;
+        new AlertDialog.Builder(this)
+                .setTitle("Autorizar memoria USB")
+                .setMessage("Para EXPORTAR se necesita seleccionar una carpeta escribible de la USB. "
+                        + "Se guardará el informe actual y el registro de sesión e87_runtime_session.log.")
+                .setPositiveButton("SELECCIONAR USB", (d, w) -> selectUsbDirectory(false))
+                .setNegativeButton("CANCELAR", (d, w) -> exportSnapshotAfterPicker = false)
+                .show();
     }
 
     private void requestOemExport(Button trigger) {
@@ -1801,9 +1817,11 @@ public class MainActivity extends Activity {
         boolean begin = startUsbCaptureAfterPicker;
         boolean exportOem = exportOemAfterPicker;
         boolean exportFull = exportFullAfterPicker;
+        boolean exportSnapshot = exportSnapshotAfterPicker;
         startUsbCaptureAfterPicker = false;
         exportOemAfterPicker = false;
         exportFullAfterPicker = false;
+        exportSnapshotAfterPicker = false;
         if (resultCode != RESULT_OK || !usbDiagnostics.acceptDirectoryResult(data)) {
             toast("No se autorizó una carpeta escribible para USB DEBUG");
             return;
@@ -1812,6 +1830,7 @@ public class MainActivity extends Activity {
         if (begin) showUsbDebugWizard(null, null, null, null, null);
         else if (exportOem) requestOemExport(null);
         else if (exportFull) requestFullExport();
+        else if (exportSnapshot) saveUsbSnapshot();
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,

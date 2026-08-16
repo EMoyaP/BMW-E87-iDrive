@@ -21,7 +21,7 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.13.4 — inspector CAN y procedencia en vivo**.
+Versión actual: **1.13.5 — validación de señales y exportación USB**.
 
 La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
 Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
@@ -47,16 +47,18 @@ claves de firma privadas del proyecto.
 - Nombre del teléfono cuando Android expone públicamente la conexión Bluetooth.
 - Adaptador CAN OEM específico de esta unidad: enlaza, sin iniciarlo, el `CanBusManager` publicado por `com.can.activity`
   y consulta exclusivamente `getDashBoardInfo`, `getCabinInfo` y `getLightInfo` verificados en la APK exportada. Puede
-  proporcionar velocidad, autonomía, consumo medio, RPM, temperatura exterior, temperatura del refrigerante, puertas,
-  intermitentes y cinturones. No registra callbacks ni escribe CAN/UART.
+  proporcionar velocidad, autonomía, consumo medio, RPM y campos crudos de temperatura, puertas, intermitentes y
+  cinturones; los estados se muestran en la UI solo cuando su semántica está validada. No registra callbacks ni escribe
+  CAN/UART.
 - En Debug, `DATOS CAN EN VIVO · FUENTES` permite inspeccionar en un modal los campos no cero de CAN OEM y comparar
   con JCRK01/CYA, Android Automotive y GPS. Incluye actualización en vivo y opción para mostrar ceros; no cambia la
   prioridad automática de la aplicación.
 - Adaptador Jancar específico de la unidad que enlaza el `CarService` existente sin iniciarlo y consulta exclusivamente
   getters identificados en la APK exportada. Puede proporcionar velocidad, consumo, RPM, autonomía, temperatura
   exterior, puertas, luces, freno, cinturón, marcha atrás y climatización. No registra callbacks ni escribe CAN/UART.
-- Prioridad de velocidad CanBusManager OEM, Jancar, Android Automotive público y finalmente GPS. El valor y arco son verdes hasta
-  120 km/h y naranjas por encima.
+- Prioridad de velocidad con validación de discrepancias entre CanBusManager OEM, Jancar, Android Automotive público y
+  GPS. El valor y arco son verdes hasta 120 km/h y naranjas por encima; una muestra CAN discordante no se pinta como
+  velocidad real.
 - Tarjeta de gasolineras con combustible y radio configurables.
 - Selección de la estación más barata y la más cercana, calculada localmente respecto al GPS.
 - Apertura del destino en Google Maps u otra aplicación compatible.
@@ -80,7 +82,8 @@ claves de firma privadas del proyecto.
   que no hay avisos y naranja cuando publica avisos activos. La llave inglesa abre el diagnóstico.
 - Centro `PERMISOS` dentro de Diagnóstico: solicita ubicación/Bluetooth, abre el panel de acceso multimedia y ofrece
   acceso directo a los ajustes de la aplicación cuando Android haya bloqueado una petición anterior.
-- Exportación local del informe de diagnóstico.
+- `EXPORTAR` del diagnóstico escribe el informe y `e87_runtime_session.log` en la USB autorizada; si todavía no hay
+  carpeta seleccionada, solicita elegirla y conserva una copia interna de recuperación.
 
 ### Asistente visual USB DEBUG
 
@@ -211,6 +214,7 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 |---|---:|
 | APK debug v1.13.1 | 2.395.745 bytes |
 | APK debug v1.13.4 | 2.417.374 bytes; SHA-256 `9533944861E8C7EAC6DCD5BE19CA2DFB03BE1D39C4499D5D2751A6B36402DD20` |
+| APK debug v1.13.5 | 2.419.211 bytes; SHA-256 `0E0CFAB6684C14208C46E0611E5A27D388E89B1E7AECC5D7C0851BC8F43BB239` |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |

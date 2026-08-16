@@ -75,6 +75,12 @@ public final class MediaSessionProvider {
             if (controller == null) {
                 MediaNotificationListener.Snapshot notification =
                         MediaNotificationListener.latestForPackage(packageName);
+                if (notification == null) {
+                    controller = findKnownMediaController(controllers);
+                    if (controller != null) return last = fromController(controller);
+                    notification = MediaNotificationListener.latestForPackages(
+                            "com.spotify.music", "com.suding.speedplay");
+                }
                 if (notification != null) return last = fromNotification(notification);
                 return last = unavailable(isAccessConfigured());
             }
@@ -173,6 +179,7 @@ public final class MediaSessionProvider {
         try {
             List<MediaController> controllers = activeSessions();
             MediaController controller = findController(controllers, preferredPackage);
+            if (controller == null) controller = findKnownMediaController(controllers);
             if (controller == null) return false;
             PlaybackState playback = controller.getPlaybackState();
             long actions = playback == null ? 0L : playback.getActions();
@@ -216,8 +223,9 @@ public final class MediaSessionProvider {
             for (MediaController controller : controllers) {
                 if (preferredPackage.equals(controller.getPackageName())) return controller;
             }
+            return null;
         }
-        return preferredController(controllers);
+        return findKnownMediaController(controllers);
     }
 
     private Snapshot fromController(MediaController controller) {
@@ -254,6 +262,18 @@ public final class MediaSessionProvider {
     private static MediaController preferredController(List<MediaController> controllers) {
         for (MediaController controller : controllers) if (controller.getMetadata() != null) return controller;
         return controllers.get(0);
+    }
+
+    private static MediaController findKnownMediaController(List<MediaController> controllers) {
+        if (controllers == null) return null;
+        for (MediaController controller : controllers) {
+            String packageName = controller.getPackageName();
+            if (packageName != null && (packageName.contains("spotify")
+                    || packageName.contains("speedplay") || packageName.contains("music"))) {
+                return controller;
+            }
+        }
+        return null;
     }
 
     private static String firstText(MediaMetadata metadata, String fallback, String... keys) {
