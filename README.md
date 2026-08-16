@@ -21,7 +21,7 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.13.3 — lectura pasiva del CanBusManager OEM**.
+Versión actual: **1.13.4 — inspector CAN y procedencia en vivo**.
 
 La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
 Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
@@ -49,6 +49,9 @@ claves de firma privadas del proyecto.
   y consulta exclusivamente `getDashBoardInfo`, `getCabinInfo` y `getLightInfo` verificados en la APK exportada. Puede
   proporcionar velocidad, autonomía, consumo medio, RPM, temperatura exterior, temperatura del refrigerante, puertas,
   intermitentes y cinturones. No registra callbacks ni escribe CAN/UART.
+- En Debug, `DATOS CAN EN VIVO · FUENTES` permite inspeccionar en un modal los campos no cero de CAN OEM y comparar
+  con JCRK01/CYA, Android Automotive y GPS. Incluye actualización en vivo y opción para mostrar ceros; no cambia la
+  prioridad automática de la aplicación.
 - Adaptador Jancar específico de la unidad que enlaza el `CarService` existente sin iniciarlo y consulta exclusivamente
   getters identificados en la APK exportada. Puede proporcionar velocidad, consumo, RPM, autonomía, temperatura
   exterior, puertas, luces, freno, cinturón, marcha atrás y climatización. No registra callbacks ni escribe CAN/UART.
@@ -207,7 +210,7 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 | Medida | Resultado observado |
 |---|---:|
 | APK debug v1.13.1 | 2.395.745 bytes |
-| APK debug v1.13.3 | 2.411.406 bytes; SHA-256 `DA9D75FD72562B1422360A1792CCFC6F8E6E731E6291FA10F93CC957E27358CE` |
+| APK debug v1.13.4 | 2.417.374 bytes; SHA-256 `9533944861E8C7EAC6DCD5BE19CA2DFB03BE1D39C4499D5D2751A6B36402DD20` |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |

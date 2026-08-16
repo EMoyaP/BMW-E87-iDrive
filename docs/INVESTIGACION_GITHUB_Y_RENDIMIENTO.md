@@ -2,7 +2,7 @@
 
 Fecha de revisión: 2026-08-16.
 
-## Validación 1.13.3 sobre las APK exportadas de la unidad
+## Validación 1.13.4 sobre las APK exportadas de la unidad
 
 - `com.jancar.services.car.CarService` y `com.jancar.services.radio.RadioService` se consumen mediante componentes,
   descriptores y transacciones getter comprobados en las APK exportadas. No se usa `BIND_AUTO_CREATE`, no se registra
@@ -34,6 +34,14 @@ por la app no entregase valores.
 La aplicación no inicia `com.can.activity`, no registra callbacks y no llama a setters. En hardware hay que confirmar que
 el servicio ya esté vivo y que el Binder acepte la conexión desde una app normal; si la unidad restringe ese acceso, el log
 mostrará el rechazo y continuarán las fuentes Jancar/GPS.
+
+### Inspector de datos y procedencia
+
+Debug incluye un modal independiente que muestra en vivo los campos publicados por cada fuente. Para CAN OEM enumera los
+18 campos de `DashBoardInfo`, los 22 de `CabinInfo` y los 3 de `LightInfo` que se han verificado en el Parcel de la APK
+exportada; por defecto oculta los valores cero, con una casilla para mostrarlos. Las fuentes JCRK01/CYA, Android
+Automotive y GPS se muestran mediante sus campos ya normalizados. Esta pantalla no altera la prioridad ni ejecuta
+operaciones de escritura.
 
 ## Proyectos comparados
 

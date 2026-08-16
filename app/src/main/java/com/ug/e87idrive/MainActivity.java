@@ -31,12 +31,15 @@ import android.view.View;
 import android.view.Window;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.widget.GridLayout;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Switch;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -1066,6 +1069,10 @@ public class MainActivity extends Activity {
         extractionRow.addView(exportOem, lp(0, dp(48), 1));
         extractionRow.addView(exportFull, lp(0, dp(48), 1));
         box.addView(extractionRow);
+        LinearLayout inspectRow = horizontal();
+        Button inspectCan = dialogButton("DATOS CAN EN VIVO · FUENTES");
+        inspectRow.addView(inspectCan, lp(-1, dp(48)));
+        box.addView(inspectRow);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Diagnóstico de la unidad")
                 .setView(box).setPositiveButton("CERRAR", null).create();
         start.setOnClickListener(v -> chooseCorrelation(dialog, reportView, start, stop));
@@ -1086,12 +1093,108 @@ public class MainActivity extends Activity {
         usb.setOnClickListener(v -> usbDiagnosticMenu(reportView, start, stop, usb, usbStatus));
         exportOem.setOnClickListener(v -> requestOemExport(exportOem));
         exportFull.setOnClickListener(v -> requestFullExport());
+        inspectCan.setOnClickListener(v -> canbusInspectorModal());
         dialog.setOnShowListener(v -> {
             stop.setEnabled(diagnostics.isCorrelationRunning());
             start.setEnabled(!diagnostics.isCorrelationRunning());
             resize(dialog, .86f, .84f);
         });
         dialog.show();
+    }
+
+    private void canbusInspectorModal() {
+        LinearLayout box = vertical();
+        box.setBackgroundColor(PANEL);
+        box.setPadding(dp(10), dp(6), dp(10), dp(6));
+
+        TextView note = txt("Vista independiente de la selección automática. Muestra los campos que cada fuente "
+                + "publica ahora; en CAN OEM se detallan los tres Parcel verificados del servicio de esta radio. "
+                + "No transmite ni modifica nada.", 12, MUTED, false);
+        note.setPadding(dp(12), dp(6), dp(12), dp(8));
+        box.addView(note);
+
+        LinearLayout selectorRow = horizontal();
+        TextView sourceLabel = txt("FUENTE", 11, BLUE, true);
+        sourceLabel.setGravity(Gravity.CENTER_VERTICAL);
+        selectorRow.addView(sourceLabel, lp(dp(74), dp(48)));
+        String[] sources = {"CAN OEM", "JCRK01 / CYA", "Android Automotive", "GPS"};
+        Spinner sourceSpinner = new Spinner(this);
+        ArrayAdapter<String> sourceAdapter = new ArrayAdapter<String>(this,
+                android.R.layout.simple_spinner_item, sources) {
+            @Override public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                TextView view = (TextView) super.getView(position, convertView, parent);
+                view.setTextColor(TEXT);
+                view.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
+                view.setGravity(Gravity.CENTER_VERTICAL);
+                return view;
+            }
+
+            @Override public View getDropDownView(int position, View convertView, android.view.ViewGroup parent) {
+                TextView view = (TextView) super.getDropDownView(position, convertView, parent);
+                view.setTextColor(TEXT);
+                view.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(12));
+                view.setBackgroundColor(PANEL2);
+                view.setPadding(dp(12), dp(8), dp(12), dp(8));
+                return view;
+            }
+        };
+        sourceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sourceSpinner.setAdapter(sourceAdapter);
+        sourceSpinner.setBackground(slotBg());
+        selectorRow.addView(sourceSpinner, lp(0, dp(48), 1));
+        CheckBox includeZero = new CheckBox(this);
+        includeZero.setText("Mostrar 0");
+        includeZero.setTextColor(MUTED);
+        includeZero.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(11));
+        includeZero.setButtonTintList(android.content.res.ColorStateList.valueOf(BLUE));
+        selectorRow.addView(includeZero, lp(dp(120), dp(48)));
+        box.addView(selectorRow);
+
+        TextView updated = txt("Actualizando cada segundo…", 10, MUTED, false);
+        updated.setPadding(dp(12), dp(4), dp(12), dp(4));
+        box.addView(updated);
+        TextView content = txt("", 12, TEXT, false);
+        content.setTextIsSelectable(true);
+        content.setTypeface(Typeface.MONOSPACE);
+        content.setPadding(dp(14), dp(10), dp(14), dp(16));
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(PANEL2);
+        scroll.addView(content);
+        box.addView(scroll, lp(-1, 0, 1));
+
+        final Runnable[] refresh = new Runnable[1];
+        Runnable update = () -> {
+            String source = String.valueOf(sourceSpinner.getSelectedItem());
+            content.setText(vehicleData.debugSourceReport(source, includeZero.isChecked()));
+            updated.setText("Fuente: " + source + " · lectura visual actualizada "
+                    + new SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new Date()));
+        };
+        refresh[0] = new Runnable() {
+            @Override public void run() {
+                if (!dialogShowing(sourceSpinner)) return;
+                update.run();
+                handler.postDelayed(this, 1_000L);
+            }
+        };
+        sourceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) { update.run(); }
+            @Override public void onNothingSelected(AdapterView<?> parent) { update.run(); }
+        });
+        includeZero.setOnCheckedChangeListener((buttonView, isChecked) -> update.run());
+
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Datos CAN y procedencia")
+                .setView(box).setPositiveButton("CERRAR", null).create();
+        dialog.setOnShowListener(ignored -> {
+            resize(dialog, .86f, .84f);
+            update.run();
+            handler.post(refresh[0]);
+        });
+        dialog.setOnDismissListener(ignored -> handler.removeCallbacks(refresh[0]));
+        dialog.show();
+    }
+
+    private boolean dialogShowing(Spinner sourceSpinner) {
+        return sourceSpinner != null && sourceSpinner.getWindowToken() != null;
     }
 
     private void usbDiagnosticMenu(TextView reportView, Button start, Button stop, Button usb,

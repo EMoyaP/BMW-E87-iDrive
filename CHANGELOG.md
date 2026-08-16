@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 1.13.4 — 16/08/2026
+
+- Se añadió al diagnóstico el botón `DATOS CAN EN VIVO · FUENTES`.
+- El modal permite cambiar entre `CAN OEM`, `JCRK01 / CYA`, `Android Automotive` y `GPS`, actualizar la lectura cada
+  segundo y mostrar u ocultar valores cero sin modificar la selección automática del ordenador de a bordo.
+- CAN OEM muestra los campos completos de `DashBoardInfo`, `CabinInfo` y `LightInfo` que la aplicación ya tiene
+  verificados en la APK de la unidad, incluyendo puertas, cinturones, ventanas, techo, combustible, temperaturas y
+  pedales. Se dejan fuera getters cuyo formato de respuesta no está confirmado.
+- El modo por defecto oculta ceros para facilitar la correlación de señales activas; se puede activar `Mostrar 0` para
+  comparar el estado completo.
+
 ## 1.13.3 — 16/08/2026
 
 - Se integró la pista del home OEM: el estilo original que muestra el coche recibe sus datos desde `com.can.activity`,

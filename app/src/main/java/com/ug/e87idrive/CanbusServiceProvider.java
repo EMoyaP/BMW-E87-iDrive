@@ -49,10 +49,13 @@ final class CanbusServiceProvider implements VehicleDataProvider {
     private IBinder canBus;
     private boolean running;
     private boolean bound;
-    private String connectionState = "Sonda aún no iniciada";
-    private String lastRaw = "sin lectura";
+    private volatile String connectionState = "Sonda aún no iniciada";
+    private volatile String lastRaw = "sin lectura";
     private String lastSnapshot = "";
     private long lastLoggedAt;
+    private volatile Dashboard latestDashboard;
+    private volatile Light latestLight;
+    private volatile Cabin latestCabin;
 
     CanbusServiceProvider(Context context, DiagnosticEngine diagnostics, Runnable onValuesChanged) {
         this.context = context.getApplicationContext();
@@ -109,6 +112,88 @@ final class CanbusServiceProvider implements VehicleDataProvider {
         out.append("Método: getDashBoardInfo/getCabinInfo/getLightInfo verificados en la APK exportada; ");
         out.append("sin callbacks, sin comandos y sin escritura CAN/UART.\n");
         return out.toString();
+    }
+
+    String debugReport(boolean includeZero) {
+        Dashboard dashboard = latestDashboard;
+        Light light = latestLight;
+        Cabin cabin = latestCabin;
+        StringBuilder out = new StringBuilder(2_400);
+        int[] count = {0};
+        out.append("CAN OEM · DATOS OBSERVADOS EN VIVO\n");
+        out.append("estado=").append(connectionState).append('\n');
+        out.append("getDashBoardInfo / getCabinInfo / getLightInfo · ")
+                .append(includeZero ? "incluyendo ceros" : "ocultando ceros")
+                .append("\n\n");
+        if (dashboard != null) {
+            out.append("DASHBOARDINFO\n");
+            appendInt(out, count, "gearShiftPosition", dashboard.gear, includeZero);
+            appendInt(out, count, "odo", dashboard.odo, includeZero);
+            appendInt(out, count, "cruisingRange", dashboard.range, includeZero);
+            appendInt(out, count, "rotationRate", dashboard.rpm, includeZero);
+            appendInt(out, count, "speed", dashboard.speed, includeZero);
+            appendInt(out, count, "runningTime", dashboard.runningTime, includeZero);
+            appendInt(out, count, "fuelTankage", dashboard.fuelTankage, includeZero);
+            appendFloat(out, count, "fuel", dashboard.fuel, includeZero);
+            appendFloat(out, count, "fuelPercentage", dashboard.fuelPercentage, includeZero);
+            appendFloat(out, count, "avgFuelCont", dashboard.avgFuel, includeZero);
+            appendFloat(out, count, "instFuelCont", dashboard.instantFuel, includeZero);
+            appendFloat(out, count, "coolantTemp", dashboard.coolant, includeZero);
+            appendFloat(out, count, "engineOilTemp", dashboard.oil, includeZero);
+            appendFloat(out, count, "inletTemp", dashboard.inlet, includeZero);
+            appendFloat(out, count, "ambientTemp", dashboard.ambient, includeZero);
+            appendInt(out, count, "accPedal", dashboard.accel, includeZero);
+            appendInt(out, count, "brakePedal", dashboard.brake, includeZero);
+            appendInt(out, count, "throttlePos", dashboard.throttle, includeZero);
+            out.append('\n');
+        } else out.append("DASHBOARDINFO: sin lectura\n\n");
+        if (cabin != null) {
+            out.append("CABININFO\n");
+            appendInt(out, count, "bonnetStatus", cabin.bonnet, includeZero);
+            appendInt(out, count, "flDoorStatus", cabin.fl, includeZero);
+            appendInt(out, count, "frDoorStatus", cabin.fr, includeZero);
+            appendInt(out, count, "rlDoorStatus", cabin.rl, includeZero);
+            appendInt(out, count, "rrDoorStatus", cabin.rr, includeZero);
+            appendInt(out, count, "trunkStatus", cabin.trunk, includeZero);
+            appendInt(out, count, "electricTrunk", cabin.electricTrunk, includeZero);
+            appendInt(out, count, "electricTrunkDirection", cabin.electricTrunkDirection, includeZero);
+            appendInt(out, count, "leftSafetyBelt", cabin.leftBelt, includeZero);
+            appendInt(out, count, "rightSafetyBelt", cabin.rightBelt, includeZero);
+            appendInt(out, count, "sunroofStatus", cabin.sunroof, includeZero);
+            appendInt(out, count, "sunroofSunshadeStatus", cabin.sunshade, includeZero);
+            appendInt(out, count, "flWindowStatus", cabin.flWindow, includeZero);
+            appendInt(out, count, "frWindowStatus", cabin.frWindow, includeZero);
+            appendInt(out, count, "rlWindowStatus", cabin.rlWindow, includeZero);
+            appendInt(out, count, "rrWindowStatus", cabin.rrWindow, includeZero);
+            appendInt(out, count, "lockCarStatus", cabin.lock, includeZero);
+            appendInt(out, count, "seatUpDownMoveStatus", cabin.seatUpDown, includeZero);
+            appendInt(out, count, "seatFrontRearMoveStatus", cabin.seatFrontRear, includeZero);
+            appendInt(out, count, "seatHighLowMoveStatus", cabin.seatHighLow, includeZero);
+            appendInt(out, count, "seatBackUpDownMoveStatus", cabin.seatBackUpDown, includeZero);
+            appendInt(out, count, "seatBackFrontRearMoveStatus", cabin.seatBackFrontRear, includeZero);
+            out.append('\n');
+        } else out.append("CABININFO: sin lectura\n\n");
+        if (light != null) {
+            out.append("LIGHTINFO\n");
+            appendInt(out, count, "leftDirectionIndicator", light.left, includeZero);
+            appendInt(out, count, "rightDirectionIndicator", light.right, includeZero);
+            appendInt(out, count, "emergencyFlasher", light.emergency, includeZero);
+        } else out.append("LIGHTINFO: sin lectura\n");
+        if (count[0] == 0) out.append("\nNo hay datos distintos de 0 en esta captura. Activa una señal del vehículo y espera la siguiente lectura.\n");
+        out.append("\nLos nombres corresponden a los campos Parcel verificados en la APK OEM exportada; no son códigos CAN crudos.\n");
+        return out.toString();
+    }
+
+    private static void appendInt(StringBuilder out, int[] count, String name, int value, boolean includeZero) {
+        if (!includeZero && value == 0) return;
+        out.append(name).append(" = ").append(value).append('\n');
+        count[0]++;
+    }
+
+    private static void appendFloat(StringBuilder out, int[] count, String name, float value, boolean includeZero) {
+        if (!Float.isFinite(value) || (!includeZero && value == 0f)) return;
+        out.append(name).append(" = ").append(value).append('\n');
+        count[0]++;
     }
 
     private void bindExistingService() {
@@ -184,12 +269,18 @@ final class CanbusServiceProvider implements VehicleDataProvider {
         long now = System.currentTimeMillis();
         try {
             Dashboard dashboard = readDashboard();
+            latestDashboard = dashboard;
             if (dashboard != null) applyDashboard(dashboard, now); else clearDashboard();
             Light light = readLight();
+            latestLight = light;
             if (light != null) applyLight(light, now); else clear(VehicleField.LIGHTS);
             Cabin cabin = readCabin();
+            latestCabin = cabin;
             if (cabin != null) applyCabin(cabin, now); else clearCabin();
         } catch (Exception error) {
+            latestDashboard = null;
+            latestLight = null;
+            latestCabin = null;
             clearValues();
             AppSessionLog.event("CAN OEM", "lectura fallida: " + error.getClass().getSimpleName());
         }
@@ -251,13 +342,16 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             Cabin c = new Cabin();
             c.bonnet = reply.readInt();
             c.fl = reply.readInt(); c.fr = reply.readInt(); c.rl = reply.readInt(); c.rr = reply.readInt();
-            c.trunk = reply.readInt(); c.electricTrunk = reply.readInt(); reply.readInt();
+            c.trunk = reply.readInt(); c.electricTrunk = reply.readInt();
+            c.electricTrunkDirection = reply.readInt();
             c.leftBelt = reply.readInt(); c.rightBelt = reply.readInt();
-            // sunroof, shade and four window states precede the lock state.
-            for (int i = 0; i < 6; i++) reply.readInt();
+            c.sunroof = reply.readInt(); c.sunshade = reply.readInt();
+            c.flWindow = reply.readInt(); c.frWindow = reply.readInt();
+            c.rlWindow = reply.readInt(); c.rrWindow = reply.readInt();
             c.lock = reply.readInt();
-            // Five seat movement fields complete CabinInfo; they are not used here.
-            for (int i = 0; i < 5; i++) reply.readInt();
+            c.seatUpDown = reply.readInt(); c.seatFrontRear = reply.readInt();
+            c.seatHighLow = reply.readInt(); c.seatBackUpDown = reply.readInt();
+            c.seatBackFrontRear = reply.readInt();
             return c;
         } finally { reply.recycle(); }
     }
@@ -369,7 +463,9 @@ final class CanbusServiceProvider implements VehicleDataProvider {
     }
     private static final class Light { int left, right, emergency; }
     private static final class Cabin {
-        int bonnet, fl, fr, rl, rr, trunk, electricTrunk, leftBelt, rightBelt, lock;
+        int bonnet, fl, fr, rl, rr, trunk, electricTrunk, electricTrunkDirection;
+        int leftBelt, rightBelt, sunroof, sunshade, flWindow, frWindow, rlWindow, rrWindow, lock;
+        int seatUpDown, seatFrontRear, seatHighLow, seatBackUpDown, seatBackFrontRear;
     }
     private static final class RemoteReadException extends Exception {
         RemoteReadException(String message) { super(message); }

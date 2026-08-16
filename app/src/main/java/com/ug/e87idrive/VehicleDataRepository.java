@@ -93,6 +93,64 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     public DiagnosticEngine diagnostics() { return diagnostics; }
     public JancarCarProvider.MaintenanceSnapshot maintenanceSnapshot() { return jancar.maintenanceSnapshot(); }
 
+    /**
+     * Inspection-only view used by the USB DEBUG modal. It never changes the
+     * automatic source priority used by the dashboard.
+     */
+    public String debugSourceReport(String source, boolean includeZero) {
+        if ("CAN OEM".equals(source)) return canbus.debugReport(includeZero);
+        if ("JCRK01 / CYA".equals(source)) {
+            return debugKnownFields("JCRK01 / CYA · CAMPOS PUBLICADOS", jancar, includeZero);
+        }
+        if ("Android Automotive".equals(source)) {
+            return debugKnownFields("ANDROID AUTOMOTIVE · CAMPOS PUBLICADOS", automotive, includeZero);
+        }
+        if ("GPS".equals(source)) return debugGps(includeZero);
+        return debugKnownFields("FUENTE SELECCIONADA", this, includeZero);
+    }
+
+    private String debugKnownFields(String title, VehicleDataProvider provider, boolean includeZero) {
+        StringBuilder out = new StringBuilder(1_000);
+        int count = 0;
+        out.append(title).append('\n');
+        for (VehicleField field : VehicleField.values()) {
+            VehicleValue<?> value = provider.get(field);
+            if (!value.isAvailable() || (!includeZero && isZero(value.value()))) continue;
+            out.append(field.key()).append(" · ").append(field.label()).append(" = ")
+                    .append(value.value()).append(" · edad=").append(value.ageMs()).append(" ms\n");
+            count++;
+        }
+        if (count == 0) {
+            out.append("\nNo hay campos publicados en esta fuente");
+            if (!includeZero) out.append(" distintos de 0");
+            out.append(" en este momento.\n");
+        }
+        out.append("\nEsta vista es de inspección; la selección automática de la app no cambia.\n");
+        return out.toString();
+    }
+
+    private String debugGps(boolean includeZero) {
+        StringBuilder out = new StringBuilder(600);
+        out.append("GPS · CAMPOS PUBLICADOS\n");
+        Double speed = gps.getLastValue();
+        if (speed != null && (includeZero || speed.doubleValue() != 0d)) {
+            out.append("speed · Velocidad = ").append(speed).append(" km/h · edad=")
+                    .append(Math.max(0L, System.currentTimeMillis() - gps.getLastTimestamp()))
+                    .append(" ms\n");
+        } else {
+            out.append("\nNo hay velocidad GPS publicada");
+            if (!includeZero) out.append(" distinta de 0");
+            out.append(" en este momento.\n");
+        }
+        out.append("\nEl GPS solo es respaldo de velocidad; la posición se usa para gasolineras.\n");
+        return out.toString();
+    }
+
+    private static boolean isZero(Object value) {
+        if (value instanceof Number) return ((Number) value).doubleValue() == 0d;
+        return "0".equals(String.valueOf(value));
+    }
+
     public String diagnosticReport() {
         StringBuilder out = new StringBuilder(1_000);
         out.append("ORDENADOR DE A BORDO · PROCEDENCIA\n");
