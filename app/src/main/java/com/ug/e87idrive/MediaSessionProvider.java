@@ -7,6 +7,9 @@ import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
+import android.os.Build;
+import android.provider.Settings;
+import android.service.notification.NotificationListenerService;
 
 import java.util.List;
 
@@ -19,10 +22,12 @@ public final class MediaSessionProvider {
     public static final class Snapshot {
         public final String title, artist, source, state;
         public final Bitmap artwork;
-        public final boolean accessGranted, sessionAvailable, canPlayPause, canPrevious, canNext;
+        public final boolean accessGranted, listenerConnected, sessionAvailable;
+        public final boolean canPlayPause, canPrevious, canNext;
 
         Snapshot(String title, String artist, String source, String state, Bitmap artwork,
-                 boolean accessGranted, boolean sessionAvailable, boolean canPlayPause,
+                 boolean accessGranted, boolean listenerConnected, boolean sessionAvailable,
+                 boolean canPlayPause,
                  boolean canPrevious, boolean canNext) {
             this.title = title;
             this.artist = artist;
@@ -30,6 +35,7 @@ public final class MediaSessionProvider {
             this.state = state;
             this.artwork = artwork;
             this.accessGranted = accessGranted;
+            this.listenerConnected = listenerConnected;
             this.sessionAvailable = sessionAvailable;
             this.canPlayPause = canPlayPause;
             this.canPrevious = canPrevious;
@@ -50,7 +56,7 @@ public final class MediaSessionProvider {
         try {
             List<MediaController> controllers = activeSessions();
             // A successful public API call means Android accepted the listener component.
-            if (controllers == null || controllers.isEmpty()) return last = unavailable(true);
+            if (controllers == null || controllers.isEmpty()) return last = unavailable(isAccessConfigured());
 
             MediaController controller = preferredController(controllers);
             return last = fromController(controller);
@@ -66,7 +72,12 @@ public final class MediaSessionProvider {
         try {
             List<MediaController> controllers = activeSessions();
             MediaController controller = findController(controllers, packageName);
-            if (controller == null) return last = unavailable(true);
+            if (controller == null) {
+                MediaNotificationListener.Snapshot notification =
+                        MediaNotificationListener.latestForPackage(packageName);
+                if (notification != null) return last = fromNotification(notification);
+                return last = unavailable(isAccessConfigured());
+            }
             return last = fromController(controller);
         } catch (SecurityException ignored) {
             return last = unavailable(false);
@@ -92,7 +103,8 @@ public final class MediaSessionProvider {
                 String detail = notification.text.isEmpty() || notification.text.equals(title)
                         ? "Información publicada por la radio" : notification.text;
                 return new Snapshot(title, detail, packageName, "NOTIFICACIÓN",
-                        null, true, true, false, false, false);
+                        null, true, MediaNotificationListener.isConnected(), true,
+                        false, false, false);
             }
             return radioUnavailable(true, packageName);
         } catch (SecurityException ignored) {
@@ -116,6 +128,40 @@ public final class MediaSessionProvider {
             out.append("Resultado: la app OEM no expone una MediaSession ni una notificación legible.\n");
         }
         return out.toString();
+    }
+
+    public String mediaDiagnostic(String preferredPackage) {
+        StringBuilder out = new StringBuilder("MULTIMEDIA / ANDROID AUTO · API ESTÁNDAR\n");
+        out.append("paquete Android Auto asignado=")
+                .append(preferredPackage == null ? "(ninguno)" : preferredPackage).append('\n');
+        out.append("acceso configurado=").append(isAccessConfigured()).append('\n');
+        out.append(MediaNotificationListener.diagnosticSummary());
+        try {
+            List<MediaController> controllers = activeSessions();
+            out.append("MediaSession activas=").append(controllers == null ? 0 : controllers.size()).append('\n');
+            if (controllers != null) for (MediaController controller : controllers) {
+                PlaybackState playback = controller.getPlaybackState();
+                out.append("- ").append(controller.getPackageName())
+                        .append(" · estado=").append(playback == null ? "sin estado" : playback.getState())
+                        .append(" · acciones=0x")
+                        .append(Long.toHexString(playback == null ? 0L : playback.getActions()))
+                        .append('\n');
+            }
+        } catch (Exception error) {
+            out.append("lectura de sesiones=").append(error.getClass().getSimpleName()).append('\n');
+        }
+        out.append("SpeedPlay solo puede leerse si publica una MediaSession o notificación; "
+                + "iDrive no inicia su servicio privado ni usa protocolos propietarios.\n");
+        return out.toString();
+    }
+
+    public void requestListenerRebind() {
+        if (!isAccessConfigured() || MediaNotificationListener.isConnected()
+                || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        try {
+            NotificationListenerService.requestRebind(
+                    new ComponentName(context, MediaNotificationListener.class));
+        } catch (Exception ignored) { }
     }
 
     /**
@@ -190,9 +236,19 @@ public final class MediaSessionProvider {
         boolean canPlayPause = (actions & (PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE)) != 0L;
         return new Snapshot(title, artist, controller.getPackageName(), state(controller),
-                artwork(metadata), true, true, canPlayPause,
+                artwork(metadata), true, MediaNotificationListener.isConnected(), true,
+                canPlayPause,
                 (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L,
                 (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L);
+    }
+
+    private Snapshot fromNotification(MediaNotificationListener.Snapshot notification) {
+        String title = notification.title.isEmpty() ? notification.text : notification.title;
+        String detail = notification.text.isEmpty() || notification.text.equals(title)
+                ? "Información publicada por Android" : notification.text;
+        return new Snapshot(title, detail, notification.packageName, "NOTIFICACIÓN",
+                null, true, MediaNotificationListener.isConnected(), true,
+                false, false, false);
     }
 
     private static MediaController preferredController(List<MediaController> controllers) {
@@ -242,9 +298,13 @@ public final class MediaSessionProvider {
     }
 
     private static Snapshot unavailable(boolean granted) {
-        return new Snapshot(granted ? "No hay reproducción activa" : "Acceso multimedia pendiente",
-                granted ? "Abre Spotify, radio u otra app" : "Actívalo en Ajustes para leer carátula y título",
-                "MediaSession estándar", "", null, granted, false, false, false, false);
+        return new Snapshot(granted ? "No hay reproducción expuesta" : "Acceso multimedia pendiente",
+                granted ? (MediaNotificationListener.isConnected()
+                        ? "SpeedPlay no publica la sesión de Android Auto"
+                        : "Reconectando lector multimedia…")
+                        : "Actívalo en Ajustes para leer carátula y título",
+                "MediaSession estándar", "", null, granted,
+                MediaNotificationListener.isConnected(), false, false, false, false);
     }
 
     private static Snapshot radioUnavailable(boolean granted, String packageName) {
@@ -252,6 +312,17 @@ public final class MediaSessionProvider {
                 granted ? "La aplicación OEM no publica datos estándar"
                         : "Activa el acceso multimedia en Ajustes",
                 packageName == null ? "Radio sin asignar" : packageName,
-                "", null, granted, false, false, false, false);
+                "", null, granted, MediaNotificationListener.isConnected(),
+                false, false, false, false);
+    }
+
+    private boolean isAccessConfigured() {
+        try {
+            String enabled = Settings.Secure.getString(context.getContentResolver(),
+                    "enabled_notification_listeners");
+            ComponentName listener = new ComponentName(context, MediaNotificationListener.class);
+            return enabled != null && (enabled.contains(listener.flattenToString())
+                    || enabled.contains(listener.flattenToShortString()));
+        } catch (Exception ignored) { return false; }
     }
 }

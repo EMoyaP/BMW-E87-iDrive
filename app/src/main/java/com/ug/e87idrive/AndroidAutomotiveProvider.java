@@ -40,6 +40,8 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
     private Class<?> propertyIds;
     private volatile boolean running;
     private String lastUiSnapshot = "";
+    private String lastLogSnapshot = "";
+    private long lastLogSnapshotAt;
 
     public AndroidAutomotiveProvider(Context context, DiagnosticEngine diagnostics, Runnable onValuesChanged) {
         this.context = context.getApplicationContext();
@@ -400,7 +402,10 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
     private synchronized void clear(VehicleField field) { values.remove(field); }
 
-    private synchronized void setCapability(String key, String value) { capability.put(key, value); }
+    private synchronized void setCapability(String key, String value) {
+        String previous = capability.put(key, value);
+        if (!value.equals(previous)) AppSessionLog.event("ANDROID CAR", key + "=" + value);
+    }
 
     private void publishReport() { diagnostics.setPlatformVehicleReport(capabilityReport()); }
 
@@ -412,6 +417,13 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
             }
         }
         String current = snapshot.toString();
+        long now = System.currentTimeMillis();
+        if (!current.equals(lastLogSnapshot) && now - lastLogSnapshotAt >= 5_000L) {
+            lastLogSnapshot = current;
+            lastLogSnapshotAt = now;
+            AppSessionLog.event("ANDROID CAR", current.isEmpty()
+                    ? "No hay propiedades de vehículo publicadas" : current);
+        }
         if (current.equals(lastUiSnapshot)) return;
         lastUiSnapshot = current;
         if (onValuesChanged != null) mainHandler.post(onValuesChanged);

@@ -173,8 +173,11 @@ public final class UsbDiagnosticRecorder {
                 if (document == null) throw new IllegalStateException(lastError.isEmpty()
                         ? "No se creó el archivo USB" : lastError);
                 writeDocument(document, report);
+                String runtimeName = writeRuntimeLog(configuredDirectory(),
+                        new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date()));
                 lastError = "";
-                notifyCallback(callback, true, "Diagnóstico terminado en " + activeFilename);
+                notifyCallback(callback, true, "Diagnóstico terminado en " + activeFilename
+                        + (runtimeName.isEmpty() ? "" : " · " + runtimeName));
             } catch (Exception error) {
                 lastError = shortError(error);
                 notifyCallback(callback, false, "USB no disponible; queda copia de recuperación interna: " + lastError);
@@ -196,8 +199,11 @@ public final class UsbDiagnosticRecorder {
                 Uri document = createDocument(directory, filename);
                 if (document == null) throw new IllegalStateException("El proveedor USB no permitió crear el archivo");
                 writeDocument(document, report);
+                String runtimeName = writeRuntimeLog(directory,
+                        new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date()));
                 lastError = "";
-                notifyCallback(callback, true, "Informe guardado en USB: " + filename);
+                notifyCallback(callback, true, "Informe guardado en USB: " + filename
+                        + (runtimeName.isEmpty() ? "" : " · " + runtimeName));
             } catch (Exception error) {
                 lastError = shortError(error);
                 notifyCallback(callback, false, "No se pudo guardar en USB: " + lastError);
@@ -238,6 +244,7 @@ public final class UsbDiagnosticRecorder {
                 Uri reportDocument = createDocument(directory, "text/plain", reportName);
                 if (reportDocument == null) throw new IllegalStateException("No se pudo crear el inventario OEM");
                 writeDocument(reportDocument, report);
+                String runtimeName = writeRuntimeLog(directory, timestamp);
                 for (OemPackageInspector.ExportArtifact artifact : artifacts) {
                     File source = artifact.source;
                     long length = source.length();
@@ -271,7 +278,9 @@ public final class UsbDiagnosticRecorder {
                 Uri resultDocument = createDocument(directory, "text/plain", resultName);
                 if (resultDocument != null) {
                     writeDocument(resultDocument, displayName.toUpperCase(Locale.ROOT) + " · EXPORTACIÓN PASIVA\nArchivos copiados=" + copied
-                            + " · omitidos=" + skipped + " · bytes=" + totalBytes + "\n\n" + details);
+                            + " · omitidos=" + skipped + " · bytes=" + totalBytes
+                            + (runtimeName.isEmpty() ? "" : "\nRegistro de sesión=" + runtimeName)
+                            + "\n\n" + details);
                 }
                 lastError = "";
                 notifyCallback(callback, true, displayName + " exportado: inventario + " + copied + " archivos"
@@ -355,6 +364,22 @@ public final class UsbDiagnosticRecorder {
                 writer.write(report);
                 writer.flush();
             }
+        }
+    }
+
+    private String writeRuntimeLog(Uri directory, String timestamp) {
+        String runtime = AppSessionLog.read();
+        if (runtime.isEmpty()) return "";
+        String filename = "e87_runtime_session_" + timestamp + ".log";
+        try {
+            Uri document = createDocument(directory, "text/plain", filename);
+            if (document == null) return "";
+            writeDocument(document, runtime);
+            return filename;
+        } catch (Exception error) {
+            AppSessionLog.event("USB", "No se pudo exportar el registro de sesión: "
+                    + shortError(error));
+            return "";
         }
     }
 

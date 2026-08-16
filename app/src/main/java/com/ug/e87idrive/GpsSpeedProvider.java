@@ -19,6 +19,8 @@ public class GpsSpeedProvider implements LocationListener {
     private Double kmh;
     private long timestamp, locationTimestamp;
     private Location lastLocation;
+    private String lastLoggedState = "";
+    private long lastLoggedAt;
 
     public GpsSpeedProvider(Context c, Listener l) {
         context=c; listener=l;
@@ -26,7 +28,10 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     public void start() {
-        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) return;
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            AppSessionLog.event("GPS", "Permiso de ubicación precisa no concedido");
+            return;
+        }
         try {
             if (lm == null) return;
             Location newest = null;
@@ -41,7 +46,9 @@ public class GpsSpeedProvider implements LocationListener {
                 if (last != null && (newest == null || last.getTime() > newest.getTime())) newest = last;
             }
             if (newest != null) onLocationChanged(newest);
-        } catch(Exception ignored) {}
+        } catch(Exception error) {
+            AppSessionLog.event("GPS", "Error al iniciar: " + error.getClass().getSimpleName());
+        }
     }
 
     public void stop() { try { lm.removeUpdates(this); } catch(Exception ignored) {} }
@@ -94,13 +101,36 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     @Override public void onLocationChanged(Location l) {
+        Location previous = lastLocation;
         lastLocation = new Location(l);
         locationTimestamp = System.currentTimeMillis();
         if(l.hasSpeed()) {
             kmh=Math.max(0d,(double)l.getSpeed()*3.6);
             timestamp=locationTimestamp;
+        } else if (LocationManager.GPS_PROVIDER.equals(l.getProvider()) && previous != null) {
+            long deltaMs = Math.abs(l.getTime() - previous.getTime());
+            if (deltaMs >= 500L && deltaMs <= 15_000L) {
+                double distance = previous.distanceTo(l);
+                double uncertainty = Math.max(3d, Math.max(
+                        previous.hasAccuracy() ? previous.getAccuracy() : 0f,
+                        l.hasAccuracy() ? l.getAccuracy() : 0f));
+                kmh = distance <= uncertainty ? 0d
+                        : Math.max(0d, distance / (deltaMs / 1000d) * 3.6d);
+                timestamp = locationTimestamp;
+            }
         }
         if(listener!=null) listener.onLocation(new Location(l), kmh);
+        String logState = "proveedor=" + l.getProvider() + " · precisión="
+                + (l.hasAccuracy() ? Math.round(l.getAccuracy()) + "m" : "no publicada")
+                + " · velocidad=" + (kmh == null ? "no publicada"
+                : Math.round(kmh) + " km/h")
+                + (l.hasSpeed() ? " (directa)" : " (estimada/ausente)");
+        long now = System.currentTimeMillis();
+        if (!logState.equals(lastLoggedState) && now - lastLoggedAt >= 5_000L) {
+            lastLoggedState = logState;
+            lastLoggedAt = now;
+            AppSessionLog.event("GPS", logState);
+        }
     }
     @Override public void onStatusChanged(String p,int s,Bundle e) {}
     @Override public void onProviderEnabled(String p) {}

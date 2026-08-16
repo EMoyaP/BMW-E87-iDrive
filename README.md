@@ -21,7 +21,7 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.13.1 — integración pasiva Jancar y centro de permisos**.
+Versión actual: **1.13.2 — fuentes pasivas verificadas y registro de sesión exportable**.
 
 La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
 Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
@@ -29,7 +29,7 @@ pantallas comerciales, pero la compatibilidad real de la app debe tratarse como 
 
 - sustituir la firma debug por una clave release permanente;
 - validar en el coche todos los getters pasivos Jancar antes de considerarlos universales;
-- confirmar qué `MediaSession` publica SpeedPlay durante una conexión Android Auto real;
+- confirmar en la unidad si SpeedPlay activa una `MediaSession` durante una conexión Android Auto real;
 - completar las pruebas físicas de radio, PDC, climatización y avisos OEM.
 
 La release de GitHub incluye una APK debug firmada para pruebas en la unidad. No es una APK de producción y no contiene
@@ -203,6 +203,7 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 | Medida | Resultado observado |
 |---|---:|
 | APK debug v1.13.1 | 2.395.745 bytes |
+| APK debug v1.13.2 | 2.405.782 bytes; el SHA-256 se publica junto al archivo en `dist/` |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |

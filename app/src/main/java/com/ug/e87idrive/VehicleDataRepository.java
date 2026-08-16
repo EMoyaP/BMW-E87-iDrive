@@ -1,7 +1,9 @@
 package com.ug.e87idrive;
 
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -16,6 +18,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     private final DiagnosticEngine diagnostics;
     private final AndroidAutomotiveProvider automotive;
     private final JancarCarProvider jancar;
+    private final Map<VehicleField, String> lastSelections = new EnumMap<>(VehicleField.class);
+    private final Map<VehicleField, Long> lastSelectionTimes = new EnumMap<>(VehicleField.class);
 
     public VehicleDataRepository(android.content.Context context, GpsSpeedProvider gps,
                                  DiagnosticEngine diagnostics, Runnable onValuesChanged) {
@@ -29,19 +33,42 @@ public final class VehicleDataRepository implements VehicleDataProvider {
         VehicleValue<?> jancarValue = jancar.get(field);
         if (jancarValue.isAvailable()
                 && (field != VehicleField.SPEED || jancarValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
-            return jancarValue;
+            return selected(field, jancarValue);
         }
         VehicleValue<?> standardValue = automotive.get(field);
         if (standardValue.isAvailable()
                 && (field != VehicleField.SPEED || standardValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
-            return standardValue;
+            return selected(field, standardValue);
         }
         if (field == VehicleField.SPEED && gps.getLastValue() != null
                 && System.currentTimeMillis() - gps.getLastTimestamp() <= GPS_SPEED_MAX_AGE_MS) {
-            return VehicleValue.available(gps.getLastValue(), VehicleSource.GPS, gps.getLastTimestamp());
+            return selected(field, VehicleValue.available(
+                    gps.getLastValue(), VehicleSource.GPS, gps.getLastTimestamp()));
         }
         // No vendor value is returned until a confirmed, device-specific mapping exists.
-        return VehicleValue.unavailable();
+        return selected(field, VehicleValue.unavailable());
+    }
+
+    private VehicleValue<?> selected(VehicleField field, VehicleValue<?> value) {
+        String selection = value.isAvailable()
+                ? value.source() + "=" + value.value() : "NO EXPUESTO";
+        synchronized (lastSelections) {
+            String previous = lastSelections.get(field);
+            long now = System.currentTimeMillis();
+            long previousTime = lastSelectionTimes.containsKey(field)
+                    ? lastSelectionTimes.get(field) : 0L;
+            String source = selection.contains("=")
+                    ? selection.substring(0, selection.indexOf('=')) : selection;
+            String previousSource = previous != null && previous.contains("=")
+                    ? previous.substring(0, previous.indexOf('=')) : previous;
+            boolean sourceChanged = previous == null || !source.equals(previousSource);
+            if (!selection.equals(previous) && (sourceChanged || now - previousTime >= 5_000L)) {
+                lastSelections.put(field, selection);
+                lastSelectionTimes.put(field, now);
+                AppSessionLog.event("DATO SELECCIONADO", field.label() + " · " + selection);
+            }
+        }
+        return value;
     }
 
     @Override public Set<VehicleField> supportedFields() {

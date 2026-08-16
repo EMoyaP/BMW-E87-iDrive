@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## 1.13.2 — 16/08/2026
+
+- Se verificaron en las APK exportadas de esta unidad los contratos Binder de `CarService` y `RadioService`. El lector
+  de radio usa únicamente `getFreq`, `getBand` y `getPSText`; el ordenador de a bordo conserva los getters Jancar
+  confirmados, Android Automotive público y GPS como fuentes ordenadas, sin iniciar servicios OEM ni escribir buses.
+- La velocidad GPS incorpora una estimación prudente entre posiciones GPS cuando el receptor no publica `speed`.
+  Cada campo registra qué fuente fue finalmente seleccionada o si ninguna ruta ofreció un valor.
+- Se eliminó el falso estado de neumáticos: el getter correspondiente de este firmware devuelve siempre cero y no
+  constituye evidencia de presión correcta. Los avisos verdes se basan solo en informes OEM realmente publicados.
+- La tarjeta de radio puede mostrar banda, frecuencia y texto RDS/PS publicados por el servicio OEM. Como el contrato
+  no incluye un estado remoto de encendido, el diagnóstico advierte que puede tratarse de la última emisora sintonizada.
+- El lector multimedia vuelve a enlazar el `NotificationListenerService`, enumera sesiones/notificaciones activas y
+  usa metadatos y controles únicamente cuando SpeedPlay publica una `MediaSession` Android estándar.
+- Las gasolineras aceptan cualquier red que Android publique con `INTERNET` y `VALIDATED`, aunque no sea la red
+  predeterminada. Esto incluye Bluetooth PAN si la radio lo crea; la aplicación no puede activar el tethering del
+  teléfono ni convertir por sí sola una conexión Android Auto en acceso IP.
+- Se inspeccionó el APK exacto de SpeedPlay: no expone un Intent, URI o comando verificable para enviar un destino a
+  la proyección Android Auto. Las gasolineras abren Google Maps local y el diagnóstico documenta esta limitación.
+- Cada inicio de proceso sobrescribe un registro de sesión acotado a 512 KiB, sin coordenadas. Anota proveedores,
+  valores crudos, fuente elegida, red, radio, multimedia y errores; `USB DEBUG`, la exportación OEM y la completa lo
+  guardan además como `e87_runtime_session_YYYYMMDD_HHMMSS.log`.
+- QA superada: pruebas unitarias, Lint y compilación debug con SDK Android disponible.
+
 ## 1.13.1 — 16/08/2026
 
 - Se integró un adaptador de solo lectura para el `CarService` Jancar identificado en la APK exacta de la unidad. Usa

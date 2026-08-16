@@ -35,6 +35,7 @@
     </queries>
 
     <application
+        android:name=".IdriveApplication"
         android:theme="@style/AppTheme"
         android:label="iDrive"
         android:icon="@drawable/ic_launcher_bmw_v2"

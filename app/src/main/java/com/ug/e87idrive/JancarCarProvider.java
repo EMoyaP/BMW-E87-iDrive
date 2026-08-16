@@ -43,7 +43,6 @@ final class JancarCarProvider implements VehicleDataProvider {
     private static final int GET_LIGHTS = 0x0d;
     private static final int GET_HEADLIGHT = 0x0e;
     private static final int GET_CLIMATE = 0x0f;
-    private static final int GET_TIRES = 0x11;
     private static final int GET_OUTSIDE_TEMP = 0x18;
     private static final int GET_TRIP = 0x19;
     private static final int GET_EXTRA = 0x1a;
@@ -81,6 +80,11 @@ final class JancarCarProvider implements VehicleDataProvider {
     private long lastAlertRead, lastMaintenanceRead;
     private String connectionState = "Sonda aún no iniciada";
     private String canVersion = "";
+    private volatile String lastRawTelemetry = "sin lectura";
+    private volatile String lastRawVehicle = "sin lectura";
+    private volatile String lastRawClimate = "sin lectura";
+    private String lastLoggedRaw = "";
+    private long lastLoggedRawAt;
     private MaintenanceSnapshot maintenance = MaintenanceSnapshot.unavailable("Sin lectura OEM");
     private String lastUiSnapshot = "";
 
@@ -93,8 +97,10 @@ final class JancarCarProvider implements VehicleDataProvider {
     @Override public synchronized void start() {
         if (running) return;
         running = true;
+        AppSessionLog.event("COCHE OEM", "Iniciando sonda Jancar de solo lectura");
         if (!installed()) {
             connectionState = "Paquete Jancar no instalado";
+            AppSessionLog.event("COCHE OEM", connectionState);
             publishReport();
             return;
         }
@@ -143,6 +149,9 @@ final class JancarCarProvider implements VehicleDataProvider {
         out.append("descriptor esperado=").append(DESCRIPTOR).append('\n');
         out.append("estado=").append(connectionState).append('\n');
         if (!canVersion.isEmpty()) out.append("CAN OEM=").append(canVersion).append('\n');
+        out.append("raw ordenador=").append(lastRawTelemetry).append('\n');
+        out.append("raw estado=").append(lastRawVehicle).append('\n');
+        out.append("raw clima=").append(lastRawClimate).append('\n');
         out.append("Método: getters AIDL validados en la APK exportada; sin callbacks, sin provider CAN, sin escrituras.\n");
         out.append("Avisos activos leídos=").append(maintenance.active.size())
                 .append(" · última lectura=").append(maintenance.timestamp > 0
@@ -160,14 +169,17 @@ final class JancarCarProvider implements VehicleDataProvider {
 
     private void bindExistingService() {
         synchronized (this) { if (!running || bound) return; }
-        Intent intent = new Intent(ACTION_CAR).setPackage(PACKAGE_NAME);
+        Intent intent = new Intent(ACTION_CAR)
+                .setComponent(new ComponentName(PACKAGE_NAME, "com.jancar.services.car.CarService"));
         try {
             // Deliberately no BIND_AUTO_CREATE: never starts or keeps alive an OEM service.
             boolean result = context.bindService(intent, connection, 0);
             synchronized (this) { bound = result; }
             connectionState = result ? "Esperando servicio OEM persistente" : "CarService no está disponible";
+            AppSessionLog.event("COCHE OEM", "bind existente=" + result);
         } catch (Exception error) {
             connectionState = "No se pudo enlazar: " + error.getClass().getSimpleName();
+            AppSessionLog.event("COCHE OEM", connectionState);
         }
         publishReport();
     }
@@ -181,6 +193,7 @@ final class JancarCarProvider implements VehicleDataProvider {
         @Override public void onServiceDisconnected(ComponentName name) {
             synchronized (lock) { car = null; }
             connectionState = "CarService desconectado";
+            AppSessionLog.event("COCHE OEM", connectionState);
             publishReport();
         }
 
@@ -199,9 +212,12 @@ final class JancarCarProvider implements VehicleDataProvider {
             synchronized (lock) { car = service; }
             connectionState = "CarService conectado · sólo lectura";
             canVersion = readString(GET_CAN_VERSION);
+            AppSessionLog.event("COCHE OEM", connectionState + " · CAN="
+                    + (canVersion.isEmpty() ? "no publicado" : canVersion));
             poll();
         } catch (Exception error) {
             connectionState = "Servicio rechazado: " + error.getClass().getSimpleName();
+            AppSessionLog.event("COCHE OEM", connectionState);
             publishReport();
         }
     }
@@ -227,11 +243,18 @@ final class JancarCarProvider implements VehicleDataProvider {
     }
 
     private void readBoardComputer(long now) {
-        putNumber(VehicleField.SPEED, readFloat(GET_REALTIME, RT_SPEED), now);
-        putNumber(VehicleField.CONSUMPTION, readFloat(GET_REALTIME, RT_CONSUMPTION), now);
-        putNumber(VehicleField.RPM, readFloat(GET_REALTIME, RT_RPM), now);
-        putNumber(VehicleField.RANGE, readFloat(GET_EXTRA, EXTRA_REMAIN_FUEL_DISTANCE), now);
+        float speed = readFloat(GET_REALTIME, RT_SPEED);
+        float consumption = readFloat(GET_REALTIME, RT_CONSUMPTION);
+        float rpm = readFloat(GET_REALTIME, RT_RPM);
+        float range = readFloat(GET_EXTRA, EXTRA_REMAIN_FUEL_DISTANCE);
         int rawTemp = readInt(GET_OUTSIDE_TEMP);
+        lastRawTelemetry = "velocidad=" + speed + " · consumo=" + consumption
+                + " · rpm=" + rpm + " · autonomía=" + range
+                + " · tempExterior=0x" + Integer.toHexString(rawTemp) + " (" + rawTemp + ")";
+        putNumber(VehicleField.SPEED, speed, now);
+        putNumber(VehicleField.CONSUMPTION, consumption, now);
+        putNumber(VehicleField.RPM, rpm, now);
+        putNumber(VehicleField.RANGE, range, now);
         Double temp = outsideTempCelsius(rawTemp);
         if (temp == null) clear(VehicleField.EXTERIOR_TEMPERATURE);
         else put(VehicleField.EXTERIOR_TEMPERATURE, temp, now);
@@ -243,8 +266,9 @@ final class JancarCarProvider implements VehicleDataProvider {
         else put(VehicleField.DOORS, doorsText(doors), now);
 
         int lights = readInt(GET_LIGHTS);
+        Boolean headlight = readBoolean(GET_HEADLIGHT);
         if (lights < 0) clear(VehicleField.LIGHTS);
-        else put(VehicleField.LIGHTS, lightsText(lights, readBoolean(GET_HEADLIGHT)), now);
+        else put(VehicleField.LIGHTS, lightsText(lights, headlight), now);
 
         int brake = readInt(GET_HANDBRAKE);
         if (brake == 0) put(VehicleField.PARKING_BRAKE, "Liberado", now);
@@ -259,13 +283,18 @@ final class JancarCarProvider implements VehicleDataProvider {
         Boolean reverse = readBoolean(GET_FAST_REVERSE);
         if (reverse == null) clear(VehicleField.REVERSE);
         else put(VehicleField.REVERSE, reverse ? "Activa" : "Inactiva", now);
+        lastRawVehicle = "puertas=" + doors + " · luces=" + lights
+                + " · faros=" + headlight + " · freno=" + brake
+                + " · cinturón=" + belt + " · marchaAtrás=" + reverse;
     }
 
     private static final int GET_FAST_REVERSE = IS_FAST_REVERSE;
 
     private void readClimate(long now) {
-        String left = climateTemp(readInt(GET_CLIMATE, CLIMATE_LEFT_TEMP));
-        String right = climateTemp(readInt(GET_CLIMATE, CLIMATE_RIGHT_TEMP));
+        int rawLeft = readInt(GET_CLIMATE, CLIMATE_LEFT_TEMP);
+        int rawRight = readInt(GET_CLIMATE, CLIMATE_RIGHT_TEMP);
+        String left = climateTemp(rawLeft);
+        String right = climateTemp(rawRight);
         if (left == null && right == null) clear(VehicleField.CLIMATE_TEMPERATURE);
         else if (left == null) put(VehicleField.CLIMATE_TEMPERATURE, "Der. " + right, now);
         else if (right == null || left.equals(right)) put(VehicleField.CLIMATE_TEMPERATURE, left, now);
@@ -278,12 +307,14 @@ final class JancarCarProvider implements VehicleDataProvider {
         int ac = readInt(GET_CLIMATE, CLIMATE_AC);
         if (ac < 0) clear(VehicleField.CLIMATE_STATE);
         else put(VehicleField.CLIMATE_STATE, ac == 0 ? "A/C apagado" : "A/C OEM " + ac, now);
+        lastRawClimate = "izquierda=" + rawLeft + " · derecha=" + rawRight
+                + " · ventilador=" + fan + " · ac=" + ac;
     }
 
     private void readAlerts(long now, boolean includeMaintenanceInfo) {
         LinkedHashSet<MaintenanceAlert> active = new LinkedHashSet<>();
         List<String> information = new ArrayList<>();
-        boolean known = readTireAlerts(active);
+        boolean known = false;
         int carId = readInt(GET_CAR_ID);
         if (carId >= 0) {
             for (int reportType = 0; reportType <= 2; reportType++) {
@@ -311,35 +342,6 @@ final class JancarCarProvider implements VehicleDataProvider {
                 !known ? "La unidad no ha publicado avisos OEM verificables"
                         : active.isEmpty() ? "Sin avisos OEM activos"
                         : active.size() + " aviso(s) OEM activo(s)");
-    }
-
-    private boolean readTireAlerts(Set<MaintenanceAlert> target) {
-        boolean known = false;
-        String[] wheels = {"delantero izq.", "delantero der.", "trasero izq.", "trasero der."};
-        for (int i = 0; i < 4; i++) {
-            int pressure = readInt(GET_TIRES, 9 + i);
-            if (pressure >= 0) known = true;
-            if (pressure == 1) target.add(new MaintenanceAlert("NEUMÁTICO", "Presión baja " + wheels[i], MaintenanceAlert.Severity.WARNING));
-            else if (pressure == 2) target.add(new MaintenanceAlert("NEUMÁTICO", "Presión alta " + wheels[i], MaintenanceAlert.Severity.WARNING));
-            else if (pressure == 3) target.add(new MaintenanceAlert("NEUMÁTICO", "Posible fuga " + wheels[i], MaintenanceAlert.Severity.WARNING));
-
-            int temperature = readInt(GET_TIRES, 5 + i);
-            if (temperature >= 0) known = true;
-            if (temperature == 1) target.add(new MaintenanceAlert("NEUMÁTICO", "Temperatura baja " + wheels[i], MaintenanceAlert.Severity.INFO));
-            else if (temperature == 2) target.add(new MaintenanceAlert("NEUMÁTICO", "Temperatura alta " + wheels[i], MaintenanceAlert.Severity.WARNING));
-
-            int sensor = readInt(GET_TIRES, 25 + i);
-            if (sensor >= 0) known = true;
-            if (sensor == 1) target.add(new MaintenanceAlert("TPMS", "Batería baja del sensor " + wheels[i], MaintenanceAlert.Severity.WARNING));
-            else if (sensor == 2) target.add(new MaintenanceAlert("TPMS", "Sin señal del sensor " + wheels[i], MaintenanceAlert.Severity.WARNING));
-            else if (sensor == 3) target.add(new MaintenanceAlert("TPMS", "Sensor no válido " + wheels[i], MaintenanceAlert.Severity.WARNING));
-        }
-        int system = readInt(GET_TIRES, 29);
-        if (system >= 0) known = true;
-        if (system == 1) target.add(new MaintenanceAlert("TPMS", "Batería baja del sistema", MaintenanceAlert.Severity.WARNING));
-        else if (system == 2) target.add(new MaintenanceAlert("TPMS", "Sistema TPMS sin señal", MaintenanceAlert.Severity.WARNING));
-        else if (system == 3) target.add(new MaintenanceAlert("TPMS", "Sistema TPMS no válido", MaintenanceAlert.Severity.WARNING));
-        return known;
     }
 
     private boolean appendMaintenanceInfo(List<String> information, int id, String label) {
@@ -500,6 +502,14 @@ final class JancarCarProvider implements VehicleDataProvider {
             }
         }
         current.append("alerts=").append(maintenance.active.hashCode());
+        String raw = lastRawTelemetry + " | " + lastRawVehicle + " | " + lastRawClimate
+                + " | avisos=" + maintenance.message;
+        long now = System.currentTimeMillis();
+        if (!raw.equals(lastLoggedRaw) && now - lastLoggedRawAt >= 5_000L) {
+            lastLoggedRaw = raw;
+            lastLoggedRawAt = now;
+            AppSessionLog.event("COCHE OEM", raw);
+        }
         if (current.toString().equals(lastUiSnapshot)) return;
         lastUiSnapshot = current.toString();
         if (onValuesChanged != null) main.post(onValuesChanged);

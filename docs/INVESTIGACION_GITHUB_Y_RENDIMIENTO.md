@@ -2,6 +2,23 @@
 
 Fecha de revisión: 2026-08-16.
 
+## Validación 1.13.2 sobre las APK exportadas de la unidad
+
+- `com.jancar.services.car.CarService` y `com.jancar.services.radio.RadioService` se consumen mediante componentes,
+  descriptores y transacciones getter comprobados en las APK exportadas. No se usa `BIND_AUTO_CREATE`, no se registra
+  un callback propietario y no se envían comandos CAN, MCU, UART o de sintonización.
+- El APK de SpeedPlay contiene un `MediaPlaybackService` privado y no exportado. Solo será visible para iDrive cuando
+  el propio SpeedPlay active su `MediaSession`; no se inicia desde esta aplicación. Su receptor exportado no contiene
+  una operación verificable para enviar coordenadas o un destino a Android Auto.
+- La red se elige entre todas las que Android publique con `INTERNET` y `VALIDATED`, usando `Network.openConnection`
+  para admitir incluso una red validada que no sea la predeterminada. `TRANSPORT_BLUETOOTH` funciona como Bluetooth
+  PAN únicamente si el firmware y el teléfono crean esa red; emparejamiento, A2DP o Android Auto no implican Internet.
+- El registro de ejecución está limitado a 512 KiB, no guarda coordenadas y muestrea telemetría dinámica cada cinco
+  segundos. Esto evita sondeos nuevos y mantiene acotadas las escrituras: reutiliza los lectores de un segundo que ya
+  actualizan la UI y registra inmediatamente solo conexiones, errores y cambios discretos.
+- QA limpia del 16/08/2026: `clean`, pruebas unitarias, Lint y `assembleDebug` correctos con target 35. El APK debug
+  1.13.2 ocupa 2.405.782 bytes, sin bibliotecas nativas nuevas ni servicio persistente propio.
+
 ## Proyectos comparados
 
 | Proyecto | Qué demuestra | Qué se aprovecha | Qué no se copia |

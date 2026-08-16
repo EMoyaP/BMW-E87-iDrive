@@ -82,12 +82,17 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
 1. Conceder ubicación a la app y esperar a que la radio obtenga una posición GPS estable.
 2. Dar Internet a la radio con cualquiera de sus mecanismos disponibles: Wi-Fi/hotspot del teléfono, SIM, Ethernet,
    tethering USB o tethering Bluetooth. Estar enlazado solo para llamadas/audio Bluetooth no equivale a tener Internet.
+   Para probar Bluetooth, activar **Compartir Internet por Bluetooth** en el teléfono y, si el menú OEM lo ofrece,
+   habilitar el perfil PAN/red en la radio. El pie debe mostrar `BT PAN`; si Android no crea una red validada, la app
+   no puede forzar ese perfil ni reutilizar los datos internos del enlace Android Auto.
 3. Abrir la app y comprobar que `Gasolineras · Diésel` deja de mostrar `Esperando ubicación`/`Consultando` y presenta
    `Más barata` y `Más cercana`. El pie debe indicar `7 km · MITECO` en la primera carga correcta.
 4. Contrastar nombre y precio con el portal oficial. La distancia de la tarjeta es aproximada en línea recta; la ruta
    y distancia por carretera las determina Maps después de tocar la fila.
 5. Tocar cada resultado. Google Maps debe abrirse con esa coordenada lista para navegar; si Maps no está instalado,
    debe aparecer otra aplicación compatible o el aviso de que no hay mapas.
+   En este firmware el destino se abre en Maps local: el APK exportado de SpeedPlay no expone un puente verificable
+   para enviar el destino al Google Maps proyectado por Android Auto.
 6. Mantener pulsada la tarjeta, cambiar primero a 3 km y después a 10 km, y confirmar que título, resultados y pie se
    actualizan respecto de la posición actual. Restaurar Diésel y 7 km. Tocar el pie para probar la actualización manual.
 7. Con datos ya visibles, quitar Internet y cerrar/abrir la app: los últimos valores deben mantenerse. Tocar el pie
@@ -155,7 +160,9 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
    `DETENER Y GUARDAR` conserva la evidencia parcial; `OMITIR` descarta la evidencia incidental del paso.
 11. Repetir la misma prueba en tres sesiones distintas. La misma señal fuerte debe pasar de `OBSERVADO` a `REPETIDO`
    y después a `LISTO PARA REVISAR`; nunca debe aparecer como confirmada ni cambiar por sí sola la UI del vehículo.
-12. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` al ordenador. Si la
+12. Expulsar la USB desde Android si el firmware ofrece esa opción y copiar todos los `e87_*.txt` y
+   `e87_runtime_session_*.log` al ordenador. El LOG se sobrescribe al iniciar un proceso nuevo, está limitado a
+   512 KiB y no contiene coordenadas; sí indica qué proveedor entregó cada dato, red, radio, multimedia y errores. Si la
    USB se desconectó antes de tiempo, usar `EXPORTAR` para recuperar el último estado conservado internamente.
 13. Un archivo sin eventos no significa que el coche carezca de la señal: significa que la APK normal no la observó por
    broadcasts registrados, ajustes legibles o Android Automotive público. En ese caso se necesitará inspeccionar las

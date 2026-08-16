@@ -116,6 +116,7 @@ public final class FuelStationProvider {
     private Location location, lastSelectionLocation;
     private Cache cache;
     private Snapshot snapshot;
+    private String lastLogSignature = "";
 
     private final Runnable periodicRefresh = () -> {
         synchronized (FuelStationProvider.this) {
@@ -129,15 +130,30 @@ public final class FuelStationProvider {
             new ConnectivityManager.NetworkCallback() {
         @Override public void onAvailable(Network network) {
             synchronized (FuelStationProvider.this) {
+                boolean nowAvailable = hasActiveInternet();
                 boolean recovered = !networkAvailable;
-                networkAvailable = true;
-                if (recovered) lastAttemptAt = 0L;
+                networkAvailable = nowAvailable;
+                if (recovered && nowAvailable) lastAttemptAt = 0L;
                 refresh(false);
                 scheduleNextRefresh();
             }
         }
+        @Override public void onCapabilitiesChanged(Network network,
+                                                    NetworkCapabilities networkCapabilities) {
+            synchronized (FuelStationProvider.this) {
+                boolean nowAvailable = hasActiveInternet();
+                boolean recovered = !networkAvailable && nowAvailable;
+                networkAvailable = nowAvailable;
+                if (recovered) lastAttemptAt = 0L;
+                if (recovered) refresh(false);
+                scheduleNextRefresh();
+            }
+        }
         @Override public void onLost(Network network) {
-            synchronized (FuelStationProvider.this) { networkAvailable = hasActiveInternet(); }
+            synchronized (FuelStationProvider.this) {
+                networkAvailable = hasActiveInternet();
+                publishNetworkStateIfNeeded();
+            }
         }
     };
 
@@ -233,6 +249,16 @@ public final class FuelStationProvider {
 
         if (!forceNetwork && now - lastAttemptAt < MIN_RETRY_INTERVAL_MS) needsNetwork = false;
         if (!needsNetwork || taskRunning) return;
+        if (!hasActiveInternet()) {
+            Snapshot selected = cache == null ? null : select(cache, location, fuel.label, true);
+            publish(new Snapshot(fuel.label, displayRadiusKm,
+                    selected == null ? "" : selected.datasetDate,
+                    "Android sin Internet · activa hotspot, PAN o Wi-Fi",
+                    selected == null ? null : selected.cheapest,
+                    selected == null ? null : selected.nearest,
+                    false, selected != null, selected == null ? 0L : selected.updatedAt));
+            return;
+        }
         taskRunning = true;
         lastAttemptAt = now;
 
@@ -331,7 +357,9 @@ public final class FuelStationProvider {
 
     private FetchResult fetchStations(String endpoint, Location center, int retainRadiusKm)
             throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
+        Network network = validatedNetwork();
+        if (network == null) throw new IllegalStateException("Android no publica una red validada");
+        HttpURLConnection connection = (HttpURLConnection) network.openConnection(new URL(endpoint));
         activeConnection = connection;
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(12_000);
@@ -458,6 +486,14 @@ public final class FuelStationProvider {
 
     private void publish(Snapshot value) {
         snapshot = value;
+        String signature = value.message + '|' + value.loading + '|' + value.cached + '|'
+                + value.updatedAt + '|' + networkLabel();
+        if (!signature.equals(lastLogSignature)) {
+            lastLogSignature = signature;
+            AppSessionLog.event("GASOLINERAS", "red=" + networkLabel() + " · estado="
+                    + (value.message == null || value.message.isEmpty() ? "datos disponibles" : value.message)
+                    + " · caché=" + value.cached + " · cargando=" + value.loading);
+        }
         if (listener != null) main.post(() -> listener.onSnapshot(value));
     }
 
@@ -493,13 +529,77 @@ public final class FuelStationProvider {
     }
 
     private boolean hasActiveInternet() {
-        if (connectivityManager == null) return false;
+        return validatedNetwork() != null;
+    }
+
+    /** Uses the default validated network first, then any other validated Android network. */
+    private Network validatedNetwork() {
+        if (connectivityManager == null) return null;
         try {
             Network activeNetwork = connectivityManager.getActiveNetwork();
-            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(activeNetwork);
-            return capabilities != null
-                    && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
-        } catch (Exception ignored) { return false; }
+            if (isValidated(activeNetwork)) return activeNetwork;
+            for (Network candidate : connectivityManager.getAllNetworks()) {
+                if (isValidated(candidate)) return candidate;
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private boolean isValidated(Network network) {
+        if (network == null) return false;
+        NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+        return capabilities != null
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+    }
+
+    public String networkLabel() {
+        if (connectivityManager == null) return "SIN RED";
+        try {
+            Network selected = validatedNetwork();
+            if (selected == null) selected = connectivityManager.getActiveNetwork();
+            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(selected);
+            if (capabilities == null) return "SIN RED";
+            String transport;
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) transport = "ETHERNET";
+            else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) transport = "WI-FI";
+            else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) transport = "MÓVIL";
+            else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) transport = "BT PAN";
+            else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) transport = "VPN";
+            else transport = "RED";
+            return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    ? transport : transport + " SIN INTERNET";
+        } catch (Exception ignored) { return "RED DESCONOCIDA"; }
+    }
+
+    public String networkDiagnostic() {
+        StringBuilder out = new StringBuilder("RED PARA GASOLINERAS\n");
+        out.append("red activa=").append(networkLabel()).append('\n');
+        out.append("Internet validado por Android=").append(hasActiveInternet()).append('\n');
+        if (connectivityManager != null) try {
+            Network[] networks = connectivityManager.getAllNetworks();
+            out.append("redes publicadas por Android=").append(networks.length).append('\n');
+            for (Network network : networks) {
+                NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
+                out.append("- ").append(network).append(" · ")
+                        .append(capabilities == null ? "sin capacidades" : capabilities.toString()).append('\n');
+            }
+        } catch (Exception error) {
+            out.append("inventario de redes=").append(error.getClass().getSimpleName()).append('\n');
+        }
+        out.append("La app usa la red IP de Android de la radio. Una proyección Android Auto "
+                + "no se considera acceso a Internet mientras Android no publique una red validada.\n");
+        out.append("Bluetooth PAN se usa automáticamente si el sistema lo publica como red validada; "
+                + "la app no puede activar el tethering del teléfono mediante una API pública.\n");
+        return out.toString();
+    }
+
+    private void publishNetworkStateIfNeeded() {
+        if (!active || snapshot == null || hasActiveInternet()) return;
+        publish(new Snapshot(snapshot.fuelLabel, snapshot.radiusKm, snapshot.datasetDate,
+                "Android sin Internet · activa hotspot, PAN o Wi-Fi",
+                snapshot.cheapest, snapshot.nearest, false,
+                snapshot.cheapest != null, snapshot.updatedAt));
     }
 
     private Cache readCache(int productId) {

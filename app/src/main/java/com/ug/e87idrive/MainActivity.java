@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private DiagnosticEngine diagnostics;
     private VehicleDataRepository vehicleData;
     private MediaSessionProvider media;
+    private JancarRadioProvider oemRadio;
     private FuelStationProvider fuelStations;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
@@ -79,9 +80,11 @@ public class MainActivity extends Activity {
     private boolean exportOemAfterPicker;
     private boolean exportFullAfterPicker;
     private int mediaRefreshTick;
+    private String lastMediaLog = "";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        AppSessionLog.event("APP", "MainActivity creada");
         hideUi();
         vehiclePreferences = getSharedPreferences("vehicle", MODE_PRIVATE);
         uiPreferences = getSharedPreferences("ui", MODE_PRIVATE);
@@ -99,6 +102,7 @@ public class MainActivity extends Activity {
             refreshStatus();
         });
         media = new MediaSessionProvider(this);
+        oemRadio = new JancarRadioProvider(this, this::refreshRadioWidget);
         applyPalette();
         buildUi();
         startClock();
@@ -107,11 +111,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        AppSessionLog.event("APP", "Sesión visible; iniciando proveedores pasivos");
         foreground = true;
         hideUi();
         autoDetectApps();
+        media.requestListenerRebind();
         refreshAll();
         bluetoothState.start();
+        oemRadio.start();
         fuelStations.start(gps.getLastLocation());
         vehicleData.start();
         diagnostics.startPassiveProbe();
@@ -123,8 +130,10 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        AppSessionLog.event("APP", "Sesión en segundo plano; deteniendo sondeos periódicos");
         foreground = false;
         bluetoothState.stop();
+        oemRadio.stop();
         fuelStations.stop();
         if (!usbCaptureRunning) {
             diagnostics.stopPassiveProbe();
@@ -139,6 +148,7 @@ public class MainActivity extends Activity {
         diagnostics.stopPassiveProbe();
         bluetoothState.stop();
         fuelStations.close();
+        oemRadio.stop();
         vehicleData.stop();
         if (usbDiagnostics != null) usbDiagnostics.close();
         super.onDestroy();
@@ -313,8 +323,8 @@ public class MainActivity extends Activity {
         }
         String freshness = snapshot.cached ? "CACHÉ" : "MITECO";
         String updated = compactFuelUpdatedAt(snapshot.updatedAt);
-        fuelFooter.setText(String.format(spanish, "↻%s · %d KM · %s",
-                updated, snapshot.radiusKm, freshness));
+        fuelFooter.setText(String.format(spanish, "↻%s · %d KM · %s · %s",
+                updated, snapshot.radiusKm, freshness, fuelStations.networkLabel()));
         if (fuelRefresh != null) {
             fuelRefresh.setText(snapshot.loading ? "…" : "↻");
             fuelRefresh.setTextColor(snapshot.loading ? ACCENT : BLUE);
@@ -375,12 +385,19 @@ public class MainActivity extends Activity {
         google.setPackage("com.google.android.apps.maps");
         try {
             startActivity(google);
+            AppSessionLog.event("NAVEGACIÓN", "Destino de gasolinera abierto en Google Maps local: "
+                    + station.brand);
             return;
         } catch (Exception ignored) {}
         Intent fallback = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q="
                 + Uri.encode(coordinates + "(" + station.brand + ")")));
-        try { startActivity(fallback); }
-        catch (Exception ignored) { toast("No hay una aplicación de mapas disponible"); }
+        try {
+            startActivity(fallback);
+            AppSessionLog.event("NAVEGACIÓN", "Destino abierto mediante geo local: " + station.brand);
+        } catch (Exception ignored) {
+            AppSessionLog.event("NAVEGACIÓN", "No hay aplicación local capaz de abrir el destino");
+            toast("No hay una aplicación de mapas disponible");
+        }
     }
 
     private void addLowerCard(LinearLayout row, View card, float weight, boolean first, boolean last) {
@@ -438,6 +455,17 @@ public class MainActivity extends Activity {
         // When SpeedPlay/Android Auto publishes its standard session, it takes precedence so
         // the card follows the music actually routed through Android Auto (for example Spotify).
         MediaSessionProvider.Snapshot snapshot = media.refreshPreferred(apps.getPackage("auto"));
+        String mediaLog = "paquetePreferido=" + apps.getPackage("auto")
+                + " · acceso=" + snapshot.accessGranted
+                + " · listener=" + snapshot.listenerConnected
+                + " · sesión=" + snapshot.sessionAvailable
+                + " · fuente=" + snapshot.source
+                + " · estado=" + snapshot.state
+                + " · título=" + snapshot.title;
+        if (!mediaLog.equals(lastMediaLog)) {
+            lastMediaLog = mediaLog;
+            AppSessionLog.event("MULTIMEDIA", mediaLog);
+        }
         mediaTitle.setText(snapshot.title);
         mediaArtist.setText(snapshot.artist);
         mediaSource.setText(snapshot.source);
@@ -600,6 +628,16 @@ public class MainActivity extends Activity {
             radioStation.setOnClickListener(null);
             radioStation.setContentDescription("Radio sin configurar");
             radioDetail.setText("Sin configurar");
+            return;
+        }
+        JancarRadioProvider.Snapshot oem = oemRadio.snapshot();
+        if (oem.available && "com.jancar.radio".equals(packageName)) {
+            radioBand.setText(oem.band);
+            radioStation.setText(oem.station);
+            radioStation.setTextColor(BLUE);
+            radioStation.setOnClickListener(v -> launchRole("radio"));
+            radioStation.setContentDescription("Frecuencia OEM publicada: " + oem.station);
+            radioDetail.setText(oem.detail);
             return;
         }
         MediaSessionProvider.Snapshot snapshot = media.refreshForPackage(packageName);
@@ -959,7 +997,7 @@ public class MainActivity extends Activity {
         if (!snapshot.known) {
             box.addView(txt(snapshot.message, 13, MUTED, false));
         } else if (snapshot.active.isEmpty()) {
-            box.addView(txt("✓ No hay avisos activos de neumáticos o informes OEM en esta lectura.",
+            box.addView(txt("✓ No hay códigos activos en los informes OEM disponibles en esta lectura.",
                     14, Color.rgb(79, 205, 132), false));
         } else {
             for (JancarCarProvider.MaintenanceAlert alert : snapshot.active) {
@@ -1463,18 +1501,27 @@ public class MainActivity extends Activity {
         boolean bluetoothGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
         boolean mediaGranted = hasMediaAccess();
+        boolean mediaConnected = MediaNotificationListener.isConnected();
         String message = "Ubicación precisa: " + (locationGranted ? "concedida" : "pendiente") + "\n"
                 + "Bluetooth: " + (bluetoothGranted ? "concedido/no necesario" : "pendiente") + "\n"
-                + "Acceso multimedia: " + (mediaGranted ? "concedido" : "pendiente") + "\n\n"
+                + "Acceso multimedia: " + (mediaGranted ? "concedido" : "pendiente") + "\n"
+                + "Lector multimedia: " + (mediaConnected ? "conectado" : mediaGranted
+                        ? "pendiente de reconexión" : "sin permiso") + "\n\n"
                 + "La ubicación permite GPS y gasolineras. El acceso multimedia permite leer "
-                + "la sesión estándar de Spotify/Android Auto. Android exige que confirmes este "
-                + "último permiso en su propio panel; la app no puede activarlo sola.";
+                + "solo sesiones o notificaciones que SpeedPlay publique en Android. El análisis "
+                + "del firmware confirma que SpeedPlay puede no publicar la sesión de Android Auto.";
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Permisos de iDrive")
                 .setMessage(message)
                 .setPositiveButton(locationGranted && bluetoothGranted ? "UBICACIÓN OK" : "CONCEDER UBICACIÓN",
                         (d, w) -> requestLocationIfNeeded())
-                .setNeutralButton(mediaGranted ? "MULTIMEDIA OK" : "ACTIVAR MULTIMEDIA",
-                        (d, w) -> openMediaAccessSettings())
+                .setNeutralButton(mediaGranted && !mediaConnected ? "RECONECTAR MULTIMEDIA"
+                                : mediaGranted ? "MULTIMEDIA OK" : "ACTIVAR MULTIMEDIA",
+                        (d, w) -> {
+                            if (mediaGranted && !mediaConnected) {
+                                media.requestListenerRebind();
+                                toast("Reconexión del lector multimedia solicitada");
+                            } else openMediaAccessSettings();
+                        })
                 .setNegativeButton("AJUSTES DE APP", (d, w) -> openAppDetailsSettings())
                 .create();
         showSized(dialog, .68f, .54f);
@@ -1733,7 +1780,15 @@ public class MainActivity extends Activity {
 
     private String buildDiagnosticReport() {
         return diagnostics.buildReport() + "\n\n" + vehicleData.diagnosticReport()
-                + "\n\n" + media.radioDiagnostic(apps.getPackage("radio"));
+                + "\n\n" + media.radioDiagnostic(apps.getPackage("radio"))
+                + "\n\n" + media.mediaDiagnostic(apps.getPackage("auto"))
+                + "\n\n" + oemRadio.diagnosticReport()
+                + "\n\n" + fuelStations.networkDiagnostic()
+                + "\n\nNAVEGACIÓN DE GASOLINERAS\n"
+                + "Destino actual=Google Maps local mediante google.navigation/geo.\n"
+                + "SpeedPlay exportado no publica un Intent o comando verificable para enviar destinos "
+                + "a la proyección Android Auto; no se transmite ningún protocolo supuesto.\n"
+                + "\nREGISTRO DE LA SESIÓN ACTUAL\n\n" + AppSessionLog.read();
     }
 
     private void applyPalette() {

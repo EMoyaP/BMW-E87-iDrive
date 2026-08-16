@@ -28,14 +28,18 @@ public final class MediaNotificationListener extends NotificationListenerService
     }
 
     private static final Map<String, Snapshot> ACTIVE = new ConcurrentHashMap<>();
+    private static volatile boolean connected;
 
     @Override public void onListenerConnected() {
+        connected = true;
         ACTIVE.clear();
         try {
             StatusBarNotification[] active = getActiveNotifications();
             if (active != null) for (StatusBarNotification item : active) remember(item);
         } catch (Exception ignored) { }
     }
+
+    @Override public void onListenerDisconnected() { connected = false; }
 
     @Override public void onNotificationPosted(StatusBarNotification item) { remember(item); }
 
@@ -64,6 +68,19 @@ public final class MediaNotificationListener extends NotificationListenerService
             if (latest == null || item.postedAt > latest.postedAt) latest = item;
         }
         return latest;
+    }
+
+    static boolean isConnected() { return connected; }
+
+    static String diagnosticSummary() {
+        StringBuilder out = new StringBuilder();
+        out.append("listener conectado=").append(connected).append('\n');
+        out.append("notificaciones legibles=").append(ACTIVE.size()).append('\n');
+        for (Snapshot item : ACTIVE.values()) {
+            out.append("- ").append(item.packageName).append(" · ")
+                    .append(item.title.isEmpty() ? item.text : item.title).append('\n');
+        }
+        return out.toString();
     }
 
     private static String value(CharSequence value) {
