@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -1005,10 +1006,12 @@ public class MainActivity extends Activity {
         Button start = dialogButton("INICIAR CORRELACIÓN");
         Button stop = dialogButton("DETENER");
         Button export = dialogButton("EXPORTAR");
+        Button permissions = dialogButton("PERMISOS");
         Button share = dialogButton("COMPARTIR");
         actions.addView(start, lp(0, dp(54), 1));
         actions.addView(stop, lp(0, dp(54), 1));
         actions.addView(export, lp(0, dp(54), 1));
+        actions.addView(permissions, lp(0, dp(54), 1));
         actions.addView(share, lp(0, dp(54), 1));
         box.addView(actions);
         LinearLayout usbRow = horizontal();
@@ -1040,6 +1043,7 @@ public class MainActivity extends Activity {
             stop.setEnabled(false);
         });
         export.setOnClickListener(v -> saveDiagnostic(true));
+        permissions.setOnClickListener(v -> permissionsModal());
         share.setOnClickListener(v -> shareDiagnostic());
         usb.setOnClickListener(v -> usbDiagnosticMenu(reportView, start, stop, usb, usbStatus));
         exportOem.setOnClickListener(v -> requestOemExport(exportOem));
@@ -1449,6 +1453,52 @@ public class MainActivity extends Activity {
             startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
         } catch (Exception e) {
             toast("Esta unidad no expone el ajuste de acceso multimedia");
+        }
+    }
+
+    /** Entry point from Diagnóstico. Android requires the user to approve both access types. */
+    private void permissionsModal() {
+        boolean locationGranted = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean bluetoothGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+        boolean mediaGranted = hasMediaAccess();
+        String message = "Ubicación precisa: " + (locationGranted ? "concedida" : "pendiente") + "\n"
+                + "Bluetooth: " + (bluetoothGranted ? "concedido/no necesario" : "pendiente") + "\n"
+                + "Acceso multimedia: " + (mediaGranted ? "concedido" : "pendiente") + "\n\n"
+                + "La ubicación permite GPS y gasolineras. El acceso multimedia permite leer "
+                + "la sesión estándar de Spotify/Android Auto. Android exige que confirmes este "
+                + "último permiso en su propio panel; la app no puede activarlo sola.";
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Permisos de iDrive")
+                .setMessage(message)
+                .setPositiveButton(locationGranted && bluetoothGranted ? "UBICACIÓN OK" : "CONCEDER UBICACIÓN",
+                        (d, w) -> requestLocationIfNeeded())
+                .setNeutralButton(mediaGranted ? "MULTIMEDIA OK" : "ACTIVAR MULTIMEDIA",
+                        (d, w) -> openMediaAccessSettings())
+                .setNegativeButton("AJUSTES DE APP", (d, w) -> openAppDetailsSettings())
+                .create();
+        showSized(dialog, .68f, .54f);
+    }
+
+    private boolean hasMediaAccess() {
+        try {
+            String enabled = Settings.Secure.getString(getContentResolver(),
+                    "enabled_notification_listeners");
+            ComponentName listener = new ComponentName(this, MediaNotificationListener.class);
+            return enabled != null && (enabled.contains(listener.flattenToString())
+                    || enabled.contains(listener.flattenToShortString()));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void openAppDetailsSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+        } catch (Exception ignored) {
+            toast("No se pudo abrir los ajustes de esta aplicación");
         }
     }
 
