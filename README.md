@@ -1,6 +1,6 @@
 # BMW E87 iDrive
 
-[![Android](https://img.shields.io/badge/Android-15%20%7C%20API%2035-3DDC84?logo=android&logoColor=white)](https://developer.android.com/about/versions/15)
+[![Android](https://img.shields.io/badge/Android-API%2030--35-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Estado](https://img.shields.io/badge/estado-validaci%C3%B3n%20en%20hardware-orange)](#estado-del-proyecto)
 [![Licencia](https://img.shields.io/badge/licencia-PolyForm%20Noncommercial-35618f)](LICENSE)
 
@@ -21,18 +21,19 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.12.0 — validación en la unidad RK3326**.
+Versión actual: **1.13.1 — integración pasiva Jancar y centro de permisos**.
 
 La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
 Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
 pantallas comerciales, pero la compatibilidad real de la app debe tratarse como Android API 30. Sigue pendiente:
 
 - sustituir la firma debug por una clave release permanente;
-- endurecer la caducidad de las posiciones y velocidades GPS;
-- corregir el reintento de la primera descarga de gasolineras cuando se interrumpe;
-- completar las pruebas físicas de cámara, PDC, climatización, multimedia y CANBUS pasivo.
+- validar en el coche todos los getters pasivos Jancar antes de considerarlos universales;
+- confirmar qué `MediaSession` publica SpeedPlay durante una conexión Android Auto real;
+- completar las pruebas físicas de radio, PDC, climatización y avisos OEM.
 
-No se publica por ahora una APK de producción. Los APK locales y las claves de firma están excluidos del repositorio.
+La release de GitHub incluye una APK debug firmada para pruebas en la unidad. No es una APK de producción y no contiene
+claves de firma privadas del proyecto.
 
 ## Funcionalidad
 
@@ -40,11 +41,15 @@ No se publica por ahora una APK de producción. Los APK locales y las claves de 
 - Aplicación normal accesible desde el launcher OEM.
 - Menús y tarjetas configurables para Multimedia, Radio, Navegación, Android Auto/S-Play y Teléfono.
 - Seis accesos rápidos configurables a aplicaciones instaladas.
-- Lectura opcional de título, artista y carátula mediante `MediaSession`, sin enviar controles multimedia.
+- Lectura opcional de título, artista y carátula mediante `MediaSession`; play/pausa, anterior y siguiente se envían
+  únicamente cuando la sesión activa publica expresamente esas acciones estándar.
 - Lectura de emisora/RDS cuando la aplicación de radio lo publica mediante APIs Android estándar.
 - Nombre del teléfono cuando Android expone públicamente la conexión Bluetooth.
-- Velocidad de vehículo pública cuando Android Automotive la expone, con prioridad sobre el respaldo GPS y fuente
-  identificada. El valor y arco son verdes hasta 120 km/h y naranjas por encima.
+- Adaptador Jancar específico de la unidad que enlaza el `CarService` existente sin iniciarlo y consulta exclusivamente
+  getters identificados en la APK exportada. Puede proporcionar velocidad, consumo, RPM, autonomía, temperatura
+  exterior, puertas, luces, freno, cinturón, marcha atrás y climatización. No registra callbacks ni escribe CAN/UART.
+- Prioridad de velocidad Jancar, Android Automotive público y finalmente GPS. El valor y arco son verdes hasta
+  120 km/h y naranjas por encima.
 - Tarjeta de gasolineras con combustible y radio configurables.
 - Selección de la estación más barata y la más cercana, calculada localmente respecto al GPS.
 - Apertura del destino en Google Maps u otra aplicación compatible.
@@ -61,12 +66,13 @@ No se publica por ahora una APK de producción. Los APK locales y las claves de 
   funciones, bibliotecas, permisos y componentes; copia todos los APK/splits legibles y los `build.prop`/certificados
   OTA públicos. El límite es 2 GB por archivo y 16 GB en total. No copia datos privados ni particiones, MCU o Hiworld.
 - Sonda opcional, exclusivamente de lectura, para propiedades públicas de Android Automotive.
-- Ordenador de a bordo con procedencia explícita para velocidad, autonomía, consumo y temperatura exterior. En AAOS
-  público reconoce `RANGE_REMAINING` e `INSTANTANEOUS_FUEL_ECONOMY`; en esta radio permanecerán sin dato hasta confirmar
-  el contrato Jancar/CAN real. El informe GPS omite coordenadas y registra proveedor, edad, precisión y velocidad.
-- Barra inferior contextual: conserva el encabezado y solo añade luces encendidas, freno aplicado, cinturón sin
-  abrochar o puertas abiertas cuando existe una lectura real. Los estados normales y los valores `—` no ocupan espacio;
-  una llave inglesa fija a la derecha abre el menú de diagnóstico.
+- Ordenador de a bordo con procedencia explícita para velocidad, autonomía, consumo y temperatura exterior. El informe
+  GPS omite coordenadas y registra proveedor, edad, precisión y velocidad.
+- Barra inferior contextual que solo añade luces, marcha atrás, freno, cinturón o puertas cuando su estado requiere
+  atención. Un botón de listado abre avisos y mantenimiento: azul sin lectura verificable, verde si la unidad confirma
+  que no hay avisos y naranja cuando publica avisos activos. La llave inglesa abre el diagnóstico.
+- Centro `PERMISOS` dentro de Diagnóstico: solicita ubicación/Bluetooth, abre el panel de acceso multimedia y ofrece
+  acceso directo a los ajustes de la aplicación cuando Android haya bloqueado una petición anterior.
 - Exportación local del informe de diagnóstico.
 
 ### Asistente visual USB DEBUG
@@ -120,10 +126,11 @@ carcasa o nombre comercial similar.
 |---|---|
 | `MainActivity` | UI, navegación interna y ciclo de vida visible |
 | `VehicleDataRepository` | Agregación segura de fuentes del vehículo |
+| `JancarCarProvider` | Getters Binder pasivos verificados en la APK de la unidad, sin callbacks ni escrituras |
 | `GpsSpeedProvider` | Posición y velocidad mediante `LocationManager` |
 | `AndroidAutomotiveProvider` | Sonda pública AAOS de solo lectura |
 | `FuelStationProvider` | MITECO, caché, distancias y actualización por provincia |
-| `MediaSessionProvider` | Metadatos multimedia y de radio mediante API estándar |
+| `MediaSessionProvider` | Metadatos y controles anunciados por sesiones multimedia Android estándar |
 | `BluetoothDeviceProvider` | Estado Bluetooth público, sin escaneo ni conexión |
 | `DiagnosticEngine` | Inventario y correlación pasiva del firmware |
 | `OemPackageInspector` | Metadatos OEM dirigidos y selección segura de APK CAN/vehículo para USB |
@@ -179,10 +186,11 @@ permanente que no se almacene en Git.
 
 ## Primera configuración
 
-1. Instala una APK release firmada y abre `iDrive` desde el launcher normal de la radio.
-2. Concede ubicación para GPS y gasolineras.
+1. Instala la APK de pruebas firmada y abre `iDrive` desde el launcher normal de la radio.
+2. Abre `Diagnóstico > PERMISOS` y concede ubicación para GPS y gasolineras.
 3. En Android 12–15, concede `Dispositivos cercanos` si deseas mostrar el terminal Bluetooth.
-4. Habilita el acceso a notificaciones solo si deseas leer MediaSession, carátula o RDS publicado.
+4. Desde `PERMISOS > ACTIVAR MULTIMEDIA`, habilita `iDrive · multimedia` si deseas leer y controlar las acciones que
+   publique una `MediaSession`.
 5. Mantén pulsada una tarjeta para asignar manualmente su aplicación OEM.
 6. Exporta el diagnóstico inicial antes de realizar pruebas del vehículo.
 
@@ -194,7 +202,7 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 
 | Medida | Resultado observado |
 |---|---:|
-| APK debug | 2.380.248 bytes |
+| APK debug v1.13.1 | 2.395.745 bytes |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |
@@ -211,9 +219,11 @@ plataformas comparadas y los límites de reutilización.
 ## Limitaciones conocidas
 
 - La unidad física no declara Android Automotive y su API efectiva 30 no coincide con su versión comercial.
-- Puertas, luces, cinturón, climatización y PDC suelen llegar a aplicaciones OEM mediante puentes propietarios.
+- Los getters Jancar integrados son específicos del firmware exportado y requieren validación física señal por señal.
+- PDC y temperatura de motor no se presentan como disponibles hasta identificar una lectura inequívoca y segura.
 - Una APK instalada por el usuario normalmente no puede obtener permisos AAOS privilegiados para puertas o luces.
-- Android Auto o una radio OEM pueden no publicar su reproducción como MediaSession del sistema Android.
+- Android Auto o una radio OEM pueden no publicar su reproducción como MediaSession del sistema Android. La radio
+  Jancar observada no publicó emisora ni RDS por ese mecanismo durante la exportación.
 - Los perfiles HFP client/A2DP sink utilizados por algunas radios no están expuestos por las APIs Bluetooth públicas.
 - El diseño debe validarse con las barras y overlays reales de la unidad Android.
 

@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 1.13.1 — 16/08/2026
+
+- Se integró un adaptador de solo lectura para el `CarService` Jancar identificado en la APK exacta de la unidad. Usa
+  únicamente transacciones getter verificadas, no crea el servicio, no registra callbacks y no escribe CAN, MCU o UART.
+- El ordenador de a bordo prioriza velocidad Jancar y puede leer consumo, RPM, autonomía y temperatura exterior;
+  Android Automotive público y GPS permanecen como fuentes alternativas con caducidad acotada.
+- La barra inferior añade marcha atrás y mantiene ocultos los estados normales. El nuevo botón de listado abre avisos
+  OEM/TPMS y mantenimiento, con estado azul, verde o naranja según disponibilidad y alertas reales.
+- Multimedia prioriza la sesión de SpeedPlay/Android Auto y habilita play/pausa, anterior y siguiente únicamente si la
+  sesión anuncia las acciones estándar correspondientes. La radio conserva un botón seguro para abrir la app OEM
+  cuando no publica metadatos.
+- GPS escucha proveedores GPS, red y pasivo. La tarjeta de gasolineras muestra la hora local de actualización y permite
+  forzar un refresco no bloqueante mediante `↻`.
+- Diagnóstico incorpora `PERMISOS`, con estado de ubicación, Bluetooth y acceso multimedia, solicitud de permisos,
+  apertura del panel de escucha de notificaciones y acceso a los ajustes de la aplicación.
+- La versión se ajusta al hardware real Android 13/API 30 observado, manteniendo compilación y target API 35.
+
 ## 1.12.0 — 16/08/2026
 
 - Las cuatro capturas físicas identificaron una unidad Rockchip `rk3326_r`/`rk30sdk`, API efectiva 30, ABI
