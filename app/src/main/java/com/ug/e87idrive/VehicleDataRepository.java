@@ -17,6 +17,7 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     private final GpsSpeedProvider gps;
     private final DiagnosticEngine diagnostics;
     private final AndroidAutomotiveProvider automotive;
+    private final CanbusServiceProvider canbus;
     private final JancarCarProvider jancar;
     private final Map<VehicleField, String> lastSelections = new EnumMap<>(VehicleField.class);
     private final Map<VehicleField, Long> lastSelectionTimes = new EnumMap<>(VehicleField.class);
@@ -26,10 +27,16 @@ public final class VehicleDataRepository implements VehicleDataProvider {
         this.gps = gps;
         this.diagnostics = diagnostics;
         this.automotive = new AndroidAutomotiveProvider(context, diagnostics, onValuesChanged);
+        this.canbus = new CanbusServiceProvider(context, diagnostics, onValuesChanged);
         this.jancar = new JancarCarProvider(context, diagnostics, onValuesChanged);
     }
 
     @Override public VehicleValue<?> get(VehicleField field) {
+        VehicleValue<?> canbusValue = canbus.get(field);
+        if (canbusValue.isAvailable()
+                && (field != VehicleField.SPEED || canbusValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
+            return selected(field, canbusValue);
+        }
         VehicleValue<?> jancarValue = jancar.get(field);
         if (jancarValue.isAvailable()
                 && (field != VehicleField.SPEED || jancarValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
@@ -75,12 +82,13 @@ public final class VehicleDataRepository implements VehicleDataProvider {
         EnumSet<VehicleField> fields = EnumSet.noneOf(VehicleField.class);
         if (gps.getLastValue() != null) fields.add(VehicleField.SPEED);
         fields.addAll(jancar.supportedFields());
+        fields.addAll(canbus.supportedFields());
         fields.addAll(automotive.supportedFields());
         return Collections.unmodifiableSet(fields);
     }
 
-    @Override public void start() { gps.start(); automotive.start(); jancar.start(); }
-    @Override public void stop() { jancar.stop(); automotive.stop(); gps.stop(); }
+    @Override public void start() { gps.start(); automotive.start(); canbus.start(); jancar.start(); }
+    @Override public void stop() { jancar.stop(); canbus.stop(); automotive.stop(); gps.stop(); }
 
     public DiagnosticEngine diagnostics() { return diagnostics; }
     public JancarCarProvider.MaintenanceSnapshot maintenanceSnapshot() { return jancar.maintenanceSnapshot(); }
@@ -98,7 +106,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
                     .append(" · edad=").append(value.ageMs()).append(" ms");
             out.append('\n');
         }
-        out.append("Prioridad de velocidad: Jancar OEM verificado, Android Automotive y después GPS (máx. 10 s).\n\n");
+        out.append("Prioridad de velocidad: CanBusManager OEM verificado, Jancar OEM, Android Automotive y después GPS (máx. 10 s).\n\n");
+        out.append(canbus.capabilityReport()).append('\n');
         out.append(jancar.capabilityReport()).append('\n');
         out.append(gps.diagnosticReport());
         return out.toString();

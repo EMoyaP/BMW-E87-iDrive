@@ -2,7 +2,7 @@
 
 Fecha de revisión: 2026-08-16.
 
-## Validación 1.13.2 sobre las APK exportadas de la unidad
+## Validación 1.13.3 sobre las APK exportadas de la unidad
 
 - `com.jancar.services.car.CarService` y `com.jancar.services.radio.RadioService` se consumen mediante componentes,
   descriptores y transacciones getter comprobados en las APK exportadas. No se usa `BIND_AUTO_CREATE`, no se registra
@@ -17,7 +17,23 @@ Fecha de revisión: 2026-08-16.
   segundos. Esto evita sondeos nuevos y mantiene acotadas las escrituras: reutiliza los lectores de un segundo que ya
   actualizan la UI y registra inmediatamente solo conexiones, errores y cambios discretos.
 - QA limpia del 16/08/2026: `clean`, pruebas unitarias, Lint y `assembleDebug` correctos con target 35. El APK debug
-  1.13.2 ocupa 2.405.782 bytes, sin bibliotecas nativas nuevas ni servicio persistente propio.
+  1.13.2 ocupaba 2.405.782 bytes, sin bibliotecas nativas nuevas ni servicio persistente propio.
+- La lectura OEM añadida tampoco incorpora bibliotecas nativas ni un servicio persistente propio. El tamaño final se
+  mide en la APK generada y el coste de CPU queda limitado a sondeos Binder de solo lectura cada segundo mientras la app
+  está abierta.
+
+### Pista del home OEM y nuevo camino CAN
+
+El APK exacto `com.can.activity` contiene el servicio `com.can.ui.CanPopWind`, publicado con la acción
+`com.jancar.canservice`. Su Binder devuelve `ICanUI`; el método verificado `getCanService("CanBusManager")` devuelve
+`ICanBus`, cuyos getters `getDashBoardInfo`, `getCabinInfo` y `getLightInfo` son los que usa la nueva sonda.
+`DashBoardInfo` publica, entre otros, velocidad, autonomía, consumo medio, RPM, temperatura ambiente y refrigerante.
+Esta vía explica por qué los estilos originales del home podían mostrar velocidad aunque el `CarService` Jancar consultado
+por la app no entregase valores.
+
+La aplicación no inicia `com.can.activity`, no registra callbacks y no llama a setters. En hardware hay que confirmar que
+el servicio ya esté vivo y que el Binder acepte la conexión desde una app normal; si la unidad restringe ese acceso, el log
+mostrará el rechazo y continuarán las fuentes Jancar/GPS.
 
 ## Proyectos comparados
 

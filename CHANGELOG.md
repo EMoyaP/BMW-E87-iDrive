@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 1.13.3 — 16/08/2026
+
+- Se integró la pista del home OEM: el estilo original que muestra el coche recibe sus datos desde `com.can.activity`,
+  cuyo contrato exportado publica `ICanUI -> CanBusManager -> ICanBus`.
+- La aplicación enlaza ese servicio solo si ya está activo, sin `BIND_AUTO_CREATE`, y lee de forma pasiva
+  `getDashBoardInfo`, `getCabinInfo` y `getLightInfo`. Se incorporan velocidad, autonomía, consumo medio, RPM,
+  temperatura exterior, refrigerante, puertas, intermitentes y cinturones cuando la unidad los expone.
+- La prioridad queda: CanBusManager OEM, CarService Jancar, Android Automotive público y GPS solo para velocidad.
+  Se conserva el registro de procedencia y de los valores crudos para validar el resultado en la radio.
+- QA superada con tests unitarios, Lint y compilación debug. La validación final del Binder requiere probar la APK en la
+  unidad con el servicio CAN OEM activo; si el servicio no está publicado, se mantienen los respaldos anteriores.
+
 ## 1.13.2 — 16/08/2026
 
 - Se verificaron en las APK exportadas de esta unidad los contratos Binder de `CarService` y `RadioService`. El lector
