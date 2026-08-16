@@ -1,6 +1,6 @@
 # Investigación de proyectos públicos y rendimiento
 
-Fecha de revisión: 2026-08-15.
+Fecha de revisión: 2026-08-16.
 
 ## Proyectos comparados
 
@@ -12,10 +12,28 @@ Fecha de revisión: 2026-08-15.
 | [smartgauges/canbox](https://github.com/smartgauges/canbox) | Las cajas CAN pueden traducir puertas, PDC, iluminación y cámara, pero cada modelo utiliza su propio protocolo. | Separación entre datos del vehículo, transporte de canbox y presentación. | Ninguna trama se transmite desde esta app. |
 | [Android OBD Remote](https://github.com/darkspr1te/Android_obd_Remote) | Ejemplo de ingeniería inversa de la UART de una caja CAN externa concreta. | Método de correlación repetible y registro de cambios. | Su protocolo PSA/GPL no es el protocolo Hiworld de esta unidad. |
 | [UGasolineras](https://github.com/EMoyaP/UGasolineras) | Radio GPS configurable, Gasóleo A y 7 km predeterminados, precios MITECO y apertura de rutas. | Requisitos funcionales, producto inicial y radio inicial. | No se incorpora WebView/Leaflet, sondeo cada 30 s, WorkManager, datos EV ni motor de rutas: no son necesarios para esta tarjeta. |
+| [OpenRadioFM](https://github.com/kapi21/OpenRadioFM) | Publica AIDL y acciones de servicio para un motor de radio Jancar en ciertas unidades. | Confirma que existe una familia Binder Jancar y permite comprobar pasivamente si dos acciones se resuelven localmente. | No se copia el AIDL ni se enlaza el servicio: abrirlo o controlarlo afecta a la fuente de audio y el contrato de esta unidad aún no está confirmado. |
+| [Yecon CAN](https://github.com/wert3232/yecon/tree/master/packages/apps/CAN) | Un firmware Android antiguo usa el mismo paquete `com.can.activity` y modelos genéricos de puertas, freno, velocidad y temperatura. | Solo evidencia de posible linaje y vocabulario para buscar dentro del APK físico. | No contiene la clase exacta `CanBusContentProvider`, su contrato no coincide de forma demostrable y no ofrece una licencia reutilizable clara. |
 
 Hiworld documenta que algunas de sus integraciones muestran puertas, climatización, radar y temperatura, y proporciona
 un modo de depuración CAN para determinados productos. No publica un SDK Android abierto con el contrato exacto de
 JCRK01/CYA; por ello no se ha inventado ninguna API.
+
+## Resultado de la unidad física del 16/08/2026
+
+Cuatro capturas USB aportadas desde la radio coinciden en:
+
+- `Build.MANUFACTURER=rockchip`, modelo/dispositivo/producto `rk3326_r`, placa `rk30sdk`.
+- SDK 30, release declarado `13`, cuatro CPU, ABI exclusivamente `armeabi-v7a`, 4.096 MB de RAM y heap de 192 MB.
+- Sin característica `android.hardware.type.automotive` y sin clase `android.car.Car`.
+- `com.can.activity` instala `com.autoai.canbus.provider.CanBusContentProvider`.
+- `com.jancar.services` instala `CarService`, `RadioService`, `ClusterService` y `NavigationService`.
+- Ninguna captura pública produjo candidatos para puertas, freno de mano, cinturón o temperatura exterior.
+
+SDK 30 corresponde a Android 11. Por ello la aplicación mantiene `targetSdk 35`, pero todas las rutas ejecutadas en la
+radio se validan contra API 30 y no contra la etiqueta comercial. La lista oficial de firmware Hiworld incluye
+[`2696-H1H2BM030A-230208.iap`](https://www.hiworldtech.com/page158), compatible nominalmente con la familia BM030A,
+pero no publica un SDK Android o esquema del proveedor CAN.
 
 ## Decisiones aplicadas
 
@@ -109,4 +127,37 @@ Incluso entonces, el primer adaptador será exclusivamente de lectura. Cualquier
   y las cadenas se truncan a 240 caracteres, por lo que el almacenamiento y su lectura inicial quedan acotados.
 - En Android 15 se verificó una captura fuerte de prueba (`off → on`), la conservación tras finalizar el proceso y
   volver a abrir la app, su inclusión en el informe y el borrado con confirmación. El archivo de una entrada ocupó
-  526 bytes; el PSS se estabilizó en 46.392 KB y el APK debug ocupa 2.360.999 bytes.
+  526 bytes; el PSS se estabilizó en 46.392 KB y el APK debug 1.12.0 ocupa 2.380.248 bytes.
+
+## Extracción OEM pasiva y ordenador de a bordo (1.12.0)
+
+- `PackageManager` enumera autoridades, permisos y componentes sin iniciar procesos OEM. El exportador selecciona
+  paquetes por evidencias en sus nombres de paquete o componente (`canbus`, `canbox`, `CarService`, `vehicle`,
+  `cluster`, `backcar`, `mcu`) y añade los cinco consumidores principales observados.
+- Los APK se copian por bloques de 64 KiB en el ejecutor de E/S ya existente. El preparado del inventario también se
+  realiza en un hilo de prioridad mínima; no bloquea la UI ni mantiene un servicio residente.
+- Un error de lectura o escritura de un APK se registra y no cancela los restantes. Los archivos parciales se eliminan
+  cuando el proveedor SAF lo permite. Límites: 100 MB por APK y 250 MB por extracción.
+- La documentación oficial de Android define
+  [`RANGE_REMAINING`](https://developer.android.com/reference/android/car/VehiclePropertyIds#RANGE_REMAINING) en metros e
+  [`INSTANTANEOUS_FUEL_ECONOMY`](https://developer.android.com/reference/android/car/VehiclePropertyIds#INSTANTANEOUS_FUEL_ECONOMY)
+  en L/100 km. Solo se leen en AAOS público; no se extrapolan al proveedor Jancar.
+- `Location.getSpeed()` solo es válido cuando `hasSpeed()` es verdadero y se expresa en m/s. La app mantiene esa
+  comprobación, convierte a km/h y descarta el fallback GPS después de diez segundos. El informe técnico nunca exporta
+  las coordenadas del vehículo.
+
+## Identificación y actualización de firmware
+
+- La búsqueda pública de `rk3326_r` conduce al árbol de dispositivo Rockchip Android R/11, que además registra el cambio
+  de esa plataforma a API 30. Esto refuerza que la base real de la radio es Android 11 aunque el release se presente
+  como 13 o el producto se comercialice como 15:
+  [árbol RK3326 Android R](https://gitlab.com/rockchip_android_r/rk/device/rockchip/rk3326).
+- `rk3326_r` identifica una plataforma de referencia, no una imagen instalable universal. Una actualización también
+  depende de particiones, device tree, pantalla, audio, MCU, periféricos y firma del integrador Jancar/CYA.
+- Hiworld publica `2696-H1H2BM030A-230208.iap` para la familia BM030A, pero ese `.iap` corresponde al CANBUS Hiworld,
+  no al sistema Android Rockchip. No debe confundirse ni instalarse automáticamente como firmware de radio.
+- La exportación completa conserva los APK de actualización y todos los manifests/componentes visibles, además de
+  `Build.FINGERPRINT`, `Build.DISPLAY`, parche, kernel, bibliotecas, funciones y archivos públicos de propiedades/OTA.
+  No ejecuta `SYSTEM_UPDATE_SETTINGS`; únicamente registra qué actividad lo resolvería.
+- El límite para la USB indicada de 20 GB es 16 GB totales, 2 GB por archivo y bloques de E/S de 64 KiB. No se mantienen
+  APK en memoria, no se accede a datos de usuario y cada fallo se registra sin cancelar el resto.

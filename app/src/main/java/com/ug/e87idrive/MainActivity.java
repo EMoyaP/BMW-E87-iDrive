@@ -74,6 +74,8 @@ public class MainActivity extends Activity {
     private boolean foreground;
     private boolean usbCaptureRunning;
     private boolean startUsbCaptureAfterPicker;
+    private boolean exportOemAfterPicker;
+    private boolean exportFullAfterPicker;
     private int mediaRefreshTick;
 
     @Override public void onCreate(Bundle state) {
@@ -625,7 +627,7 @@ public class MainActivity extends Activity {
         boolean autoHide = vehiclePreferences.getBoolean("auto_hide", false);
         int shown = 0;
         VehicleField[] dashboardFields = {VehicleField.SPEED, VehicleField.RANGE,
-                VehicleField.CONSUMPTION, VehicleField.CLIMATE_TEMPERATURE};
+                VehicleField.CONSUMPTION, VehicleField.EXTERIOR_TEMPERATURE};
         for (VehicleField field : dashboardFields) {
             String value = vehicleValue(field);
             if (autoHide && value == null) continue;
@@ -661,18 +663,25 @@ public class MainActivity extends Activity {
         headingText.setGravity(Gravity.CENTER_VERTICAL);
         headingText.setPadding(dp(10), 0, 0, 0);
         heading.addView(headingText, lp(0, -1, 1));
+        heading.setOnClickListener(v -> diagnosticModal());
         statusBar.addView(heading, lp(dp(256), -1));
-        statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
 
         VehicleField[] fields = {VehicleField.LIGHTS, VehicleField.PARKING_BRAKE,
                 VehicleField.SEATBELT, VehicleField.DOORS};
+        java.util.List<VehicleField> active = new java.util.ArrayList<>();
         for (VehicleField field : fields) {
+            if (VehicleStatusPolicy.isActive(field, vehicleValue(field))) active.add(field);
+        }
+        if (!active.isEmpty()) statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
+        for (int i = 0; i < active.size(); i++) {
+            VehicleField field = active.get(i);
             LinearLayout.LayoutParams params = lp(0, -1, 1);
             statusBar.addView(statusTile(field), params);
-            statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
+            if (i < active.size() - 1) statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         }
-        LinearLayout.LayoutParams diagnosticParams = lp(0, -1, .95f);
-        statusBar.addView(diagnosticStatusTile(), diagnosticParams);
+        if (active.isEmpty()) statusBar.addView(new View(this), lp(0, -1, 1));
+        statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
+        statusBar.addView(statusToolButton(), lp(dp(58), -1));
     }
 
     private String vehicleValue(VehicleField field) {
@@ -747,19 +756,15 @@ public class MainActivity extends Activity {
         return item;
     }
 
-    private View diagnosticStatusTile() {
-        LinearLayout item = horizontal();
-        item.setGravity(Gravity.CENTER_VERTICAL);
-        item.setPadding(dp(8), dp(2), dp(5), dp(2));
-        StatusIconView icon = new StatusIconView(this, StatusIconKind.DIAGNOSTIC, BLUE);
-        icon.setContentDescription("Abrir diagnóstico CANBUS");
-        item.addView(icon, lp(dp(31), dp(31)));
-        TextView copy = txt("Avisos  —", 10, MUTED, false);
-        copy.setGravity(Gravity.CENTER_VERTICAL);
-        copy.setPadding(dp(7), 0, 0, 0);
-        item.addView(copy, lp(0, -1, 1));
-        item.setOnClickListener(v -> diagnosticModal());
-        return item;
+    private View statusToolButton() {
+        FrameLayout button = new FrameLayout(this);
+        button.setForegroundGravity(Gravity.CENTER);
+        button.setBackground(slotBg());
+        button.setContentDescription("Abrir diagnóstico y herramientas");
+        StatusIconView wrench = new StatusIconView(this, StatusIconKind.DIAGNOSTIC, BLUE);
+        button.addView(wrench, frameLp(dp(34), dp(34), Gravity.CENTER));
+        button.setOnClickListener(v -> diagnosticModal());
+        return button;
     }
 
     private String statusSentence(VehicleField field, String value) {
@@ -858,8 +863,9 @@ public class MainActivity extends Activity {
                 + "No transmite CAN, no escribe UART y no cambia ajustes OEM.", 12, ACCENT, false);
         warning.setPadding(dp(14), dp(8), dp(14), dp(8));
         box.addView(warning);
-        TextView reportView = txt(buildDiagnosticReport(), 11, TEXT, false);
+        TextView reportView = txt(diagnostics.buildScreenSummary(), 12, TEXT, false);
         reportView.setTextIsSelectable(true);
+        reportView.setPadding(dp(14), dp(8), dp(14), dp(8));
         ScrollView reportScroll = new ScrollView(this);
         reportScroll.addView(reportView);
         box.addView(reportScroll, lp(-1, 0, 1));
@@ -879,9 +885,15 @@ public class MainActivity extends Activity {
         usbStatus.setGravity(Gravity.CENTER_VERTICAL);
         Button usb = dialogButton(usbCaptureRunning ? "USB DEBUG · ACTIVO" : "USB DEBUG");
         usbRow.addView(usbStatus, lp(0, dp(48), 1));
-        usbRow.addView(usb, lp(dp(230), dp(48)));
+        usbRow.addView(usb, lp(dp(240), dp(48)));
         box.addView(usbRow);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Diagnóstico JCRK01 / CYA")
+        LinearLayout extractionRow = horizontal();
+        Button exportOem = dialogButton("EXPORTAR RADIO / CAN");
+        Button exportFull = dialogButton("EXPORTACIÓN COMPLETA");
+        extractionRow.addView(exportOem, lp(0, dp(48), 1));
+        extractionRow.addView(exportFull, lp(0, dp(48), 1));
+        box.addView(extractionRow);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Diagnóstico de la unidad")
                 .setView(box).setPositiveButton("CERRAR", null).create();
         start.setOnClickListener(v -> chooseCorrelation(dialog, reportView, start, stop));
         stop.setOnClickListener(v -> {
@@ -898,10 +910,12 @@ public class MainActivity extends Activity {
         export.setOnClickListener(v -> saveDiagnostic(true));
         share.setOnClickListener(v -> shareDiagnostic());
         usb.setOnClickListener(v -> usbDiagnosticMenu(reportView, start, stop, usb, usbStatus));
+        exportOem.setOnClickListener(v -> requestOemExport(exportOem));
+        exportFull.setOnClickListener(v -> requestFullExport());
         dialog.setOnShowListener(v -> {
             stop.setEnabled(diagnostics.isCorrelationRunning());
             start.setEnabled(!diagnostics.isCorrelationRunning());
-            resize(dialog, .86f, .88f);
+            resize(dialog, .86f, .84f);
         });
         dialog.show();
     }
@@ -920,8 +934,10 @@ public class MainActivity extends Activity {
         }
         String[] options = usbCaptureRunning
                 ? new String[]{"Detener y guardar captura", "Guardar snapshot ahora"}
-                : new String[]{"Abrir asistente visual", "Ver candidatos guardados", "Guardar informe ahora",
-                "Cambiar carpeta USB", "Olvidar autorización USB"};
+                : new String[]{"Exportar datos OEM (solo lectura)",
+                "Exportar inventario completo + todas las APK", "Abrir asistente visual",
+                "Ver candidatos guardados", "Guardar informe ahora", "Cambiar carpeta USB",
+                "Olvidar autorización USB"};
         new AlertDialog.Builder(this).setTitle("USB DEBUG")
                 .setItems(options, (d, which) -> {
                     if (usbCaptureRunning) {
@@ -930,10 +946,12 @@ public class MainActivity extends Activity {
                         }
                         else if (which == 1) saveUsbSnapshot();
                     } else {
-                        if (which == 0) showUsbDebugWizard(reportView, start, stop, usb, usbStatus);
-                        else if (which == 1) showStoredCandidates();
-                        else if (which == 2) saveUsbSnapshot();
-                        else if (which == 3) selectUsbDirectory(false);
+                        if (which == 0) requestOemExport(null);
+                        else if (which == 1) requestFullExport();
+                        else if (which == 2) showUsbDebugWizard(reportView, start, stop, usb, usbStatus);
+                        else if (which == 3) showStoredCandidates();
+                        else if (which == 4) saveUsbSnapshot();
+                        else if (which == 5) selectUsbDirectory(false);
                         else {
                             usbDiagnostics.forgetDirectory();
                             usbStatus.setText(usbDiagnostics.directorySummary());
@@ -1021,6 +1039,123 @@ public class MainActivity extends Activity {
     private void saveUsbSnapshot() {
         usbDiagnostics.saveReport("snapshot", buildUsbSnapshotReport(),
                 this::usbCallback);
+    }
+
+    private void requestOemExport(Button trigger) {
+        if (!usbDiagnostics.hasDirectoryPermission()) {
+            exportOemAfterPicker = true;
+            exportFullAfterPicker = false;
+            startUsbCaptureAfterPicker = false;
+            new AlertDialog.Builder(this)
+                    .setTitle("Autorizar memoria USB")
+                    .setMessage("Primero elige la carpeta IDRIVE_DEBUG de la memoria USB. Después volverá a "
+                            + "aparecer la confirmación de exportación OEM.")
+                    .setPositiveButton("SELECCIONAR USB", (d, w) -> selectUsbDirectory(false))
+                    .setNegativeButton("CANCELAR", (d, w) -> exportOemAfterPicker = false)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Exportar información OEM")
+                .setMessage("Se guardará un inventario legible y se copiarán los APK instalados relacionados con "
+                        + "CAN/vehículo: CAN, servicios, consumidores, launcher, radio y ajustes.\n\n"
+                        + "La app no los ejecuta, no consulta el proveedor CAN, no enlaza CarService y no escribe "
+                        + "CAN, UART ni ajustes OEM. Los APK no deben publicarse en GitHub.")
+                .setPositiveButton("EXPORTAR A USB", (d, w) -> performOemExport(trigger))
+                .setNeutralButton("EXPORTAR TODO", (d, w) -> requestFullExport())
+                .setNegativeButton("CANCELAR", null)
+                .show();
+    }
+
+    private void requestFullExport() {
+        if (!usbDiagnostics.hasDirectoryPermission()) {
+            exportFullAfterPicker = true;
+            exportOemAfterPicker = false;
+            startUsbCaptureAfterPicker = false;
+            new AlertDialog.Builder(this)
+                    .setTitle("Autorizar memoria USB")
+                    .setMessage("Elige la carpeta IDRIVE_DEBUG de la USB de 20 GB. Después volverá a aparecer la "
+                            + "confirmación de inventario completo.")
+                    .setPositiveButton("SELECCIONAR USB", (d, w) -> selectUsbDirectory(false))
+                    .setNegativeButton("CANCELAR", (d, w) -> exportFullAfterPicker = false)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Exportación completa de la radio")
+                .setMessage("Se inventariarán todos los paquetes, componentes, permisos, funciones, bibliotecas y "
+                        + "datos públicos de compilación. También se copiarán todos los APK y splits legibles.\n\n"
+                        + "Puede tardar varios minutos. Límite de seguridad: 16 GB en total y 2 GB por archivo. "
+                        + "No incluye datos privados, cuentas, bases de datos, particiones, MCU ni firmware interno "
+                        + "Hiworld. No retires la USB hasta ver el resultado.")
+                .setPositiveButton("COPIAR TODO A USB", (d, w) -> performFullExport())
+                .setNegativeButton("CANCELAR", null)
+                .show();
+    }
+
+    private void performFullExport() {
+        AlertDialog progress = new AlertDialog.Builder(this)
+                .setTitle("Preparando inventario completo")
+                .setMessage("Analizando paquetes y copiando APK a la USB. Puede tardar varios minutos.\n\n"
+                        + "Mantén iDrive abierto y no desconectes la memoria.")
+                .setCancelable(false)
+                .create();
+        progress.show();
+        Thread prepare = new Thread(() -> {
+            OemPackageInspector.FullExportPlan plan = diagnostics.buildFullExportPlan();
+            String report = plan.report + "\n\nDATOS CAN/ORDENADOR DE A BORDO\n\n"
+                    + diagnostics.buildOemExportReport() + "\n\n" + vehicleData.diagnosticReport();
+            usbDiagnostics.exportFullPackageBundle(report, plan.artifacts, (success, message) ->
+                    runOnUiThread(() -> {
+                        if (progress.isShowing()) progress.dismiss();
+                        new AlertDialog.Builder(this)
+                                .setTitle(success ? "Copia completa terminada" : "Copia completa incompleta")
+                                .setMessage(message + "\n\nPaquetes visibles: " + plan.packageCount
+                                        + " · datos APK candidatos: " + formatStorageBytes(plan.readableBytes)
+                                        + (success ? "\n\nEnvíame e87_firmware_inventory, e87_firmware_export_result "
+                                        + "y los oem_*.apk. No publiques los APK OEM en GitHub."
+                                        : "\n\nConsulta el informe de recuperación y repite con la USB conectada."))
+                                .setPositiveButton("ACEPTAR", null)
+                                .show();
+                    }));
+        }, "e87-full-firmware-export");
+        prepare.setPriority(Thread.MIN_PRIORITY);
+        prepare.start();
+    }
+
+    private static String formatStorageBytes(long bytes) {
+        if (bytes >= 1024L * 1024L * 1024L) {
+            return String.format(Locale.ROOT, "%.2f GB", bytes / (1024d * 1024d * 1024d));
+        }
+        return String.format(Locale.ROOT, "%.1f MB", bytes / (1024d * 1024d));
+    }
+
+    private void performOemExport(Button trigger) {
+        if (trigger != null) {
+            trigger.setEnabled(false);
+            trigger.setText("EXPORTANDO…");
+        }
+        Thread prepare = new Thread(() -> {
+            String report = diagnostics.buildOemExportReport()
+                    + "\n\nINFORME GENERAL DE LA APP\n\n" + buildDiagnosticReport();
+            usbDiagnostics.exportOemBundle(report, diagnostics.oemExportArtifacts(), (success, message) ->
+                    runOnUiThread(() -> {
+                        if (trigger != null) {
+                            trigger.setEnabled(true);
+                            trigger.setText("EXPORTAR RADIO / CAN");
+                        }
+                        new AlertDialog.Builder(this)
+                                .setTitle(success ? "Exportación terminada" : "Exportación incompleta")
+                                .setMessage(message + (success
+                                        ? "\n\nExpulsa la USB de forma segura y envíame los archivos e87_oem_inventory, "
+                                        + "e87_oem_export_result y los oem_*.apk para analizarlos."
+                                        : "\n\nEl informe de recuperación permanece en el almacenamiento interno de la app."))
+                                .setPositiveButton("ACEPTAR", null)
+                                .show();
+                    }));
+        }, "e87-oem-export-prepare");
+        prepare.setPriority(Thread.MIN_PRIORITY);
+        prepare.start();
     }
 
     private void selectUsbDirectory(boolean beginCaptureAfterSelection) {
@@ -1316,24 +1451,35 @@ public class MainActivity extends Activity {
 
     private void requestCarSpeedIfNeeded() {
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) return;
-        String permission = "android.car.permission.CAR_SPEED";
-        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return;
+        String[] permissions = {"android.car.permission.CAR_SPEED", "android.car.permission.CAR_ENERGY",
+                "android.car.permission.CAR_MILEAGE_3P"};
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String permission : permissions) {
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
+        }
+        if (missing.isEmpty()) return;
         if (uiPreferences.getBoolean("asked_car_speed", false)) return;
         uiPreferences.edit().putBoolean("asked_car_speed", true).apply();
-        requestPermissions(new String[]{permission}, 101);
+        requestPermissions(missing.toArray(new String[0]), 101);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_USB_DIAGNOSTIC_DIRECTORY) return;
         boolean begin = startUsbCaptureAfterPicker;
+        boolean exportOem = exportOemAfterPicker;
+        boolean exportFull = exportFullAfterPicker;
         startUsbCaptureAfterPicker = false;
+        exportOemAfterPicker = false;
+        exportFullAfterPicker = false;
         if (resultCode != RESULT_OK || !usbDiagnostics.acceptDirectoryResult(data)) {
             toast("No se autorizó una carpeta escribible para USB DEBUG");
             return;
         }
         toast("Carpeta de diagnóstico autorizada");
         if (begin) showUsbDebugWizard(null, null, null, null, null);
+        else if (exportOem) requestOemExport(null);
+        else if (exportFull) requestFullExport();
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
@@ -1404,7 +1550,8 @@ public class MainActivity extends Activity {
     }
 
     private String buildDiagnosticReport() {
-        return diagnostics.buildReport() + "\n\n" + media.radioDiagnostic(apps.getPackage("radio"));
+        return diagnostics.buildReport() + "\n\n" + vehicleData.diagnosticReport()
+                + "\n\n" + media.radioDiagnostic(apps.getPackage("radio"));
     }
 
     private void applyPalette() {
@@ -1433,8 +1580,12 @@ public class MainActivity extends Activity {
 
     private void resize(AlertDialog dialog, float width, float height) {
         Window window = dialog.getWindow();
-        if (window != null) window.setLayout((int) (getResources().getDisplayMetrics().widthPixels * width),
-                (int) (getResources().getDisplayMetrics().heightPixels * height));
+        if (window != null) {
+            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+            int landscapeWidth = Math.max(metrics.widthPixels, metrics.heightPixels);
+            int landscapeHeight = Math.min(metrics.widthPixels, metrics.heightPixels);
+            window.setLayout((int) (landscapeWidth * width), (int) (landscapeHeight * height));
+        }
     }
 
     private Button dialogButton(String label) {
@@ -1615,12 +1766,18 @@ public class MainActivity extends Activity {
         }
 
         private void drawDiagnostic(Canvas canvas, float cx, float cy, float s) {
-            canvas.drawCircle(cx, cy, s * .34f, paint);
-            path.reset();
-            path.moveTo(cx - s * .17f, cy);
-            path.lineTo(cx - s * .04f, cy + s * .13f);
-            path.lineTo(cx + s * .20f, cy - s * .15f);
-            canvas.drawPath(path, paint);
+            paint.setStrokeWidth(Math.max(2f, s * .085f));
+            canvas.drawLine(cx - s * .18f, cy + s * .18f, cx + s * .14f, cy - s * .14f, paint);
+            canvas.drawCircle(cx - s * .24f, cy + s * .25f, s * .075f, paint);
+            float jawX = cx + s * .20f;
+            float jawY = cy - s * .20f;
+            float radius = s * .18f;
+            RectF jaw = new RectF(jawX - radius, jawY - radius, jawX + radius, jawY + radius);
+            canvas.drawArc(jaw, 55f, 250f, false, paint);
+            canvas.drawLine(jawX + s * .10f, jawY - s * .14f,
+                    jawX + s * .25f, jawY - s * .25f, paint);
+            canvas.drawLine(jawX + s * .14f, jawY + s * .10f,
+                    jawX + s * .25f, jawY + s * .02f, paint);
         }
 
         private void drawVehicle(Canvas canvas, float w, float h) {

@@ -40,6 +40,7 @@ public final class DiagnosticEngine {
     private static final int MAX_EVENTS = 500;
     private final Context context;
     private final DiagnosticCandidateStore candidateStore;
+    private final OemPackageInspector oemInspector;
     private final Map<String, String> observed = new LinkedHashMap<>();
     private final List<DiagnosticEvent> events = new ArrayList<>();
     private BroadcastReceiver receiver;
@@ -66,6 +67,7 @@ public final class DiagnosticEngine {
     public DiagnosticEngine(Context context) {
         this.context = context.getApplicationContext();
         candidateStore = new DiagnosticCandidateStore(this.context);
+        oemInspector = new OemPackageInspector(this.context);
     }
 
     public void startPassiveProbe() {
@@ -193,6 +195,28 @@ public final class DiagnosticEngine {
 
     public synchronized void clearStoredCandidates() { candidateStore.clear(); }
 
+    public String buildScreenSummary() { return oemInspector.buildScreenSummary(); }
+
+    public String buildOemExportReport() {
+        return "BMW E87 iDrive · extracción OEM pasiva solicitada por el usuario\n"
+                + "Generado: " + formatTime(System.currentTimeMillis()) + "\n"
+                + "Build.MANUFACTURER=" + Build.MANUFACTURER + "\n"
+                + "Build.MODEL=" + Build.MODEL + "\n"
+                + "Build.DEVICE=" + Build.DEVICE + "\n"
+                + "Build.PRODUCT=" + Build.PRODUCT + "\n"
+                + "Build.BOARD=" + Build.BOARD + "\n"
+                + "SDK=" + Build.VERSION.SDK_INT + "  Android=" + Build.VERSION.RELEASE + "\n\n"
+                + oemInspector.buildReport();
+    }
+
+    public List<OemPackageInspector.ExportArtifact> oemExportArtifacts() {
+        return oemInspector.exportArtifacts();
+    }
+
+    public OemPackageInspector.FullExportPlan buildFullExportPlan() {
+        return oemInspector.buildFullExportPlan();
+    }
+
     public String getObservedValue(String key) {
         // Deliberately empty until a real JCRK01/CYA mapping is identified on this unit.
         return observed.get("vehicle." + key);
@@ -211,6 +235,8 @@ public final class DiagnosticEngine {
                 .append(Build.VERSION.RELEASE).append("  app=").append(context.getPackageName()).append("\n\n");
 
         appendRuntimeProfile(out);
+
+        out.append(oemInspector.buildReport()).append('\n');
 
         out.append(platformVehicleReport).append('\n');
 

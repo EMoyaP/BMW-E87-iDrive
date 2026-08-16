@@ -21,10 +21,11 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.11.1 — validación previa a hardware**.
+Versión actual: **1.12.0 — validación en la unidad RK3326**.
 
-El proyecto compila e instala en un emulador Android 15/API 35 a 1280×720. La instalación definitiva en la radio está
-pendiente de:
+La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
+Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
+pantallas comerciales, pero la compatibilidad real de la app debe tratarse como Android API 30. Sigue pendiente:
 
 - sustituir la firma debug por una clave release permanente;
 - endurecer la caducidad de las posiciones y velocidades GPS;
@@ -53,7 +54,19 @@ No se publica por ahora una APK de producción. Los APK locales y las claves de 
   autoguardado cada cinco segundos, copia interna de recuperación e historial persistente de candidatos. La
   clasificación ayuda a interpretar únicamente las señales que JCRK01/CYA exponga realmente a Android; no declara
   códigos propietarios como confirmados ni activa un mapeo automáticamente.
+- Botón `EXPORTAR RADIO / CAN` que copia bajo confirmación el inventario y todos los APK instalados identificados por
+  sus metadatos como CAN, vehículo, `CarService`, cluster, MCU o marcha atrás. No ejecuta ni enlaza código OEM y limita
+  la copia a 100 MB por archivo y 250 MB por sesión.
+- Botón independiente `EXPORTACIÓN COMPLETA` para una USB de 20 GB: guarda huella de compilación, parche, kernel,
+  funciones, bibliotecas, permisos y componentes; copia todos los APK/splits legibles y los `build.prop`/certificados
+  OTA públicos. El límite es 2 GB por archivo y 16 GB en total. No copia datos privados ni particiones, MCU o Hiworld.
 - Sonda opcional, exclusivamente de lectura, para propiedades públicas de Android Automotive.
+- Ordenador de a bordo con procedencia explícita para velocidad, autonomía, consumo y temperatura exterior. En AAOS
+  público reconoce `RANGE_REMAINING` e `INSTANTANEOUS_FUEL_ECONOMY`; en esta radio permanecerán sin dato hasta confirmar
+  el contrato Jancar/CAN real. El informe GPS omite coordenadas y registra proveedor, edad, precisión y velocidad.
+- Barra inferior contextual: conserva el encabezado y solo añade luces encendidas, freno aplicado, cinturón sin
+  abrochar o puertas abiertas cuando existe una lectura real. Los estados normales y los valores `—` no ocupan espacio;
+  una llave inglesa fija a la derecha abre el menú de diagnóstico.
 - Exportación local del informe de diagnóstico.
 
 ### Asistente visual USB DEBUG
@@ -91,8 +104,9 @@ no es evidencia suficiente para utilizarlo en JCRK01/CYA/Hiworld.
 |---|---|
 | Vehículo | BMW 118d E87 LCI, 2010 |
 | Equipo OEM | Business CD/AUX, climatización dual y PDC trasero |
-| Unidad Android | 9 pulgadas, 1280×720, Android 15, 4/64 GB |
-| Plataforma interna | JCRK01/CYA; identificación de SoC pendiente de diagnóstico físico |
+| Unidad Android | 9 pulgadas, 1280×720, 4/64 GB; comercializada como Android 15 |
+| Plataforma efectiva | Rockchip `rk3326_r`/`rk30sdk`, API 30, release declarado `13`, 4 CPU, `armeabi-v7a` |
+| Software OEM observado | Jancar IVI Services, `CanBusContentProvider`, `CarService`, `NavigationService` y Autochips |
 | MCU | MM40-0-2025.07.23_15:06 |
 | CANBUS | Hiworld BM03.10, familia H1H2BM030A |
 | Perfil configurado | Hiworld BMW X1 2009–2015 All |
@@ -112,6 +126,8 @@ carcasa o nombre comercial similar.
 | `MediaSessionProvider` | Metadatos multimedia y de radio mediante API estándar |
 | `BluetoothDeviceProvider` | Estado Bluetooth público, sin escaneo ni conexión |
 | `DiagnosticEngine` | Inventario y correlación pasiva del firmware |
+| `OemPackageInspector` | Metadatos OEM dirigidos y selección segura de APK CAN/vehículo para USB |
+| `UsbDiagnosticRecorder` | TXT, recuperación interna y copia binaria acotada a una carpeta autorizada |
 | `UsbDebugWizardDialog` | Asistente visual, temporización y candidatos en directo |
 | `DiagnosticCandidateClassifier` | Puntuación reproducible sin convertir candidatos en mapeos |
 | `DiagnosticCandidateStore` | Historial interno atómico y acotado de evidencias entre sesiones |
@@ -174,13 +190,16 @@ La guía completa está en [Pruebas en la radio](docs/PRUEBAS_EN_LA_RADIO.md).
 
 ## Rendimiento de referencia
 
-Medido en emulador Android 15/API 35 a 1280×720; la radio física puede comportarse de otra forma.
+Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unidad física.
 
 | Medida | Resultado observado |
 |---|---:|
-| APK debug | 2.360.999 bytes |
+| APK debug | 2.380.248 bytes |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
+| PSS observado en radio física | 42,4–45,0 MB |
+| Heap por aplicación en radio | 192 MB |
+| RAM física detectada | 4.096 MB |
 | Arranque frío | 1,47–1,53 s |
 | Caché Diésel/150 km en Madrid | 143.522 bytes |
 | Descarga nacional Diésel | 4.302.377 bytes |
@@ -191,7 +210,7 @@ plataformas comparadas y los límites de reutilización.
 
 ## Limitaciones conocidas
 
-- Android 15 convencional no equivale a Android Automotive.
+- La unidad física no declara Android Automotive y su API efectiva 30 no coincide con su versión comercial.
 - Puertas, luces, cinturón, climatización y PDC suelen llegar a aplicaciones OEM mediante puentes propietarios.
 - Una APK instalada por el usuario normalmente no puede obtener permisos AAOS privilegiados para puertas o luces.
 - Android Auto o una radio OEM pueden no publicar su reproducción como MediaSession del sistema Android.

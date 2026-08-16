@@ -114,6 +114,7 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         if (!running || propertyManager == null) return;
         long now = System.currentTimeMillis();
         readVehicleSpeed(now);
+        readBoardComputer(now);
         readExteriorTemperature(now);
         readReverse(now);
         readParkingBrake(now);
@@ -143,6 +144,28 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         diagnostics.recordVehicleObservation("speed_mps", metersPerSecond,
                 VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
         put(VehicleField.SPEED, kmh, now);
+    }
+
+    private void readBoardComputer(long now) {
+        Number remainingMeters = asNumber(readGlobal("RANGE_REMAINING", Float.class));
+        if (remainingMeters == null) {
+            clear(VehicleField.RANGE);
+        } else {
+            double rangeKm = Math.max(0d, remainingMeters.doubleValue() / 1_000d);
+            diagnostics.recordVehicleObservation("range_remaining.meters", remainingMeters,
+                    VehicleSource.ANDROID_AUTOMOTIVE.name() + ".RANGE_REMAINING");
+            put(VehicleField.RANGE, rangeKm, now);
+        }
+
+        Number consumption = asNumber(readGlobal("INSTANTANEOUS_FUEL_ECONOMY", Float.class));
+        if (consumption == null) {
+            clear(VehicleField.CONSUMPTION);
+        } else {
+            double litersPer100Km = Math.max(0d, consumption.doubleValue());
+            diagnostics.recordVehicleObservation("fuel_economy.l_per_100km", litersPer100Km,
+                    VehicleSource.ANDROID_AUTOMOTIVE.name() + ".INSTANTANEOUS_FUEL_ECONOMY");
+            put(VehicleField.CONSUMPTION, litersPer100Km, now);
+        }
     }
 
     private void readExteriorTemperature(long now) {

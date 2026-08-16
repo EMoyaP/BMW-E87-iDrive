@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 1.12.0 — 16/08/2026
+
+- Las cuatro capturas físicas identificaron una unidad Rockchip `rk3326_r`/`rk30sdk`, API efectiva 30, ABI
+  `armeabi-v7a`, 4 GB de RAM, heap de 192 MB y 42,4–45,0 MB PSS. La app diferencia ahora la etiqueta de firmware
+  Android 13/15 de la compatibilidad real Android 11/API 30.
+- El diagnóstico inicial se sustituyó por un resumen legible en la pantalla de 9 pulgadas. El informe completo sigue
+  disponible al exportar o compartir y añade autoridades, permisos, procesos y componentes OEM detallados.
+- Se añadió `EXPORTAR DATOS OEM`: con confirmación y una carpeta SAF autorizada guarda el inventario y copia los APK
+  instalados relacionados con CAN, vehículo, `CarService`, cluster, MCU o marcha atrás. La extracción no carga APK,
+  no enlaza servicios, no consulta URI desconocidas y continúa si un archivo individual falla.
+- La selección incluye tanto los núcleos observados (`com.can.activity`, `com.jancar.services`, launcher, radio y
+  ajustes) como otros paquetes detectados por sus componentes. La copia está limitada a 100 MB por archivo y 250 MB
+  por sesión; los binarios OEM no se publican en el repositorio.
+- El informe separa ordenador de a bordo y GPS: muestra procedencia, edad y disponibilidad de velocidad, autonomía,
+  consumo, temperatura exterior y temperatura de motor; del GPS registra proveedor, activación, precisión y velocidad,
+  pero omite coordenadas.
+- La sonda AAOS pública reconoce también `RANGE_REMAINING` (metros convertidos a km) e
+  `INSTANTANEOUS_FUEL_ECONOMY` (L/100 km). En la radio Jancar convencional no se usan como sustituto del puente OEM.
+- La cuarta fila del ordenador de a bordo utiliza temperatura exterior en vez de la consigna del climatizador.
+- La investigación encontró implementaciones públicas del Binder de radio Jancar, pero no el contrato exacto de
+  `CanBusContentProvider`/`CarService`; por seguridad todavía no se inicia ni enlaza ninguno.
+- La pantalla presenta dos acciones distintas: `EXPORTAR RADIO / CAN` para una extracción rápida y
+  `EXPORTACIÓN COMPLETA` para inventariar y copiar todos los APK/splits legibles. La segunda admite hasta 16 GB en la
+  USB de 20 GB indicada y mantiene un límite FAT32-compatible de 2 GB por archivo.
+- El inventario completo añade fingerprint, build, parche, kernel, ABI, funciones, bibliotecas, paquetes de
+  actualización y resolución pasiva de `SYSTEM_UPDATE_SETTINGS`. Copia además los `build.prop`, `prop.default` y
+  certificados OTA públicos que Android permita leer; nunca intenta particiones, datos privados, MCU o firmware Hiworld.
+- La barra `ESTADO DEL VEHÍCULO` deja de dibujar cinco estados vacíos. Solo aparecen estados reales y activos: luces
+  encendidas, freno aplicado, cinturón sin abrochar y puertas abiertas. Estados normales o no disponibles quedan
+  ocultos; una llave inglesa compacta y fija a la derecha abre el diagnóstico y sus herramientas.
+
 ## 1.11.1 — 15/08/2026
 
 - Los candidatos medios y fuertes del asistente `USB DEBUG` se guardan de forma atómica en el almacenamiento privado

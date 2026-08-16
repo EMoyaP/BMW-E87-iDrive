@@ -13,6 +13,7 @@ import android.os.storage.StorageVolume;
 import android.provider.DocumentsContract;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.OutputStream;
@@ -30,6 +31,10 @@ import java.util.concurrent.Executors;
 public final class UsbDiagnosticRecorder {
     private static final String PREFS = "usb_diagnostic";
     private static final String KEY_TREE_URI = "tree_uri";
+    private static final long MAX_OEM_FILE_BYTES = 100L * 1024L * 1024L;
+    private static final long MAX_OEM_TOTAL_BYTES = 250L * 1024L * 1024L;
+    private static final long MAX_FULL_FILE_BYTES = 2L * 1024L * 1024L * 1024L;
+    private static final long MAX_FULL_TOTAL_BYTES = 16L * 1024L * 1024L * 1024L;
 
     public interface Callback {
         void complete(boolean success, String message);
@@ -200,6 +205,85 @@ public final class UsbDiagnosticRecorder {
         });
     }
 
+    /**
+     * Copies a narrow, caller-provided OEM artifact allowlist to the user-approved directory.
+     * No package is executed, loaded or modified. Limits keep the operation suitable for this head unit.
+     */
+    public void exportOemBundle(String report, List<OemPackageInspector.ExportArtifact> artifacts,
+                                Callback callback) {
+        exportPackageBundle("oem", "OEM", report, artifacts, MAX_OEM_FILE_BYTES,
+                MAX_OEM_TOTAL_BYTES, callback);
+    }
+
+    public void exportFullPackageBundle(String report, List<OemPackageInspector.ExportArtifact> artifacts,
+                                        Callback callback) {
+        exportPackageBundle("firmware", "Inventario completo", report, artifacts, MAX_FULL_FILE_BYTES,
+                MAX_FULL_TOTAL_BYTES, callback);
+    }
+
+    private void exportPackageBundle(String prefix, String displayName, String report,
+                                     List<OemPackageInspector.ExportArtifact> artifacts,
+                                     long maxFileBytes, long maxTotalBytes, Callback callback) {
+        writeRecovery(report);
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date());
+        io.execute(() -> {
+            int copied = 0;
+            int skipped = 0;
+            long totalBytes = 0L;
+            StringBuilder details = new StringBuilder();
+            try {
+                Uri directory = configuredDirectory();
+                if (directory == null) throw new IllegalStateException("No hay una carpeta USB autorizada");
+                String reportName = "e87_" + prefix + "_inventory_" + timestamp + ".txt";
+                Uri reportDocument = createDocument(directory, "text/plain", reportName);
+                if (reportDocument == null) throw new IllegalStateException("No se pudo crear el inventario OEM");
+                writeDocument(reportDocument, report);
+                for (OemPackageInspector.ExportArtifact artifact : artifacts) {
+                    File source = artifact.source;
+                    long length = source.length();
+                    if (!source.isFile() || !source.canRead() || length <= 0
+                            || length > maxFileBytes || totalBytes + length > maxTotalBytes) {
+                        skipped++;
+                        details.append("OMITIDO ").append(artifact.packageName).append(" · ")
+                                .append(length).append(" bytes\n");
+                        continue;
+                    }
+                    String filename = timestamp + "_" + artifact.filename;
+                    Uri target = null;
+                    try {
+                        target = createDocument(directory, artifact.mimeType, filename);
+                        if (target == null) throw new IllegalStateException("el proveedor no creó el archivo");
+                        copyDocument(source, target);
+                        copied++;
+                        totalBytes += length;
+                        details.append("COPIADO ").append(filename).append(" · ").append(length).append(" bytes\n");
+                    } catch (Exception fileError) {
+                        skipped++;
+                        details.append("OMITIDO ").append(filename).append(" · ")
+                                .append(shortError(fileError)).append('\n');
+                        if (target != null) {
+                            try { DocumentsContract.deleteDocument(context.getContentResolver(), target); }
+                            catch (Exception ignored) {}
+                        }
+                    }
+                }
+                String resultName = "e87_" + prefix + "_export_result_" + timestamp + ".txt";
+                Uri resultDocument = createDocument(directory, "text/plain", resultName);
+                if (resultDocument != null) {
+                    writeDocument(resultDocument, displayName.toUpperCase(Locale.ROOT) + " · EXPORTACIÓN PASIVA\nArchivos copiados=" + copied
+                            + " · omitidos=" + skipped + " · bytes=" + totalBytes + "\n\n" + details);
+                }
+                lastError = "";
+                notifyCallback(callback, true, displayName + " exportado: inventario + " + copied + " archivos"
+                        + (skipped == 0 ? "" : " · " + skipped + " omitidos"));
+            } catch (Exception error) {
+                lastError = shortError(error);
+                notifyCallback(callback, false, "No se pudo completar " + displayName.toLowerCase(Locale.ROOT)
+                        + ": " + lastError);
+            }
+        });
+    }
+
     public String lastError() { return lastError; }
 
     public String recoveryReport() {
@@ -254,9 +338,13 @@ public final class UsbDiagnosticRecorder {
     }
 
     private Uri createDocument(Uri treeUri, String filename) throws Exception {
+        return createDocument(treeUri, "text/plain", filename);
+    }
+
+    private Uri createDocument(Uri treeUri, String mimeType, String filename) throws Exception {
         String documentId = DocumentsContract.getTreeDocumentId(treeUri);
         Uri parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
-        return DocumentsContract.createDocument(context.getContentResolver(), parent, "text/plain", filename);
+        return DocumentsContract.createDocument(context.getContentResolver(), parent, mimeType, filename);
     }
 
     private void writeDocument(Uri document, String report) throws Exception {
@@ -267,6 +355,18 @@ public final class UsbDiagnosticRecorder {
                 writer.write(report);
                 writer.flush();
             }
+        }
+    }
+
+    private void copyDocument(File source, Uri document) throws Exception {
+        ContentResolver resolver = context.getContentResolver();
+        byte[] buffer = new byte[64 * 1024];
+        try (FileInputStream input = new FileInputStream(source);
+             OutputStream output = resolver.openOutputStream(document, "w")) {
+            if (output == null) throw new IllegalStateException("No se pudo abrir el destino USB");
+            int count;
+            while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+            output.flush();
         }
     }
 

@@ -8,6 +8,9 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 
+import java.util.List;
+import java.util.Locale;
+
 public class GpsSpeedProvider implements LocationListener {
     public interface Listener { void onLocation(Location location, Double kmh); }
     private final Context context;
@@ -38,6 +41,44 @@ public class GpsSpeedProvider implements LocationListener {
     public long getLastTimestamp() { return timestamp; }
     public Location getLastLocation() { return lastLocation == null ? null : new Location(lastLocation); }
     public long getLocationTimestamp() { return locationTimestamp; }
+
+    public String diagnosticReport() {
+        StringBuilder out = new StringBuilder(700);
+        out.append("GPS ANDROID ESTÁNDAR · SOLO LECTURA\n");
+        boolean granted = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        out.append("permiso ubicación precisa=").append(granted).append('\n');
+        if (lm == null) {
+            out.append("LocationManager=no disponible\n");
+            return out.toString();
+        }
+        try {
+            List<String> providers = lm.getAllProviders();
+            out.append("proveedores=").append(providers).append('\n');
+            out.append("gps habilitado=").append(lm.isProviderEnabled(LocationManager.GPS_PROVIDER)).append('\n');
+            if (providers.contains(LocationManager.NETWORK_PROVIDER)) {
+                out.append("network habilitado=")
+                        .append(lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)).append('\n');
+            }
+        } catch (Exception error) {
+            out.append("estado proveedores no legible=").append(error.getClass().getSimpleName()).append('\n');
+        }
+        Location fix = lastLocation;
+        if (fix == null) {
+            out.append("última posición=(ninguna)\n");
+        } else {
+            long age = Math.max(0L, System.currentTimeMillis() - locationTimestamp);
+            out.append("última posición: proveedor=").append(fix.getProvider())
+                    .append(" · edad=").append(age).append(" ms")
+                    .append(" · precisión=").append(fix.hasAccuracy()
+                            ? String.format(Locale.ROOT, "%.1f m", fix.getAccuracy()) : "no publicada")
+                    .append(" · velocidad=").append(fix.hasSpeed()
+                            ? String.format(Locale.ROOT, "%.1f km/h", Math.max(0f, fix.getSpeed() * 3.6f))
+                            : "no publicada").append('\n');
+            out.append("coordenadas omitidas del diagnóstico por privacidad\n");
+        }
+        return out.toString();
+    }
 
     @Override public void onLocationChanged(Location l) {
         lastLocation = new Location(l);

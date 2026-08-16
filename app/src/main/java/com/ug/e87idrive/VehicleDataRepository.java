@@ -47,4 +47,22 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     @Override public void stop() { automotive.stop(); gps.stop(); }
 
     public DiagnosticEngine diagnostics() { return diagnostics; }
+
+    public String diagnosticReport() {
+        StringBuilder out = new StringBuilder(1_000);
+        out.append("ORDENADOR DE A BORDO · PROCEDENCIA\n");
+        VehicleField[] fields = {VehicleField.SPEED, VehicleField.RANGE, VehicleField.CONSUMPTION,
+                VehicleField.EXTERIOR_TEMPERATURE, VehicleField.ENGINE_TEMPERATURE};
+        for (VehicleField field : fields) {
+            VehicleValue<?> value = get(field);
+            out.append(field.label()).append(" = ");
+            if (!value.isAvailable()) out.append("no expuesto");
+            else out.append(value.value()).append(" · fuente=").append(value.source())
+                    .append(" · edad=").append(value.ageMs()).append(" ms");
+            out.append('\n');
+        }
+        out.append("Prioridad de velocidad: vehículo verificado (máx. 3 s) y después GPS (máx. 10 s).\n\n");
+        out.append(gps.diagnosticReport());
+        return out.toString();
+    }
 }
