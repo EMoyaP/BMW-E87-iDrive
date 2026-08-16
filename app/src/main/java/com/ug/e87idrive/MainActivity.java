@@ -54,7 +54,8 @@ public class MainActivity extends Activity {
     private LinearLayout root, vehicleRows, statusBar;
     private LinearLayout fuelRows;
     private GridLayout quickGrid;
-    private TextView clock, date, mediaTitle, mediaArtist, mediaSource, mediaState, fuelHeading, fuelFooter;
+    private TextView clock, date, mediaTitle, mediaArtist, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
+    private TextView mediaPrevious, mediaPlayPause, mediaNext;
     private TextView phoneDevice, phoneConnection;
     private TextView radioBand, radioStation, radioDetail;
     private ImageView mediaArtwork;
@@ -264,21 +265,26 @@ public class MainActivity extends Activity {
     private View fuelWidget() {
         LinearLayout box = card();
         box.setPadding(dp(8), dp(6), dp(8), dp(5));
+        LinearLayout fuelHeader = horizontal();
+        fuelHeader.setGravity(Gravity.CENTER_VERTICAL);
         fuelHeading = txt("GASOLINERAS", 12, BLUE, true);
         fuelHeading.setGravity(Gravity.CENTER);
         fuelHeading.setOnClickListener(v -> fuelSettingsModal());
-        box.addView(fuelHeading, lp(-1, dp(18)));
+        fuelHeader.addView(fuelHeading, lp(0, dp(18), 1));
+        fuelRefresh = txt("↻", 19, BLUE, false);
+        fuelRefresh.setGravity(Gravity.CENTER);
+        fuelRefresh.setContentDescription("Actualizar precios de gasolineras");
+        fuelRefresh.setOnClickListener(v -> refreshFuelNow());
+        fuelHeader.addView(fuelRefresh, lp(dp(29), dp(22)));
+        box.addView(fuelHeader, lp(-1, dp(22)));
         fuelRows = vertical();
         fuelRows.setGravity(Gravity.CENTER);
         box.addView(fuelRows, lp(-1, 0, 1));
         fuelFooter = txt("GPS · DATOS OFICIALES", 8, MUTED, false);
         fuelFooter.setGravity(Gravity.CENTER);
         fuelFooter.setMaxLines(1);
-        fuelFooter.setContentDescription("Tocar para actualizar los precios de gasolineras");
-        fuelFooter.setOnClickListener(v -> {
-            fuelStations.forceRefresh();
-            toast("Actualizando precios cuando haya conexión");
-        });
+        fuelFooter.setContentDescription("Última actualización. Tocar para actualizar los precios de gasolineras");
+        fuelFooter.setOnClickListener(v -> refreshFuelNow());
         box.addView(fuelFooter, lp(-1, dp(14)));
         box.setOnLongClickListener(v -> { fuelSettingsModal(); return true; });
         refreshFuelWidget(fuelStations.getSnapshot());
@@ -305,9 +311,23 @@ public class MainActivity extends Activity {
             fuelRows.addView(fuelStationRow("MÁS CERCANA", snapshot.nearest, BLUE), lp(-1, 0, 1));
         }
         String freshness = snapshot.cached ? "CACHÉ" : "MITECO";
-        String dateText = compactDatasetDate(snapshot.datasetDate);
-        fuelFooter.setText(String.format(spanish, "%d KM · %s%s",
-                snapshot.radiusKm, freshness, dateText));
+        String updated = compactFuelUpdatedAt(snapshot.updatedAt);
+        fuelFooter.setText(String.format(spanish, "↻%s · %d KM · %s",
+                updated, snapshot.radiusKm, freshness));
+        if (fuelRefresh != null) {
+            fuelRefresh.setText(snapshot.loading ? "…" : "↻");
+            fuelRefresh.setTextColor(snapshot.loading ? ACCENT : BLUE);
+        }
+    }
+
+    private void refreshFuelNow() {
+        fuelStations.forceRefresh();
+        toast("Actualizando precios sin cerrar la pantalla");
+    }
+
+    private String compactFuelUpdatedAt(long timestamp) {
+        if (timestamp <= 0L) return "—";
+        return new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(timestamp));
     }
 
     private String compactDatasetDate(String value) {
@@ -396,9 +416,14 @@ public class MainActivity extends Activity {
         LinearLayout footer = horizontal();
         mediaState = txt("", 10, BLUE, true);
         footer.addView(mediaState, lp(0, dp(30), 1));
-        TextView controls = txt("◀       ▶       ▶|", 17, TEXT, false);
-        controls.setGravity(Gravity.CENTER);
-        footer.addView(controls, lp(dp(190), dp(30)));
+        LinearLayout controls = horizontal();
+        mediaPrevious = mediaControlButton("◀", "Canción anterior", MediaSessionProvider.Command.PREVIOUS);
+        mediaPlayPause = mediaControlButton("▶", "Reproducir o pausar", MediaSessionProvider.Command.TOGGLE);
+        mediaNext = mediaControlButton("▶|", "Canción siguiente", MediaSessionProvider.Command.NEXT);
+        controls.addView(mediaPrevious, lp(dp(47), dp(30)));
+        controls.addView(mediaPlayPause, lp(dp(47), dp(30)));
+        controls.addView(mediaNext, lp(dp(47), dp(30)));
+        footer.addView(controls, lp(dp(145), dp(30)));
         box.addView(footer);
         TextView hint = txt("Tocar: abrir app · mantener: asignar", 9, MUTED, false);
         box.addView(hint);
@@ -409,11 +434,14 @@ public class MainActivity extends Activity {
 
     private void refreshMedia() {
         if (mediaTitle == null) return;
-        MediaSessionProvider.Snapshot snapshot = media.refresh();
+        // When SpeedPlay/Android Auto publishes its standard session, it takes precedence so
+        // the card follows the music actually routed through Android Auto (for example Spotify).
+        MediaSessionProvider.Snapshot snapshot = media.refreshPreferred(apps.getPackage("auto"));
         mediaTitle.setText(snapshot.title);
         mediaArtist.setText(snapshot.artist);
         mediaSource.setText(snapshot.source);
         mediaState.setText(snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
+        updateMediaControls(snapshot);
         if (snapshot.artwork != null) {
             mediaArtwork.setColorFilter(null);
             mediaArtwork.setPadding(0, 0, 0, 0);
@@ -423,6 +451,36 @@ public class MainActivity extends Activity {
             mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
             mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
         }
+    }
+
+    private TextView mediaControlButton(String glyph, String description, MediaSessionProvider.Command command) {
+        TextView button = txt(glyph, 16, TEXT, false);
+        button.setGravity(Gravity.CENTER);
+        button.setBackground(slotBg());
+        button.setContentDescription(description);
+        button.setOnClickListener(v -> {
+            String autoPackage = apps.getPackage("auto");
+            if (!media.control(command, autoPackage)) {
+                toast("La reproducción actual no expone este control estándar");
+                return;
+            }
+            handler.postDelayed(this::refreshMedia, 250L);
+        });
+        return button;
+    }
+
+    private void updateMediaControls(MediaSessionProvider.Snapshot snapshot) {
+        if (mediaPrevious == null || mediaPlayPause == null || mediaNext == null) return;
+        setMediaControl(mediaPrevious, snapshot.canPrevious, "◀");
+        setMediaControl(mediaPlayPause, snapshot.canPlayPause,
+                "REPRODUCIENDO".equals(snapshot.state) ? "Ⅱ" : "▶");
+        setMediaControl(mediaNext, snapshot.canNext, "▶|");
+    }
+
+    private void setMediaControl(TextView view, boolean enabled, String glyph) {
+        view.setText(glyph);
+        view.setEnabled(enabled);
+        view.setAlpha(enabled ? 1f : .35f);
     }
 
     private View vehicleWidget() {
@@ -538,22 +596,28 @@ public class MainActivity extends Activity {
             radioBand.setText("RADIO");
             radioStation.setText("—");
             radioStation.setTextColor(TEXT);
+            radioStation.setOnClickListener(null);
+            radioStation.setContentDescription("Radio sin configurar");
             radioDetail.setText("Sin configurar");
             return;
         }
         MediaSessionProvider.Snapshot snapshot = media.refreshForPackage(packageName);
         if (!snapshot.sessionAvailable) {
             radioBand.setText("RADIO");
-            radioStation.setText("—");
-            radioStation.setTextColor(TEXT);
+            radioStation.setText("▶");
+            radioStation.setTextColor(ACCENT);
+            radioStation.setContentDescription("Abrir radio OEM");
+            radioStation.setOnClickListener(v -> launchRole("radio"));
             radioDetail.setText(snapshot.accessGranted
-                    ? apps.label(packageName) + "\nEmisora no expuesta"
-                    : "Permite acceso multimedia");
+                    ? "Toca ▶ para abrir " + apps.label(packageName)
+                    : "Permite acceso multimedia · toca ▶");
             return;
         }
         radioBand.setText(radioBand(snapshot.title + " " + snapshot.artist));
         radioStation.setText(snapshot.title);
         radioStation.setTextColor(BLUE);
+        radioStation.setOnClickListener(null);
+        radioStation.setContentDescription("Emisora actual: " + snapshot.title);
         radioDetail.setText(snapshot.artist);
     }
 
@@ -666,8 +730,8 @@ public class MainActivity extends Activity {
         heading.setOnClickListener(v -> diagnosticModal());
         statusBar.addView(heading, lp(dp(256), -1));
 
-        VehicleField[] fields = {VehicleField.LIGHTS, VehicleField.PARKING_BRAKE,
-                VehicleField.SEATBELT, VehicleField.DOORS};
+        VehicleField[] fields = {VehicleField.LIGHTS, VehicleField.REVERSE,
+                VehicleField.PARKING_BRAKE, VehicleField.SEATBELT, VehicleField.DOORS};
         java.util.List<VehicleField> active = new java.util.ArrayList<>();
         for (VehicleField field : fields) {
             if (VehicleStatusPolicy.isActive(field, vehicleValue(field))) active.add(field);
@@ -680,6 +744,8 @@ public class MainActivity extends Activity {
             if (i < active.size() - 1) statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         }
         if (active.isEmpty()) statusBar.addView(new View(this), lp(0, -1, 1));
+        statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
+        statusBar.addView(statusMaintenanceButton(), lp(dp(58), -1));
         statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         statusBar.addView(statusToolButton(), lp(dp(58), -1));
     }
@@ -767,6 +833,22 @@ public class MainActivity extends Activity {
         return button;
     }
 
+    private View statusMaintenanceButton() {
+        JancarCarProvider.MaintenanceSnapshot snapshot = vehicleData.maintenanceSnapshot();
+        int tone = !snapshot.known ? BLUE : snapshot.active.isEmpty()
+                ? Color.rgb(79, 205, 132) : ACCENT;
+        FrameLayout button = new FrameLayout(this);
+        button.setForegroundGravity(Gravity.CENTER);
+        button.setBackground(slotBg());
+        button.setContentDescription(!snapshot.known ? "Avisos de mantenimiento: datos aún no disponibles"
+                : snapshot.active.isEmpty() ? "Avisos de mantenimiento: sin avisos activos"
+                : "Avisos de mantenimiento: " + snapshot.active.size() + " activos");
+        StatusIconView icon = new StatusIconView(this, StatusIconKind.MAINTENANCE, tone);
+        button.addView(icon, frameLp(dp(34), dp(34), Gravity.CENTER));
+        button.setOnClickListener(v -> maintenanceModal());
+        return button;
+    }
+
     private String statusSentence(VehicleField field, String value) {
         String label = statusLabel(field);
         if (value == null) return label + "  —";
@@ -775,6 +857,7 @@ public class MainActivity extends Activity {
                 ? "Freno activado" : "Freno liberado";
         if (field == VehicleField.SEATBELT) return "Cinturón " + value.toLowerCase(new Locale("es", "ES"));
         if (field == VehicleField.DOORS) return "Puertas " + value.toLowerCase(new Locale("es", "ES"));
+        if (field == VehicleField.REVERSE) return "Marcha atrás activa";
         return label + " " + value;
     }
 
@@ -788,6 +871,7 @@ public class MainActivity extends Activity {
         if (field == VehicleField.LIGHTS) return StatusIconKind.LIGHTS;
         if (field == VehicleField.PARKING_BRAKE) return StatusIconKind.BRAKE;
         if (field == VehicleField.SEATBELT) return StatusIconKind.SEATBELT;
+        if (field == VehicleField.REVERSE) return StatusIconKind.REVERSE;
         return StatusIconKind.DOORS;
     }
 
@@ -809,6 +893,7 @@ public class MainActivity extends Activity {
         if (field == VehicleField.DOORS) {
             return normalized.contains("cerrad") ? Color.rgb(79, 205, 132) : Color.rgb(245, 166, 35);
         }
+        if (field == VehicleField.REVERSE) return Color.rgb(79, 205, 132);
         return BLUE;
     }
 
@@ -853,6 +938,53 @@ public class MainActivity extends Activity {
                 .setNeutralButton("DIAGNÓSTICO", (d, w) -> diagnosticModal())
                 .setNegativeButton("CANCELAR", null).create();
         showSized(dialog, .78f, .84f);
+    }
+
+    private void maintenanceModal() {
+        JancarCarProvider.MaintenanceSnapshot snapshot = vehicleData.maintenanceSnapshot();
+        LinearLayout box = vertical();
+        box.setPadding(dp(18), dp(12), dp(18), dp(8));
+        TextView summary = txt(!snapshot.known ? "Lectura OEM aún no disponible"
+                : snapshot.active.isEmpty() ? "Sin avisos activos publicados por la unidad"
+                : snapshot.active.size() + " aviso(s) activo(s) publicado(s) por la unidad",
+                15, !snapshot.known ? BLUE : snapshot.active.isEmpty()
+                        ? Color.rgb(79, 205, 132) : ACCENT, true);
+        summary.setPadding(0, 0, 0, dp(10));
+        box.addView(summary);
+        TextView explanation = txt("Solo se muestran señales y códigos que el servicio OEM expone en lectura. "
+                + "No se inventan diagnósticos ni se borra ningún aviso.", 11, MUTED, false);
+        explanation.setPadding(0, 0, 0, dp(12));
+        box.addView(explanation);
+        if (!snapshot.known) {
+            box.addView(txt(snapshot.message, 13, MUTED, false));
+        } else if (snapshot.active.isEmpty()) {
+            box.addView(txt("✓ No hay avisos activos de neumáticos o informes OEM en esta lectura.",
+                    14, Color.rgb(79, 205, 132), false));
+        } else {
+            for (JancarCarProvider.MaintenanceAlert alert : snapshot.active) {
+                int tone = alert.severity == JancarCarProvider.MaintenanceAlert.Severity.WARNING
+                        ? ACCENT : BLUE;
+                TextView row = txt("• " + alert.category + " · " + alert.text, 14, tone, false);
+                row.setPadding(dp(4), dp(8), dp(4), dp(8));
+                row.setBackground(fuelRowBg(tone));
+                box.addView(row, lp(-1, -2));
+            }
+        }
+        if (!snapshot.information.isEmpty()) {
+            TextView label = txt("INFORMACIÓN OEM", 12, BLUE, true);
+            label.setPadding(0, dp(16), 0, dp(5));
+            box.addView(label);
+            for (String info : snapshot.information) {
+                TextView row = txt("• " + info, 12, TEXT, false);
+                row.setPadding(dp(4), dp(4), dp(4), dp(4));
+                box.addView(row);
+            }
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(box);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Mantenimiento y avisos")
+                .setView(scroll).setPositiveButton("CERRAR", null).create();
+        showSized(dialog, .72f, .76f);
     }
 
     private void diagnosticModal() {
@@ -1693,7 +1825,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private enum StatusIconKind { VEHICLE, LIGHTS, BRAKE, SEATBELT, DOORS, DIAGNOSTIC }
+    private enum StatusIconKind { VEHICLE, LIGHTS, BRAKE, SEATBELT, DOORS, REVERSE, MAINTENANCE, DIAGNOSTIC }
 
     /** Dashboard-style vehicle pictograms drawn locally, with no dependence on vendor assets. */
     private static final class StatusIconView extends View {
@@ -1721,6 +1853,8 @@ public class MainActivity extends Activity {
             else if (kind == StatusIconKind.BRAKE) drawBrake(canvas, cx, cy, s);
             else if (kind == StatusIconKind.SEATBELT) drawSeatbelt(canvas, w, h);
             else if (kind == StatusIconKind.DOORS) drawDoors(canvas, w, h);
+            else if (kind == StatusIconKind.REVERSE) drawReverse(canvas, cx, cy, s);
+            else if (kind == StatusIconKind.MAINTENANCE) drawMaintenance(canvas, w, h);
             else if (kind == StatusIconKind.DIAGNOSTIC) drawDiagnostic(canvas, cx, cy, s);
             else drawVehicle(canvas, w, h);
         }
@@ -1778,6 +1912,28 @@ public class MainActivity extends Activity {
                     jawX + s * .25f, jawY - s * .25f, paint);
             canvas.drawLine(jawX + s * .14f, jawY + s * .10f,
                     jawX + s * .25f, jawY + s * .02f, paint);
+        }
+
+        private void drawReverse(Canvas canvas, float cx, float cy, float s) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(s * .58f);
+            canvas.drawText("R", cx, cy + s * .20f, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1.5f, s * .05f));
+            canvas.drawLine(cx + s * .20f, cy - s * .28f, cx + s * .43f, cy - s * .28f, paint);
+            canvas.drawLine(cx + s * .43f, cy - s * .28f, cx + s * .34f, cy - s * .38f, paint);
+            canvas.drawLine(cx + s * .43f, cy - s * .28f, cx + s * .34f, cy - s * .18f, paint);
+        }
+
+        private void drawMaintenance(Canvas canvas, float w, float h) {
+            paint.setStrokeWidth(Math.max(1.6f, Math.min(w, h) * .055f));
+            for (int i = 0; i < 3; i++) {
+                float y = h * (.28f + i * .23f);
+                canvas.drawCircle(w * .24f, y, Math.min(w, h) * .045f, paint);
+                canvas.drawLine(w * .40f, y, w * .78f, y, paint);
+            }
         }
 
         private void drawVehicle(Canvas canvas, float w, float h) {

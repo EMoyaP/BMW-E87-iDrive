@@ -17,6 +17,10 @@ final class VehicleStatusPolicy {
             if (value.contains("liberad") || value.contains("inactiv") || value.equals("off")) return false;
             return value.contains("activ") || value.contains("aplic") || value.contains("puesto") || value.equals("on");
         }
+        if (field == VehicleField.REVERSE) {
+            if (value.contains("inactiv") || value.contains("liberad") || value.equals("off")) return false;
+            return value.contains("activ") || value.contains("puesta") || value.equals("on");
+        }
         if (field == VehicleField.SEATBELT) {
             return value.contains("sin abrochar") || value.contains("desabroch")
                     || value.contains("no abroch") || value.contains("unbuckled");

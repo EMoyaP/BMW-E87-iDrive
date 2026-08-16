@@ -28,10 +28,19 @@ public class GpsSpeedProvider implements LocationListener {
     public void start() {
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) return;
         try {
-            if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return;
-            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,0,this);
-            Location last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-            if (last != null) onLocationChanged(last);
+            if (lm == null) return;
+            Location newest = null;
+            for (String provider : new String[]{LocationManager.GPS_PROVIDER,
+                    LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER}) {
+                if (!lm.isProviderEnabled(provider)) continue;
+                // GPS is preferred for driving speed; network/passive make the fuel card useful
+                // immediately while the receiver is acquiring a satellite fix.
+                lm.requestLocationUpdates(provider, provider.equals(LocationManager.GPS_PROVIDER) ? 1000 : 5000,
+                        0, this);
+                Location last = lm.getLastKnownLocation(provider);
+                if (last != null && (newest == null || last.getTime() > newest.getTime())) newest = last;
+            }
+            if (newest != null) onLocationChanged(newest);
         } catch(Exception ignored) {}
     }
 
@@ -59,6 +68,10 @@ public class GpsSpeedProvider implements LocationListener {
             if (providers.contains(LocationManager.NETWORK_PROVIDER)) {
                 out.append("network habilitado=")
                         .append(lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)).append('\n');
+            }
+            if (providers.contains(LocationManager.PASSIVE_PROVIDER)) {
+                out.append("pasivo habilitado=")
+                        .append(lm.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)).append('\n');
             }
         } catch (Exception error) {
             out.append("estado proveedores no legible=").append(error.getClass().getSimpleName()).append('\n');

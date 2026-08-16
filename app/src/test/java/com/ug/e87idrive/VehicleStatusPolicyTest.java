@@ -12,6 +12,7 @@ public class VehicleStatusPolicyTest {
         assertFalse(VehicleStatusPolicy.isActive(VehicleField.PARKING_BRAKE, "Liberado"));
         assertFalse(VehicleStatusPolicy.isActive(VehicleField.SEATBELT, "Abrochado"));
         assertFalse(VehicleStatusPolicy.isActive(VehicleField.DOORS, "Cerradas"));
+        assertFalse(VehicleStatusPolicy.isActive(VehicleField.REVERSE, "Inactiva"));
     }
 
     @Test public void activeVehicleStatesAreVisible() {
@@ -20,5 +21,6 @@ public class VehicleStatusPolicyTest {
         assertTrue(VehicleStatusPolicy.isActive(VehicleField.PARKING_BRAKE, "Activado"));
         assertTrue(VehicleStatusPolicy.isActive(VehicleField.SEATBELT, "Sin abrochar"));
         assertTrue(VehicleStatusPolicy.isActive(VehicleField.DOORS, "1 abierta"));
+        assertTrue(VehicleStatusPolicy.isActive(VehicleField.REVERSE, "Activa"));
     }
 }

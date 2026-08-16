@@ -11,17 +11,19 @@ import android.media.session.PlaybackState;
 import java.util.List;
 
 /**
- * Reads metadata exposed by Android's documented MediaSession API only. The app
- * never sends media buttons and never communicates with Android Auto or OEM APIs.
+ * Uses Android's documented MediaSession API only. Transport controls are sent
+ * exclusively to a session that explicitly publishes the matching standard action.
+ * No OEM radio, CAN, UART, Android Auto or proprietary protocol is accessed.
  */
 public final class MediaSessionProvider {
     public static final class Snapshot {
         public final String title, artist, source, state;
         public final Bitmap artwork;
-        public final boolean accessGranted, sessionAvailable;
+        public final boolean accessGranted, sessionAvailable, canPlayPause, canPrevious, canNext;
 
         Snapshot(String title, String artist, String source, String state, Bitmap artwork,
-                 boolean accessGranted, boolean sessionAvailable) {
+                 boolean accessGranted, boolean sessionAvailable, boolean canPlayPause,
+                 boolean canPrevious, boolean canNext) {
             this.title = title;
             this.artist = artist;
             this.source = source;
@@ -29,8 +31,13 @@ public final class MediaSessionProvider {
             this.artwork = artwork;
             this.accessGranted = accessGranted;
             this.sessionAvailable = sessionAvailable;
+            this.canPlayPause = canPlayPause;
+            this.canPrevious = canPrevious;
+            this.canNext = canNext;
         }
     }
+
+    public enum Command { TOGGLE, PREVIOUS, NEXT }
 
     private final Context context;
     private Snapshot last = unavailable(false);
@@ -46,6 +53,20 @@ public final class MediaSessionProvider {
             if (controllers == null || controllers.isEmpty()) return last = unavailable(true);
 
             MediaController controller = preferredController(controllers);
+            return last = fromController(controller);
+        } catch (SecurityException ignored) {
+            return last = unavailable(false);
+        } catch (Exception ignored) {
+            return last = unavailable(false);
+        }
+    }
+
+    /** Prefers the assigned Android Auto bridge when it exposes a MediaSession, then falls back safely. */
+    public Snapshot refreshPreferred(String packageName) {
+        try {
+            List<MediaController> controllers = activeSessions();
+            MediaController controller = findController(controllers, packageName);
+            if (controller == null) return last = unavailable(true);
             return last = fromController(controller);
         } catch (SecurityException ignored) {
             return last = unavailable(false);
@@ -71,7 +92,7 @@ public final class MediaSessionProvider {
                 String detail = notification.text.isEmpty() || notification.text.equals(title)
                         ? "Información publicada por la radio" : notification.text;
                 return new Snapshot(title, detail, packageName, "NOTIFICACIÓN",
-                        null, true, true);
+                        null, true, true, false, false, false);
             }
             return radioUnavailable(true, packageName);
         } catch (SecurityException ignored) {
@@ -97,10 +118,60 @@ public final class MediaSessionProvider {
         return out.toString();
     }
 
+    /**
+     * Sends a documented transport command only when the currently published
+     * MediaSession advertises it. This works with Spotify/SpeedPlay if that
+     * Android Auto session is exposed; it intentionally never guesses radio APIs.
+     */
+    public boolean control(Command command, String preferredPackage) {
+        try {
+            List<MediaController> controllers = activeSessions();
+            MediaController controller = findController(controllers, preferredPackage);
+            if (controller == null) return false;
+            PlaybackState playback = controller.getPlaybackState();
+            long actions = playback == null ? 0L : playback.getActions();
+            MediaController.TransportControls controls = controller.getTransportControls();
+            if (command == Command.PREVIOUS && (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L) {
+                controls.skipToPrevious();
+                return true;
+            }
+            if (command == Command.NEXT && (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L) {
+                controls.skipToNext();
+                return true;
+            }
+            if (command == Command.TOGGLE) {
+                boolean playing = playback != null && playback.getState() == PlaybackState.STATE_PLAYING;
+                if (playing && ((actions & PlaybackState.ACTION_PAUSE) != 0L
+                        || (actions & PlaybackState.ACTION_PLAY_PAUSE) != 0L)) {
+                    controls.pause();
+                    return true;
+                }
+                if (!playing && ((actions & PlaybackState.ACTION_PLAY) != 0L
+                        || (actions & PlaybackState.ACTION_PLAY_PAUSE) != 0L)) {
+                    controls.play();
+                    return true;
+                }
+            }
+        } catch (SecurityException ignored) {
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     private List<MediaController> activeSessions() {
         MediaSessionManager manager = (MediaSessionManager) context.getSystemService(Context.MEDIA_SESSION_SERVICE);
         ComponentName listener = new ComponentName(context, MediaNotificationListener.class);
         return manager == null ? null : manager.getActiveSessions(listener);
+    }
+
+    private static MediaController findController(List<MediaController> controllers, String preferredPackage) {
+        if (controllers == null || controllers.isEmpty()) return null;
+        if (preferredPackage != null && !preferredPackage.trim().isEmpty()) {
+            for (MediaController controller : controllers) {
+                if (preferredPackage.equals(controller.getPackageName())) return controller;
+            }
+        }
+        return preferredController(controllers);
     }
 
     private Snapshot fromController(MediaController controller) {
@@ -114,8 +185,14 @@ public final class MediaSessionProvider {
                 MediaMetadata.METADATA_KEY_ARTIST,
                 MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION,
                 MediaMetadata.METADATA_KEY_GENRE);
+        PlaybackState playback = controller.getPlaybackState();
+        long actions = playback == null ? 0L : playback.getActions();
+        boolean canPlayPause = (actions & (PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+                | PlaybackState.ACTION_PLAY_PAUSE)) != 0L;
         return new Snapshot(title, artist, controller.getPackageName(), state(controller),
-                artwork(metadata), true, true);
+                artwork(metadata), true, true, canPlayPause,
+                (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L,
+                (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L);
     }
 
     private static MediaController preferredController(List<MediaController> controllers) {
@@ -167,7 +244,7 @@ public final class MediaSessionProvider {
     private static Snapshot unavailable(boolean granted) {
         return new Snapshot(granted ? "No hay reproducción activa" : "Acceso multimedia pendiente",
                 granted ? "Abre Spotify, radio u otra app" : "Actívalo en Ajustes para leer carátula y título",
-                "MediaSession estándar", "", null, granted, false);
+                "MediaSession estándar", "", null, granted, false, false, false, false);
     }
 
     private static Snapshot radioUnavailable(boolean granted, String packageName) {
@@ -175,6 +252,6 @@ public final class MediaSessionProvider {
                 granted ? "La aplicación OEM no publica datos estándar"
                         : "Activa el acceso multimedia en Ajustes",
                 packageName == null ? "Radio sin asignar" : packageName,
-                "", null, granted, false);
+                "", null, granted, false, false, false, false);
     }
 }

@@ -69,12 +69,15 @@ public final class FuelStationProvider {
         public final int radiusKm;
         public final Station cheapest, nearest;
         public final boolean loading, cached;
+        /** Local time when this cache was actually refreshed, not the provider's dataset date. */
+        public final long updatedAt;
         Snapshot(String fuelLabel, int radiusKm, String datasetDate, String message,
-                 Station cheapest, Station nearest, boolean loading, boolean cached) {
+                 Station cheapest, Station nearest, boolean loading, boolean cached, long updatedAt) {
             this.fuelLabel = fuelLabel; this.radiusKm = radiusKm;
             this.datasetDate = datasetDate; this.message = message;
             this.cheapest = cheapest; this.nearest = nearest;
             this.loading = loading; this.cached = cached;
+            this.updatedAt = updatedAt;
         }
     }
 
@@ -239,7 +242,8 @@ public final class FuelStationProvider {
         publish(new Snapshot(fuel.label, displayRadiusKm,
                 selected == null ? "" : selected.datasetDate, message,
                 selected == null ? null : selected.cheapest,
-                selected == null ? null : selected.nearest, true, cache != null));
+                selected == null ? null : selected.nearest, true, cache != null,
+                selected == null ? 0L : selected.updatedAt));
 
         Location requestLocation = new Location(location);
         Cache requestCache = cache;
@@ -281,13 +285,13 @@ public final class FuelStationProvider {
                 Snapshot selected = select(cache, location, fuelLabel, downloaded == null);
                 if (downloaded == null) selected = new Snapshot(selected.fuelLabel,
                         selected.radiusKm, selected.datasetDate, "Sin red · mostrando caché",
-                        selected.cheapest, selected.nearest, false, true);
+                        selected.cheapest, selected.nearest, false, true, selected.updatedAt);
                 publish(selected);
             } else {
                 publish(new Snapshot(fuelLabel, getRadiusKm(), "",
                         "No se pudieron descargar los precios"
                                 + (error == null ? "" : " · " + error),
-                        null, null, false, false));
+                        null, null, false, false, 0L));
             }
             scheduleNextRefresh();
         }
@@ -416,7 +420,7 @@ public final class FuelStationProvider {
         Station nearest = selectNearest(source, current, radiusKm);
         String message = cheapest == null ? "Sin estaciones en " + radiusKm + " km" : "";
         return new Snapshot(fuelLabel, radiusKm, source.datasetDate, message,
-                cheapest, nearest, false, cached);
+                cheapest, nearest, false, cached, source.localUpdatedAt);
     }
 
     private Station selectCheapest(Cache source, Location current, int radiusKm) {
@@ -449,7 +453,7 @@ public final class FuelStationProvider {
 
     private Snapshot unavailable(String message) {
         Fuel fuel = fuel(getProductId());
-        return new Snapshot(fuel.label, getRadiusKm(), "", message, null, null, false, false);
+        return new Snapshot(fuel.label, getRadiusKm(), "", message, null, null, false, false, 0L);
     }
 
     private void publish(Snapshot value) {

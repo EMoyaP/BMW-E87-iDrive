@@ -5,8 +5,9 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Safe aggregation point for future JCRK01/CYA adapters.
- * The current passive diagnostic engine deliberately does not map arbitrary extras to CAN fields.
+ * Aggregates only confirmed, read-only sources. The Jancar bridge is bound to
+ * the exact OEM CarService discovered in the physical unit export; arbitrary
+ * broadcasts and the mutable CAN configuration provider remain excluded.
  */
 public final class VehicleDataRepository implements VehicleDataProvider {
     private static final long VEHICLE_SPEED_MAX_AGE_MS = 3_000L;
@@ -14,15 +15,22 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     private final GpsSpeedProvider gps;
     private final DiagnosticEngine diagnostics;
     private final AndroidAutomotiveProvider automotive;
+    private final JancarCarProvider jancar;
 
     public VehicleDataRepository(android.content.Context context, GpsSpeedProvider gps,
                                  DiagnosticEngine diagnostics, Runnable onValuesChanged) {
         this.gps = gps;
         this.diagnostics = diagnostics;
         this.automotive = new AndroidAutomotiveProvider(context, diagnostics, onValuesChanged);
+        this.jancar = new JancarCarProvider(context, diagnostics, onValuesChanged);
     }
 
     @Override public VehicleValue<?> get(VehicleField field) {
+        VehicleValue<?> jancarValue = jancar.get(field);
+        if (jancarValue.isAvailable()
+                && (field != VehicleField.SPEED || jancarValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
+            return jancarValue;
+        }
         VehicleValue<?> standardValue = automotive.get(field);
         if (standardValue.isAvailable()
                 && (field != VehicleField.SPEED || standardValue.ageMs() <= VEHICLE_SPEED_MAX_AGE_MS)) {
@@ -39,14 +47,16 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     @Override public Set<VehicleField> supportedFields() {
         EnumSet<VehicleField> fields = EnumSet.noneOf(VehicleField.class);
         if (gps.getLastValue() != null) fields.add(VehicleField.SPEED);
+        fields.addAll(jancar.supportedFields());
         fields.addAll(automotive.supportedFields());
         return Collections.unmodifiableSet(fields);
     }
 
-    @Override public void start() { gps.start(); automotive.start(); }
-    @Override public void stop() { automotive.stop(); gps.stop(); }
+    @Override public void start() { gps.start(); automotive.start(); jancar.start(); }
+    @Override public void stop() { jancar.stop(); automotive.stop(); gps.stop(); }
 
     public DiagnosticEngine diagnostics() { return diagnostics; }
+    public JancarCarProvider.MaintenanceSnapshot maintenanceSnapshot() { return jancar.maintenanceSnapshot(); }
 
     public String diagnosticReport() {
         StringBuilder out = new StringBuilder(1_000);
@@ -61,7 +71,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
                     .append(" · edad=").append(value.ageMs()).append(" ms");
             out.append('\n');
         }
-        out.append("Prioridad de velocidad: vehículo verificado (máx. 3 s) y después GPS (máx. 10 s).\n\n");
+        out.append("Prioridad de velocidad: Jancar OEM verificado, Android Automotive y después GPS (máx. 10 s).\n\n");
+        out.append(jancar.capabilityReport()).append('\n');
         out.append(gps.diagnosticReport());
         return out.toString();
     }
