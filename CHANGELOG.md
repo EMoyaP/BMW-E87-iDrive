@@ -4,9 +4,9 @@
 
 - El aviso de radar abandona la columna estrecha del límite: la esfera queda arriba y el radar
   ocupa una franja completa debajo, con vía, distancia, acercamiento y señal `VÍA` legibles.
-- El pictograma se redibuja como coche frontal separado, punto y tres ondas de radar, sin el
-  solapamiento anterior entre ruedas y señal. Se renovaron las capturas de portada, herramientas
-  y actualizaciones de GitHub; la portada identifica explícitamente sus datos como simulación.
+- El aviso utiliza directamente el pictograma de señal de radar proporcionado para el proyecto,
+  escalado sin deformar y con una franja más alta para mantener nítidos la cabecera, las ondas y
+  el coche. Se renovó la captura de portada; identifica explícitamente sus datos como simulación.
 
 - La APK incluye el inventario nacional DATEX II de la DGT de radares fijos y de velocidad media
   (tramo), de aproximadamente 2 MB antes de compresión. La consulta durante la marcha usa solo

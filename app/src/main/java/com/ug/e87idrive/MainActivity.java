@@ -631,11 +631,11 @@ public class MainActivity extends Activity {
         content.addView(limitColumn, lp(0, -1, .68f));
         // Keep the dial and road sign in the upper row. A radar notice needs a full-width
         // row below them; the former narrow column made its distance and approach state unreadable.
-        box.addView(content, lp(-1, dp(198)));
+        box.addView(content, lp(-1, dp(174)));
         radarNoticeView = new RadarNoticeView(this, TEXT, BLUE, MUTED);
         radarNoticeView.setContentDescription("Aviso local de radar fijo o de tramo");
         radarNoticeView.setVisibility(View.GONE);
-        box.addView(radarNoticeView, lp(-1, dp(84)));
+        box.addView(radarNoticeView, lp(-1, dp(112)));
         speedLimitUpdateInfo = txt("Base local incluida", 9, MUTED, false);
         speedLimitUpdateInfo.setGravity(Gravity.CENTER);
         speedLimitUpdateInfo.setMaxLines(2);
@@ -2662,6 +2662,7 @@ public class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
         private final int foreground, blue, muted;
+        private final Bitmap officialRadarSign;
         private RadarRepository.Alert alert;
         private Integer roadLimit;
 
@@ -2670,6 +2671,7 @@ public class MainActivity extends Activity {
             this.foreground = foreground;
             this.blue = blue;
             this.muted = muted;
+            this.officialRadarSign = BitmapFactory.decodeResource(getResources(), R.drawable.radar_sign_es);
         }
 
         void setAlert(RadarRepository.Alert alert, Integer roadLimit) {
@@ -2682,7 +2684,6 @@ public class MainActivity extends Activity {
             super.onDraw(canvas);
             if (alert == null) return;
             float w = getWidth(), h = getHeight();
-            float s = Math.min(h, w * .28f);
             rect.set(1f, 1f, w - 1f, h - 1f);
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.rgb(5, 22, 39));
@@ -2692,49 +2693,16 @@ public class MainActivity extends Activity {
             paint.setColor(Color.rgb(38, 93, 143));
             canvas.drawRoundRect(rect, dp(8), dp(8), paint);
 
-            // A separated radar/transmitter and front-car silhouette: do not overlap the
-            // waves with wheels or body, as it becomes illegible at the unit's 720p density.
-            float iconY = h * .55f;
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(Math.max(1.5f, s * .046f));
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setColor(blue);
-            float dotX = s * .13f;
-            paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(dotX, iconY, s * .060f, paint);
-            paint.setStyle(Paint.Style.STROKE);
-            RectF wave = new RectF(s * .20f, iconY - s * .16f, s * .46f, iconY + s * .16f);
-            canvas.drawArc(wave, -66, 132, false, paint);
-            wave.inset(-s * .075f, -s * .075f);
-            canvas.drawArc(wave, -62, 124, false, paint);
-            wave.inset(-s * .075f, -s * .075f);
-            canvas.drawArc(wave, -58, 116, false, paint);
+            // Use the supplied Spanish radar road-sign image verbatim. Scaling preserves
+            // the bitmap's proportions; no custom redraw or third-party icon is involved.
+            float signHeight = Math.min(h * .90f, w * .28f / ((float) officialRadarSign.getWidth() / officialRadarSign.getHeight()));
+            float signWidth = signHeight * officialRadarSign.getWidth() / officialRadarSign.getHeight();
+            RectF signBounds = new RectF(dp(8), (h - signHeight) / 2f, dp(8) + signWidth,
+                    (h + signHeight) / 2f);
+            paint.setFilterBitmap(true);
+            canvas.drawBitmap(officialRadarSign, null, signBounds, paint);
 
-            float carLeft = s * .59f, carRight = s * 1.09f;
-            float carTop = iconY - s * .15f, carBottom = iconY + s * .22f;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(blue);
-            RectF car = new RectF(carLeft, carTop, carRight, carBottom);
-            canvas.drawRoundRect(car, s * .055f, s * .055f, paint);
-            Path roof = new Path();
-            roof.moveTo(carLeft + s * .10f, carTop);
-            roof.lineTo(carLeft + s * .18f, iconY - s * .32f);
-            roof.lineTo(carRight - s * .18f, iconY - s * .32f);
-            roof.lineTo(carRight - s * .10f, carTop);
-            roof.close();
-            canvas.drawPath(roof, paint);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.rgb(5, 22, 39));
-            canvas.drawRoundRect(new RectF(carLeft + s * .14f, iconY - s * .26f,
-                    carRight - s * .14f, carTop + s * .02f), s * .025f, s * .025f, paint);
-            canvas.drawCircle(carLeft + s * .13f, carBottom, s * .073f, paint);
-            canvas.drawCircle(carRight - s * .13f, carBottom, s * .073f, paint);
-            paint.setColor(foreground);
-            canvas.drawCircle(carLeft + s * .11f, iconY + s * .035f, s * .038f, paint);
-            canvas.drawCircle(carRight - s * .11f, iconY + s * .035f, s * .038f, paint);
-            paint.setStrokeCap(Paint.Cap.BUTT);
-
-            float textLeft = s * 1.22f;
+            float textLeft = signBounds.right + dp(12);
             paint.setStyle(Paint.Style.FILL);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             paint.setTextAlign(Paint.Align.LEFT);
@@ -2752,24 +2720,24 @@ public class MainActivity extends Activity {
             canvas.drawText(formatDistance(alert.distanceMeters) + " · " + direction, textLeft, h * .80f, paint);
 
             float sign = Math.min(h * .77f, w * .24f);
-            float cx = w - sign * .63f, cy = h * .50f;
+            float cx = w - sign * .63f, signCy = h * .50f;
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.WHITE);
-            canvas.drawCircle(cx, cy, sign * .47f, paint);
+            canvas.drawCircle(cx, signCy, sign * .47f, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(Math.max(2.5f, sign * .095f));
             paint.setColor(Color.rgb(218, 33, 35));
-            canvas.drawCircle(cx, cy, sign * .43f, paint);
+            canvas.drawCircle(cx, signCy, sign * .43f, paint);
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             paint.setTextSize(sign * .16f);
             paint.setColor(muted);
-            canvas.drawText("VÍA", cx, cy - sign * .56f, paint);
+            canvas.drawText("VÍA", cx, signCy - sign * .56f, paint);
             paint.setTextSize(sign * (roadLimit == null ? .36f : roadLimit >= 100 ? .31f : .36f));
             paint.setColor(roadLimit == null ? Color.rgb(80, 88, 96) : Color.rgb(20, 22, 26));
             canvas.drawText(roadLimit == null ? "—" : String.valueOf(roadLimit), cx,
-                    cy - (paint.ascent() + paint.descent()) / 2f, paint);
+                    signCy - (paint.ascent() + paint.descent()) / 2f, paint);
             paint.setTypeface(Typeface.DEFAULT);
         }
 
