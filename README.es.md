@@ -23,9 +23,9 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 ### Qué muestra
 
 - **Velocímetro GPS.** GPS es la fuente de velocidad validada en la radio física. La esfera E87 de 0–260 km/h rellena progresivamente solo su aro exterior. Un límite local verificado se marca en naranja y, al superarlo, la cifra y el aro pasan a naranja; sin límite local verificado, ambos se mantienen en verde.
-- **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Exige una coincidencia estricta de precisión GPS y tramo próximo; si la vía es ambigua se muestra `—` en lugar de adivinar. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
+- **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Un círculo rojo solo representa un `maxspeed` explícito; el cuadrado azul es una velocidad aconsejada conservadora por tipo de vía cuando la zona GPS se ha actualizado, nunca un límite legal ni un disparador naranja del velocímetro. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
 - **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. Si un dato no está disponible se oculta.
-- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT. El panel aparece únicamente ante un radar fijo/tramo próximo mientras disminuye la distancia y desaparece si el coche se aleja. Los controles móviles se excluyen expresamente. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
+- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT. El panel aparece únicamente ante un radar fijo/tramo próximo mientras disminuye la distancia y desaparece si el coche se aleja. Los controles móviles se excluyen expresamente. La locución opcional solo se emite una vez para un radar **fijo** DGT y no toma el foco de audio. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
 - **Gasolineras.** La más barata y la más cercana se calculan respecto al GPS de la radio para el combustible seleccionado. Al pulsar un resultado se navega mediante una aplicación de mapas compatible.
 - **Tarjetas OEM.** Radio, Android Auto, teléfono y aplicaciones abren la aplicación OEM asignada. Los metadatos solo aparecen si Android o un servicio OEM los publica realmente.
 
@@ -152,9 +152,9 @@ El proyecto está escrito en Java con APIs del framework Android. No usa depende
 
 ## Estado del proyecto
 
-Versión actual: **1.16.2**.
+Versión actual: **1.17.1**.
 
-La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo. La versión 1.16.2 corrige el arranque y la reanudación del GPS, mejora la coincidencia con la geometría completa de las vías OSM, valida la importación provincial de radares y añade el registro opcional de coordenadas para reproducir pruebas en la unidad física.
+La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo. La versión 1.17.1 muestra un círculo rojo solo cuando OSM publica un `maxspeed` y, si falta, utiliza un cuadrado azul de referencia genérica DGT según el tipo de vía; la actualización de esquema corrige de inmediato las recomendaciones ya guardadas.
 
 Aspectos que siguen dependiendo del hardware y no se presentan como universales:
 

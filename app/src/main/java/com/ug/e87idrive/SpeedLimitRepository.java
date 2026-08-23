@@ -31,12 +31,13 @@ import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Small offline cache for numeric OSM maxspeed values.
+ * Small offline cache for OSM road speed information.
  *
  * The database is deliberately local: the dashboard never performs a network request. A manual
  * refresh can download only the current area over Wi-Fi, then the car can use those records
- * without connectivity. Unknown, conditional and non-numeric limits are ignored rather than
- * guessed. OSM attribution is included in diagnostics and the UI update result.
+ * without connectivity. Numeric {@code maxspeed} is presented as a legal map limit. When no
+ * such tag exists, a conservative speed recommendation can be derived from the OSM highway
+ * class, is rendered with a distinct blue sign and is never treated as a legal limit.
  */
 final class SpeedLimitRepository {
     private static final String TAG = "LÍMITES GPS";
@@ -46,6 +47,9 @@ final class SpeedLimitRepository {
      * ambiguous one; this app is an aid, never a legal/realtime traffic-sign source. */
     private static final int MAX_MATCH_RADIUS_METERS = 90;
     private static final int MIN_MATCH_RADIUS_METERS = 25;
+    /** A legal maxspeed just a few metres behind an untagged parallel geometry is more useful
+     * than a class-derived recommendation. A materially nearer road still wins. */
+    private static final double EXACT_PREFERENCE_TOLERANCE_METERS = 8d;
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     private static final int BUNDLED_SEED_VERSION = 2;
@@ -176,7 +180,8 @@ final class SpeedLimitRepository {
                 ? String.format(Locale.ROOT, "%.0f m", location.getAccuracy()) : "no publicada";
         String result = match == null
                 ? "sin límite · precisión=" + accuracy + " · radio=" + matchRadiusFor(location) + " m"
-                : String.format(Locale.ROOT, "%d km/h · %.0f m · %s · precisión=%s",
+                : String.format(Locale.ROOT, "%s %d km/h · %.0f m · %s · precisión=%s",
+                        match.exact ? "límite" : "recomendada/" + roadClassLabel(match.roadClass),
                         match.limitKmh, match.distanceMeters, provinceLabel(match.province), accuracy);
         lastLookupResult = result;
         if (!result.equals(lastLoggedLookup)) {
@@ -368,9 +373,12 @@ final class SpeedLimitRepository {
                     + "area(" + areaId + ")->.province;"
                     + "way(area.province)[\"highway\"][\"maxspeed\"];out tags geom;";
         }
+        // The automatic five-kilometre update also keeps road classification. This gives an
+        // offline advisory sign after one small local refresh, without trying to download an
+        // entire province of every OSM road onto the head unit or overloading Overpass.
         return "[out:json][timeout:25];way(around:" + QUERY_RADIUS_METERS + ","
                 + String.format(Locale.ROOT, "%.6f,%.6f", location.getLatitude(), location.getLongitude())
-                + ")[\"highway\"][\"maxspeed\"];out tags geom;";
+                + ")[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service\"];out tags geom;";
     }
 
     private void seedFromAssetsAsync() {
@@ -479,14 +487,18 @@ final class SpeedLimitRepository {
                     JSONObject element = elements.optJSONObject(i);
                     if (element == null) continue;
                     JSONObject tags = element.optJSONObject("tags");
-                    int limit = parseLimit(tags == null ? null : tags.optString("maxspeed", ""));
+                    String roadClass = tags == null ? "" : tags.optString("highway", "");
+                    int explicitLimit = parseLimit(tags == null ? null : tags.optString("maxspeed", ""));
+                    int advisoryLimit = advisoryForRoadClass(roadClass);
                     JSONArray geometry = element.optJSONArray("geometry");
-                    if (limit <= 0 || geometry == null || geometry.length() < 2) continue;
+                    if (explicitLimit <= 0 && advisoryLimit <= 0 || geometry == null || geometry.length() < 2) continue;
                     String coordinates = geometryString(geometry);
                     if (coordinates.isEmpty()) continue;
                     String id = element.optString("id", "");
                     if (id.isEmpty()) continue;
-                    imported += insertRecord(db, id, limit, coordinates, now, province);
+                    imported += insertRecord(db, id,
+                            explicitLimit > 0 ? explicitLimit : advisoryLimit,
+                            coordinates, now, province, explicitLimit > 0, roadClass);
                 }
                 db.delete("speed_limits", "updated_at < ?", new String[]{String.valueOf(now - MAX_STALE_MS)});
                 db.setTransactionSuccessful();
@@ -500,6 +512,11 @@ final class SpeedLimitRepository {
 
     private static int insertRecord(SQLiteDatabase db, String id, int limit, String geometry,
                                     long updatedAt, String province) {
+        return insertRecord(db, id, limit, geometry, updatedAt, province, true, "");
+    }
+
+    private static int insertRecord(SQLiteDatabase db, String id, int limit, String geometry,
+                                    long updatedAt, String province, boolean exact, String roadClass) {
         double[] bounds = geometryBounds(geometry);
         if (bounds == null) return 0;
         ContentValues values = new ContentValues();
@@ -508,6 +525,8 @@ final class SpeedLimitRepository {
         values.put("geometry", geometry);
         values.put("updated_at", updatedAt);
         values.put("province", province == null ? "" : province);
+        values.put("record_kind", exact ? "EXACT" : "ADVISORY");
+        values.put("road_class", roadClass == null ? "" : roadClass);
         values.put("min_lat", bounds[0]);
         values.put("max_lat", bounds[1]);
         values.put("min_lon", bounds[2]);
@@ -563,6 +582,50 @@ final class SpeedLimitRepository {
             int result = (int) Math.round(parsed);
             return result >= 5 && result <= 250 ? result : -1;
         } catch (Exception ignored) { return -1; }
+    }
+
+    /**
+     * Generic DGT-reference guidance for roads with no OSM maxspeed tag. These values are not
+     * presented as legal limits, do not trigger the orange dial state and are kept in a separate
+     * record kind. A road class alone cannot know the actual sign at the driver's position.
+     *
+     * The table reflects the generic Spanish context for a passenger car: 120 on motorway,
+     * 90 on a conventional through road and lower contextual values inside local areas. It is
+     * deliberately rendered as a blue advisory sign, never as a red regulatory signal.
+     */
+    static int advisoryForRoadClass(String roadClass) {
+        if (roadClass == null) return -1;
+        switch (roadClass.trim().toLowerCase(Locale.ROOT)) {
+            case "motorway": return 120;
+            case "trunk": return 90;
+            case "primary": return 90;
+            // OSM marks the CV-851 at the validated test point as a secondary road without
+            // maxspeed. For a passenger car, the generic Spanish value for a conventional road
+            // is 90 km/h; this remains a blue reference, not an asserted legal limit.
+            case "secondary": return 90;
+            case "tertiary": return 90;
+            case "unclassified": return 50;
+            case "residential": return 30;
+            case "living_street": return 20;
+            case "service": return 20;
+            default: return -1;
+        }
+    }
+
+    static String roadClassLabel(String roadClass) {
+        if (roadClass == null) return "vía";
+        switch (roadClass.trim().toLowerCase(Locale.ROOT)) {
+            case "motorway": return "autopista";
+            case "trunk": return "vía rápida";
+            case "primary": return "principal";
+            case "secondary": return "secundaria";
+            case "tertiary": return "terciaria";
+            case "unclassified": return "local";
+            case "residential": return "residencial";
+            case "living_street": return "residencial";
+            case "service": return "servicio";
+            default: return "vía";
+        }
     }
 
     private static double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -680,23 +743,29 @@ final class SpeedLimitRepository {
         final double distanceMeters;
         final long updatedAt;
         final String province;
-        Match(int limitKmh, double distanceMeters, long updatedAt, String province) {
+        final boolean exact;
+        final String roadClass;
+        Match(int limitKmh, double distanceMeters, long updatedAt, String province,
+              boolean exact, String roadClass) {
             this.limitKmh = limitKmh;
             this.distanceMeters = distanceMeters;
             this.updatedAt = updatedAt;
             this.province = province;
+            this.exact = exact;
+            this.roadClass = roadClass;
         }
     }
 
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_speed_limits.db";
-        private static final int VERSION = 2;
+        private static final int VERSION = 4;
 
         Database(Context context) { super(context, NAME, null, VERSION); }
 
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE speed_limits (osm_id TEXT PRIMARY KEY, maxspeed INTEGER NOT NULL, "
                     + "geometry TEXT NOT NULL, updated_at INTEGER NOT NULL, province TEXT NOT NULL DEFAULT '', "
+                    + "record_kind TEXT NOT NULL DEFAULT 'EXACT', road_class TEXT NOT NULL DEFAULT '', "
                     + "min_lat REAL NOT NULL DEFAULT 0, max_lat REAL NOT NULL DEFAULT 0, "
                     + "min_lon REAL NOT NULL DEFAULT 0, max_lon REAL NOT NULL DEFAULT 0)");
             db.execSQL("CREATE INDEX speed_limits_updated ON speed_limits(updated_at)");
@@ -712,6 +781,21 @@ final class SpeedLimitRepository {
                 db.execSQL("ALTER TABLE speed_limits ADD COLUMN max_lon REAL NOT NULL DEFAULT 0");
                 db.execSQL("CREATE INDEX speed_limits_bounds ON speed_limits(min_lat, max_lat, min_lon, max_lon)");
             }
+            if (oldVersion < 3) {
+                db.execSQL("ALTER TABLE speed_limits ADD COLUMN record_kind TEXT NOT NULL DEFAULT 'EXACT'");
+                db.execSQL("ALTER TABLE speed_limits ADD COLUMN road_class TEXT NOT NULL DEFAULT ''");
+            }
+            if (oldVersion < 4) {
+                // Reclassify existing local advisory rows so an app upgrade does not retain a
+                // previously cached generic value until the province is downloaded again.
+                db.execSQL("UPDATE speed_limits SET maxspeed = CASE lower(road_class) "
+                        + "WHEN 'motorway' THEN 120 WHEN 'trunk' THEN 90 "
+                        + "WHEN 'primary' THEN 90 WHEN 'secondary' THEN 90 "
+                        + "WHEN 'tertiary' THEN 90 WHEN 'unclassified' THEN 50 "
+                        + "WHEN 'residential' THEN 30 WHEN 'living_street' THEN 20 "
+                        + "WHEN 'service' THEN 20 ELSE maxspeed END "
+                        + "WHERE record_kind = 'ADVISORY'");
+            }
         }
 
         Match nearest(double latitude, double longitude, int maxDistanceMeters) {
@@ -725,7 +809,7 @@ final class SpeedLimitRepository {
                     String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)
             };
             Cursor cursor = db.query("speed_limits",
-                    new String[]{"maxspeed", "geometry", "updated_at", "province"},
+                    new String[]{"maxspeed", "geometry", "updated_at", "province", "record_kind", "road_class"},
                     selection, args, null, null, null);
             Match nearest = null;
             try {
@@ -734,12 +818,31 @@ final class SpeedLimitRepository {
                     String geometry = cursor.getString(1);
                     double distance = nearestPolylineDistance(latitude, longitude, geometry);
                     if (distance > maxDistanceMeters) continue;
-                    if (nearest == null || distance < nearest.distanceMeters) {
-                        nearest = new Match(limit, distance, cursor.getLong(2), cursor.getString(3));
+                    Match candidate = new Match(limit, distance, cursor.getLong(2), cursor.getString(3),
+                            "EXACT".equals(cursor.getString(4)), cursor.getString(5));
+                    if (nearest == null || preferCandidate(nearest, candidate)) {
+                        nearest = candidate;
                     }
                 }
             } finally { cursor.close(); }
             return nearest;
+        }
+
+        /**
+         * OSM often has separate geometries for the road edge, a service lane and the real
+         * carriageway. Prefer an explicit maxspeed when both candidates are practically on the
+         * same road, but never let it override an obviously nearer road segment.
+         */
+        private static boolean preferCandidate(Match current, Match candidate) {
+            if (current.exact == candidate.exact) {
+                return candidate.distanceMeters < current.distanceMeters;
+            }
+            if (candidate.exact) {
+                return candidate.distanceMeters <= current.distanceMeters
+                        + EXACT_PREFERENCE_TOLERANCE_METERS;
+            }
+            return candidate.distanceMeters + EXACT_PREFERENCE_TOLERANCE_METERS
+                    < current.distanceMeters;
         }
 
         int count() {

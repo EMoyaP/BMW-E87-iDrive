@@ -81,6 +81,7 @@ public class MainActivity extends Activity {
     private FuelStationProvider fuelStations;
     private SpeedLimitRepository speedLimits;
     private RadarRepository radars;
+    private RadarSpeechAnnouncer radarSpeech;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
     private UsbDebugWizardDialog activeUsbWizard;
@@ -100,6 +101,7 @@ public class MainActivity extends Activity {
         hideUi();
         vehiclePreferences = getSharedPreferences("vehicle", MODE_PRIVATE);
         uiPreferences = getSharedPreferences("ui", MODE_PRIVATE);
+        radarSpeech = new RadarSpeechAnnouncer(this, uiPreferences);
         apps = new AppRepository(this);
         diagnostics = new DiagnosticEngine(this);
         usbDiagnostics = new UsbDiagnosticRecorder(this);
@@ -160,6 +162,7 @@ public class MainActivity extends Activity {
         fuelStations.stop();
         speedLimits.stop();
         radars.stop();
+        if (radarSpeech != null) radarSpeech.stop();
         if (!usbCaptureRunning) {
             diagnostics.stopPassiveProbe();
             vehicleData.stop();
@@ -175,6 +178,7 @@ public class MainActivity extends Activity {
         fuelStations.close();
         speedLimits.close();
         radars.close();
+        if (radarSpeech != null) radarSpeech.close();
         oemRadio.stop();
         vehicleData.stop();
         if (usbDiagnostics != null) usbDiagnostics.close();
@@ -431,7 +435,7 @@ public class MainActivity extends Activity {
     private View fuelStationRow(String kind, FuelStationProvider.Station station, int tone) {
         LinearLayout row = horizontal();
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(6), dp(2), dp(6), dp(2));
+        row.setPadding(dp(6), dp(2), dp(8), dp(2));
         row.setBackground(fuelRowBg(tone));
         TextView badge = txt("MÁS BARATA".equals(kind) ? "€" : "⌖", 18, tone, true);
         badge.setGravity(Gravity.CENTER);
@@ -439,24 +443,21 @@ public class MainActivity extends Activity {
         LinearLayout copy = vertical();
         copy.setGravity(Gravity.CENTER_VERTICAL);
         copy.setPadding(dp(5), 0, 0, 0);
-        LinearLayout top = horizontal();
         TextView label = txt(kind, 9, tone, true);
-        TextView price = txt(String.format(new Locale("es", "ES"), "%.3f €/L", station.price), 14, TEXT, true);
-        price.setGravity(Gravity.END);
-        top.addView(label, lp(0, -1, 1));
-        top.addView(price, lp(dp(96), -1));
-        LinearLayout bottom = horizontal();
-        bottom.setGravity(Gravity.CENTER_VERTICAL);
-        TextView name = txt(station.brand, 11, TEXT, false);
+        TextView name = txt(station.brand, 12, TEXT, false);
         name.setMaxLines(1);
         TextView distance = txt(String.format(new Locale("es", "ES"), "%.1f km",
-                station.distanceKm), 13, tone, true);
-        distance.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        bottom.addView(name, lp(0, -1, 1));
-        bottom.addView(distance, lp(dp(74), -1));
-        copy.addView(top, lp(-1, dp(19)));
-        copy.addView(bottom, lp(-1, dp(21)));
+                station.distanceKm), 14, tone, true);
+        // The price has its own full-height column. This avoids the previous
+        // baseline alignment with distance and keeps the most relevant value
+        // optically centred even when station names have different lengths.
+        TextView price = txt(String.format(new Locale("es", "ES"), "%.3f €/L", station.price), 21, TEXT, true);
+        price.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        copy.addView(label, lp(-1, dp(13)));
+        copy.addView(name, lp(-1, dp(16)));
+        copy.addView(distance, lp(-1, dp(20)));
         row.addView(copy, lp(0, -1, 1));
+        row.addView(price, lp(dp(118), -1));
         row.setContentDescription(kind + ": " + station.brand + ", " + station.price
                 + " euros por litro, " + station.distanceKm + " kilómetros");
         row.setOnClickListener(v -> openStationInMaps(station));
@@ -870,18 +871,22 @@ public class MainActivity extends Activity {
             speedLimitView.setLimit(null);
             if (speedGauge != null) speedGauge.setRoadLimit(null);
             if (speedLimitState != null) {
-                speedLimitState.setText("Sin límite local cercano");
+                speedLimitState.setText("Sin vía local cercana");
                 speedLimitState.setTextColor(MUTED);
             }
         } else {
-            speedLimitView.setLimit(match.limitKmh);
-            if (speedGauge != null) speedGauge.setRoadLimit(match.limitKmh);
+            speedLimitView.setLimit(match.limitKmh, match.exact);
+            if (speedGauge != null) speedGauge.setRoadLimit(match.exact ? match.limitKmh : null);
             if (speedLimitState != null) {
-                String region = match.province == null || match.province.isEmpty()
-                        ? "OSM local" : "OSM " + SpeedLimitRepository.provinceLabel(match.province);
-                speedLimitState.setText(String.format(Locale.getDefault(), "%s · %.0f m",
-                        region, match.distanceMeters));
-                speedLimitState.setTextColor(BLUE);
+                if (match.exact) {
+                    speedLimitState.setText(String.format(Locale.getDefault(), "LÍMITE OSM · %.0f m",
+                            match.distanceMeters));
+                    speedLimitState.setTextColor(BLUE);
+                } else {
+                    speedLimitState.setText("DGT GENÉRICA · "
+                            + SpeedLimitRepository.roadClassLabel(match.roadClass));
+                    speedLimitState.setTextColor(Color.rgb(91, 171, 246));
+                }
             }
         }
         if (speedLimitUpdateInfo != null) {
@@ -906,11 +911,13 @@ public class MainActivity extends Activity {
         RadarRepository.Alert alert = radars.alert(gps.getLastLocation(), speedValue);
         if (alert == null) {
             radarNoticeView.setVisibility(View.GONE);
+            if (radarSpeech != null) radarSpeech.onAlertCleared();
             return;
         }
         SpeedLimitRepository.Match limit = speedLimits == null ? null : speedLimits.lookup(gps.getLastLocation());
-        radarNoticeView.setAlert(alert, limit == null ? null : limit.limitKmh);
+        radarNoticeView.setAlert(alert, limit != null && limit.exact ? limit.limitKmh : null);
         radarNoticeView.setVisibility(View.VISIBLE);
+        if (radarSpeech != null) radarSpeech.onAlert(alert, limit);
     }
 
     private void chooseSpeedLimitProvince() {
@@ -1010,9 +1017,9 @@ public class MainActivity extends Activity {
         TextView label = txt(vehiclePanelLabel(field), 11, TEXT, false);
         label.setPadding(dp(6), 0, 0, 0);
         row.addView(label, lp(0, -1, 1));
-        TextView reading = txt(value, 13, TEXT, true);
+        TextView reading = txt(value, 19, TEXT, true);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        row.addView(reading, lp(dp(92), -1));
+        row.addView(reading, lp(dp(112), -1));
         return row;
     }
 
@@ -1217,6 +1224,14 @@ public class MainActivity extends Activity {
         Button fuel = dialogButton("ACTUALIZAR PRECIOS DE GASOLINERAS");
         box.addView(fuel, lp(-1, dp(52)));
 
+        Switch radarVoice = new Switch(this);
+        radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS DGT");
+        radarVoice.setTextColor(TEXT);
+        radarVoice.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(10));
+        radarVoice.setChecked(uiPreferences.getBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, true));
+        radarVoice.setPadding(dp(8), dp(2), dp(8), dp(2));
+        box.addView(radarVoice, lp(-1, dp(40)));
+
         FuelStationProvider.Snapshot fuelSnapshot = fuelStations.getSnapshot();
         TextView network = txt("Red actual: " + fuelStations.networkLabel()
                 + "\nGasolineras: " + lastUpdateText(fuelSnapshot == null ? 0L : fuelSnapshot.updatedAt)
@@ -1254,7 +1269,11 @@ public class MainActivity extends Activity {
             fuelStations.forceRefresh();
             toast("Actualizando precios con la red disponible");
         });
-        showSized(dialog, .60f, .82f);
+        radarVoice.setOnCheckedChangeListener((button, enabled) -> {
+            uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
+            toast(enabled ? "Locución activada para radares fijos DGT" : "Locución de radares desactivada");
+        });
+        showSized(dialog, .60f, .87f);
     }
 
     private String lastRadarUpdateText() {
@@ -2642,6 +2661,7 @@ public class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final int foreground, red, muted;
         private Integer limit;
+        private boolean exact = true;
 
         SpeedLimitView(Context context, int foreground, int red, int muted) {
             super(context);
@@ -2650,26 +2670,60 @@ public class MainActivity extends Activity {
             this.muted = muted;
         }
 
-        void setLimit(Integer limit) { this.limit = limit; invalidate(); }
+        void setLimit(Integer limit) { setLimit(limit, true); }
+
+        void setLimit(Integer limit, boolean exact) {
+            this.limit = limit;
+            this.exact = exact;
+            invalidate();
+        }
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            float size = Math.min(getWidth(), getHeight()) * .84f;
+            // The number is the information drivers need first. Let both Spanish sign
+            // variants use almost all their allotted area, while measuring the label so
+            // 100/120 never clips on the fixed 1280x720 head unit.
+            float size = Math.min(getWidth(), getHeight()) * .96f;
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.WHITE);
-            canvas.drawCircle(cx, cy, size * .45f, paint);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(Math.max(3f, size * .085f));
-            paint.setColor(red);
-            canvas.drawCircle(cx, cy, size * .43f, paint);
+            String label = limit == null ? "—" : String.valueOf(limit);
+            float textWidthLimit;
+            if (limit != null && !exact) {
+                float side = size * .90f;
+                RectF advisory = new RectF(cx - side / 2f, cy - side / 2f,
+                        cx + side / 2f, cy + side / 2f);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.rgb(21, 94, 220));
+                canvas.drawRoundRect(advisory, size * .065f, size * .065f, paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(2f, size * .025f));
+                paint.setColor(Color.WHITE);
+                canvas.drawRoundRect(advisory, size * .065f, size * .065f, paint);
+                textWidthLimit = side * .78f;
+            } else {
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.WHITE);
+                canvas.drawCircle(cx, cy, size * .47f, paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(3f, size * .085f));
+                paint.setColor(red);
+                canvas.drawCircle(cx, cy, size * .45f, paint);
+                // The usable horizontal chord is deliberately smaller than the outer
+                // radius so the value cannot touch the legal-limit red ring.
+                textWidthLimit = size * .58f;
+            }
             paint.setStyle(Paint.Style.FILL);
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-            paint.setTextSize(size * .29f);
-            paint.setColor(limit == null ? muted : Color.rgb(18, 23, 29));
-            canvas.drawText(limit == null ? "—" : String.valueOf(limit), cx,
+            float textSize = size * .66f;
+            paint.setTextSize(textSize);
+            float measured = Math.max(1f, paint.measureText(label));
+            if (measured > textWidthLimit) {
+                textSize *= textWidthLimit / measured;
+                paint.setTextSize(textSize);
+            }
+            paint.setColor(limit == null ? muted : exact ? Color.rgb(18, 23, 29) : Color.WHITE);
+            canvas.drawText(label, cx,
                     cy - (paint.ascent() + paint.descent()) / 2f, paint);
             paint.setTypeface(Typeface.DEFAULT);
         }

@@ -23,9 +23,9 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 ### What it shows
 
 - **GPS speedometer.** GPS is the validated speed source on the physical radio. The E87-style 0–260 km/h dial progressively fills its outer ring. A verified local road limit is marked in orange and the speed value/progress ring turn orange only once it is exceeded; without a verified local limit, both remain green.
-- **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A strict GPS-accuracy and nearby-road match is required; if the road is ambiguous, it displays `—` rather than guessing. Physical signs and the vehicle's instruments remain the legal reference.
+- **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A red circle is only an explicit OSM `maxspeed`; a blue square is conservative class-based guidance after a local GPS-area update, never a legal limit or orange speedometer trigger. Physical signs and the vehicle's instruments remain the legal reference.
 - **Dynamic trip computer.** Range, average consumption, exterior temperature, climate values and other data are shown only when the radio provides a plausible reading. Unavailable data is hidden.
-- **Fixed and section camera warning.** The APK carries the national DGT inventory locally. The panel appears only for a nearby fixed/section camera while distance decreases, then disappears when the vehicle moves away. Mobile controls are intentionally excluded. The circular value is the verified **road** limit from the local map, not an invented radar limit.
+- **Fixed and section camera warning.** The APK carries the national DGT inventory locally. The panel appears only for a nearby fixed/section camera while distance decreases, then disappears when the vehicle moves away. Mobile controls are intentionally excluded. Optional speech is emitted once only for a DGT **fixed** camera and never requests audio focus. The circular value is the verified **road** limit from the local map, not an invented radar limit.
 - **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app.
 - **OEM app cards.** Radio, Android Auto, phone and app cards open their assigned OEM applications. Metadata is displayed only when Android or an OEM service actually publishes it.
 
@@ -152,9 +152,9 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 ## Project status
 
-Current version: **1.16.2**.
+Current version: **1.17.1**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.16.2 fixes GPS startup/resume handling, improves local road matching against complete OSM geometries, validates provincial radar imports and adds opt-in coordinate logging for reproducible physical-head-unit QA.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.17.1 shows a red circle only for an explicit OSM `maxspeed`; when it is absent, it uses a blue DGT generic-reference sign based on the road class, and the schema upgrade immediately corrects cached advisory values.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## 1.17.1 — 23/08/2026
+
+- Cuando OpenStreetMap no publica `maxspeed`, el cuadrado azul usa una referencia genérica DGT
+  por clase de vía: autopista/autovía 120, carretera convencional principal/secundaria/terciaria
+  90, vía rápida 90, local 50, residencial 30 y zona de convivencia/servicio 20 km/h. Sigue
+  siendo una recomendación contextual, nunca un límite legal ni un disparador del aviso naranja.
+- La migración de base local recalcula las recomendaciones ya almacenadas al actualizar la APK;
+  no hace falta descargar de nuevo una provincia para sustituir valores genéricos anteriores.
+- La elección local prioriza un `maxspeed` explícito cuando ambos trazados pertenecen a la misma
+  calzada práctica (tolerancia de 8 m), evitando que una vía auxiliar sin etiqueta oculte una
+  señal legal cercana.
+
+## 1.17.0 — 23/08/2026
+
+- El mapa local conserva dos tipos de señal claramente diferenciados: círculo rojo únicamente
+  para un `maxspeed` explícito de OpenStreetMap y cuadrado azul para una velocidad aconsejada
+  calculada de forma conservadora a partir de la clasificación de la vía cuando no existe
+  `maxspeed`. La recomendación no colorea en naranja el velocímetro ni se anuncia como límite
+  legal.
+- La actualización automática limitada a la zona GPS guarda también la clase de las vías
+  transitables. La semilla incluida mantiene los límites explícitos de Alicante, Murcia,
+  Valencia y Albacete sin convertir una descarga provincial completa en un paquete pesado.
+- El aviso visual de radar conserva exclusivamente fijos y de tramo DGT. Se añade una locución
+  opcional y local para **radares fijos DGT**: “Atención. Radar fijo. Límite X kilómetros por
+  hora.” cuando la vía tiene un límite explícito cercano. Sin ese límite no inventa una cifra.
+  No solicita foco de audio, no utiliza controles móviles ni afecta CAN, MCU, PDC o Bluetooth.
+- El selector de Actualizaciones permite activar o desactivar la locución de radares fijos.
+- Se aumentó la lectura del ordenador de a bordo y se rediseñaron las dos estaciones de servicio:
+  etiqueta, nombre, distancia y precio grande en ese orden, para mejorar la lectura a distancia.
+- Se añadieron pruebas unitarias para la tabla de recomendaciones y para la frase de voz, además
+  de la actualización de esquema de caché local de límites.
+
 ## 1.16.2 — 23/08/2026
 
 - DEBUG incorpora una casilla voluntaria para guardar posición GPS en los logs. Está desactivada
