@@ -1,5 +1,71 @@
 # CHANGELOG
 
+## 1.15.1 — 23/08/2026
+
+- Gasolineras conserva la actualización ya automática: cuando Android publica una red IP válida, actualiza los
+  precios cercanos y mantiene la caché local de 150 km.
+- Los límites de velocidad se actualizan automáticamente cuando hay GPS e Internet Android. La provincia se obtiene
+  primero de la carretera OSM local y, como respaldo, de la zona GPS; Alicante es el respaldo inicial mientras se
+  adquiere posición. Solo se descargan Alicante, Murcia, Valencia o Albacete, nunca España completa.
+- Cada provincia registra su propia hora de actualización satisfactoria. Un límite de 24 horas evita volver a
+  consultar Alicante si está reciente, sin bloquear una actualización pendiente de Murcia, Valencia o Albacete.
+- El modal `ACTUALIZACIONES` muestra red actual, provincia GPS elegida y fecha/hora de la última actualización correcta
+  de gasolineras y límites. Las solicitudes se ligan a la red que Android haya expuesto (Wi-Fi, Ethernet o PAN), sin
+  activar ni configurar ninguna conexión OEM.
+
+## 1.15.0 — 22/08/2026
+
+- Se revisa la pantalla principal: el resumen del ordenador de a bordo ocupa el panel izquierdo, la tarjeta multimedia
+  deja de ocupar espacio cuando la unidad no publica una sesión fiable y el menú completo permanece accesible desde el
+  botón `MENÚ COMPLETO` y la cabecera.
+- El velocímetro usa GPS como fuente visible validada en esta radio, conserva el color verde hasta 120 km/h y naranja por
+  encima, y oculta campos sin datos reales.
+- Se añade `SpeedLimitRepository`, una base SQLite local (`e87_speed_limits.db`) que consulta los límites próximos sin
+  conexión. La APK incorpora semillas de Alicante, Murcia, Valencia y Albacete; desde la llave inglesa se separan los
+  accesos `DEBUG / USB`, `PERMISOS` y `ACTUALIZACIONES`. Esta última permite actualizar precios de gasolineras y elegir
+  una zona GPS de 5 km o una única provincia por Wi-Fi, sin descargar España completa; no se muestra una señal inventada
+  cuando la base no tiene cobertura.
+- Se corrige la lectura de las semillas en APK: Android puede desempaquetar un recurso `.gz` y publicarlo como `.tsv`, por
+  lo que el importador acepta ambos empaquetados y valida que la base local no quede vacía.
+- Se añade la atribución de OpenStreetMap/Overpass y se actualiza la versión de compilación a 1.15.0.
+
+## 1.14.1 — 17/08/2026
+
+- El ordenador de a bordo pasa a ser completamente dinámico: oculta toda fila sin un valor real disponible y elimina
+  la marcha de la lista. Cuando CAN OEM publique una marcha válida, se dibuja en grande dentro de la esfera, bajo la
+  velocidad; si no hay dato, no se reserva espacio ni se muestra un guion.
+- La tarjeta de gasolineras aumenta la tipografía del precio y separa la distancia en un valor más grande y resaltado,
+  conservando las dos filas y el área táctil de cada estación.
+- Se añadió un respaldo Bluetooth OEM de solo lectura basado en el contrato exacto exportado por
+  `com.jancar.btservice`: consulta `getBluetoothState` y `getCurrentDeviceName` y solo muestra el nombre cuando el
+  servicio confirma el estado `CONNECTED`. No empareja, conecta ni modifica el módulo Bluetooth.
+- El panel de permisos aclara que `INTERNET` se concede al instalar y no tiene diálogo en tiempo de ejecución. Bluetooth
+  PAN debe ser creado por el sistema de la radio; la aplicación aprovecha la red que Android publique, pero no puede
+  activarla ni convertir por sí misma una conexión Android Auto en acceso IP.
+- Se mantienen las cuatro rutas multimedia seguras: broadcast pasivo de SpeedPlay, puente `MediaService` Jancar,
+  `MediaSession` y notificaciones. Siguen requiriendo una prueba física porque los últimos registros no contenían
+  metadatos publicados por SpeedPlay durante Android Auto.
+- QA completada con tests unitarios, Lint, compilación debug y ejecución visual en emulador Android 15 a 1280×720.
+
+## 1.14.0 — 17/08/2026
+
+- Se analizaron las capturas físicas del 17/08 y los contratos `Parcelable` de la APK OEM exacta. El lector pasivo
+  reconoce ahora los callbacks verificados `HvacInfo`, `RadarInfo` y `SteerWheelInfo`, además de Cabin, Light y
+  Dashboard; no se envía ningún comando ni se escribe CAN/UART.
+- `HvacInfo` añade una nueva ruta validada por rango para temperatura exterior, consignas izquierda/derecha, nivel de
+  ventilador y estado del climatizador. Los valores no plausibles y sentinelas quedan solo en USB DEBUG.
+- `RadarInfo` registra los ocho sensores delanteros/traseros y los laterales publicados por la unidad. La UI solo
+  muestra PDC activo cuando el propio Parcel publica un indicador de activación; las distancias permanecen en
+  diagnóstico hasta confirmar su escala en una prueba física.
+- La prueba guiada P/R confirmó en esta unidad `GearShiftPosition 0=P` y `1=R`; se habilita la marcha del getter OEM y
+  el aviso de marcha atrás. Velocidad y RPM del getter siguen rechazadas: los logs demostraron una rampa interna falsa
+  y un sentinel, por lo que la velocidad fiable continúa siendo GPS salvo callback CAN vivo validado.
+- El registro de sesión guarda cada callback interpretado con valores brutos, incluidos 0 y sentinelas, y toma cada dos
+  segundos una instantánea simultánea de Dashboard, Cabin, Light, HVAC y Radar. Los nuevos getters están aislados:
+  si este firmware rechazase uno, no se pierden autonomía, consumo, marcha ni los demás datos ya funcionales.
+- Se conserva la semántica prudente para puertas, cinturones, freno y tipos de luz: las capturas entregadas no muestran
+  cambios fiables en sus campos actuales y por tanto no se generan avisos falsos.
+
 ## 1.13.5 — 16/08/2026
 
 - Se corrige el inspector CAN para ocultar los sentinelas OEM `Integer.MIN_VALUE` y su equivalente `float`; ya no se

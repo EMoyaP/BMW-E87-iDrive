@@ -63,6 +63,15 @@
             </intent-filter>
         </service>
 
+        <!-- Passive SpeedPlay metadata observer. It never sends commands. -->
+        <receiver
+            android:name=".SpeedPlayMediaReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.suding.speedplay.ACTION_MEDIA_PLAY_INFO"/>
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name=".DiagnosticFileProvider"
             android:authorities="com.ug.e87idrive.diagnostic"

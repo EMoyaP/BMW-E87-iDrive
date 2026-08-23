@@ -98,6 +98,32 @@ No entrar ni modificar `Función de definición de socket`, protocolo CAN, model
 7. Con datos ya visibles, quitar Internet y cerrar/abrir la app: los últimos valores deben mantenerse. Tocar el pie
    para forzar una actualización; al fallar debe indicar `CACHÉ`. Al recuperar conexión, la actualización debe
    reanudarse sin reiniciar la radio.
+
+### 8.1. Actualizaciones de límites de velocidad
+
+1. En la pantalla principal, tocar la llave inglesa de la esquina inferior derecha.
+2. Comprobar que aparecen tres botones independientes: `DEBUG / USB`, `PERMISOS` y `ACTUALIZACIONES`.
+3. Entrar en `ACTUALIZACIONES` y verificar los botones de límites y precios. El de límites requiere Wi-Fi.
+4. Elegir `Zona GPS actual · 5 km` para una descarga pequeña o una sola provincia (`Alicante`, `Murcia`, `Valencia`
+   o `Albacete`). No se debe iniciar una descarga nacional.
+5. Esperar el mensaje de resultado y comprobar en el velocímetro la etiqueta `OSM <provincia>` cuando exista un tramo
+   cercano. Desactivar Wi-Fi y confirmar que la lectura local continúa funcionando.
+
+## 9. Validación HVAC, PDC y marcha — APK 1.14.0
+
+1. Instalar la APK 1.14.0, abrirla con el coche detenido y esperar diez segundos. En `USB DEBUG` →
+   `DATOS CAN EN VIVO · FUENTES` seleccionar `CAN OEM` y activar `Mostrar 0`.
+2. Fotografiar `HVACINFO` con el clima apagado y después ajustar, uno por vez, temperatura izquierda, temperatura
+   derecha y ventilador. Anotar la temperatura exterior que muestra el cuadro. Si `outsideTemp` coincide, la tarjeta
+   debe mostrarla; sentinelas o cifras fuera de −60…100 °C no deben llegar a la UI.
+3. Con otra persona ayudando, engranar P, R, N y D sin mover el vehículo. La escala inferior debe resaltar cada letra;
+   al engranar R debe aparecer el aviso de marcha atrás sin alterar cámara ni PDC OEM.
+4. Con R engranada y freno pisado, acercar un obstáculo de forma segura a cada zona PDC. Fotografiar `RADARINFO / PDC`
+   en varias distancias. No asumir centímetros hasta comparar los valores y repeticiones exportados.
+5. Pulsar `EXPORTAR` y copiar el nuevo `e87_runtime_session_*.log.txt`. Debe contener líneas `CAN OEM CALLBACK` para
+   los eventos recibidos y `CAN OEM GETTERS` con Dashboard, Cabin, Light, HVAC y Radar en la misma muestra.
+6. Confirmar de nuevo que velocidad GPS, cámara, PDC, climatización, audio OEM y mandos del volante funcionan igual con
+   la app abierta y cerrada.
 8. Mover el vehículo más de 500 m y comprobar que cambian las distancias. Al salir suficientemente de la zona cacheada
    los resultados deben cambiar de inmediato desde la cobertura de 150 km. Mantener la app abierta más de diez minutos
    y verificar que el pie actualiza su hora sin perder los resultados. Una nueva carga nacional solo debe ser necesaria

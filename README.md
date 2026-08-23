@@ -21,7 +21,7 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 
 ## Estado del proyecto
 
-Versión actual: **1.13.5 — validación de señales y exportación USB**.
+Versión actual: **1.15.1 — actualización automática local por provincia**.
 
 La APK ya se ha instalado y ejecutado como aplicación normal en la radio física. El diagnóstico identifica una unidad
 Rockchip `rk3326_r`, API efectiva 30, 4 GB de RAM y ABI `armeabi-v7a`. El firmware muestra Android 13/15 en distintas
@@ -44,12 +44,13 @@ claves de firma privadas del proyecto.
 - Lectura opcional de título, artista y carátula mediante `MediaSession`; play/pausa, anterior y siguiente se envían
   únicamente cuando la sesión activa publica expresamente esas acciones estándar.
 - Lectura de emisora/RDS cuando la aplicación de radio lo publica mediante APIs Android estándar.
-- Nombre del teléfono cuando Android expone públicamente la conexión Bluetooth.
+- Nombre del teléfono mediante perfiles Android públicos o, en esta unidad, mediante los getters de solo lectura
+  `getBluetoothState`/`getCurrentDeviceName` verificados en la APK OEM `com.jancar.btservice`.
 - Adaptador CAN OEM específico de esta unidad: enlaza, sin iniciarlo, el `CanBusManager` publicado por `com.can.activity`
-  y consulta exclusivamente `getDashBoardInfo`, `getCabinInfo` y `getLightInfo` verificados en la APK exportada. Puede
-  proporcionar velocidad, autonomía, consumo medio, RPM y campos crudos de temperatura, puertas, intermitentes y
-  cinturones; los estados se muestran en la UI solo cuando su semántica está validada. No registra callbacks ni escribe
-  CAN/UART.
+  y usa exclusivamente callbacks y getters verificados de Dashboard, Cabin, Light, HVAC, Radar/PDC y volante. Puede
+  proporcionar autonomía, consumo medio, marcha, temperatura exterior y climatización, además de los campos crudos de
+  puertas, cinturones, iluminación y distancias PDC. Los estados solo llegan a la UI cuando su semántica o rango está
+  validado; nunca escribe CAN/UART.
 - En Debug, `DATOS CAN EN VIVO · FUENTES` permite inspeccionar en un modal los campos no cero de CAN OEM y comparar
   con JCRK01/CYA, Android Automotive y GPS. Incluye actualización en vivo y opción para mostrar ceros; no cambia la
   prioridad automática de la aplicación.
@@ -59,6 +60,12 @@ claves de firma privadas del proyecto.
 - Prioridad de velocidad con validación de discrepancias entre CanBusManager OEM, Jancar, Android Automotive público y
   GPS. El valor y arco son verdes hasta 120 km/h y naranjas por encima; una muestra CAN discordante no se pinta como
   velocidad real.
+- Base local SQLite de límites de velocidad: durante la conducción solo se consulta `e87_speed_limits.db` en la radio.
+  La APK incorpora semillas compactas de Alicante, Murcia, Valencia y Albacete (aprox. 2,1 MB comprimidas). El botón de
+  la llave inglesa abre `DEBUG / USB`, `PERMISOS` y `ACTUALIZACIONES`; los límites se actualizan al detectar Internet
+  Android y GPS, por provincia (Alicante, Murcia, Valencia o Albacete), sin descargar España completa. Cada provincia
+  tiene una cadencia independiente de 24 horas y el panel muestra la última actualización correcta. Si no hay un límite
+  local verificado, se muestra `—` y no se inventa una señal.
 - Tarjeta de gasolineras con combustible y radio configurables.
 - Selección de la estación más barata y la más cercana, calculada localmente respecto al GPS.
 - Apertura del destino en Google Maps u otra aplicación compatible.
@@ -75,8 +82,9 @@ claves de firma privadas del proyecto.
   funciones, bibliotecas, permisos y componentes; copia todos los APK/splits legibles y los `build.prop`/certificados
   OTA públicos. El límite es 2 GB por archivo y 16 GB en total. No copia datos privados ni particiones, MCU o Hiworld.
 - Sonda opcional, exclusivamente de lectura, para propiedades públicas de Android Automotive.
-- Ordenador de a bordo con procedencia explícita para velocidad, autonomía, consumo y temperatura exterior. El informe
-  GPS omite coordenadas y registra proveedor, edad, precisión y velocidad.
+- Ordenador de a bordo dinámico con procedencia explícita para velocidad, autonomía, consumo, temperatura exterior y
+  RPM: cualquier campo sin valor real se oculta. La marcha no ocupa una fila; cuando CAN OEM la publica se dibuja en
+  grande dentro de la esfera. El informe GPS omite coordenadas y registra proveedor, edad, precisión y velocidad.
 - Barra inferior contextual que solo añade luces, marcha atrás, freno, cinturón o puertas cuando su estado requiere
   atención. Un botón de listado abre avisos y mantenimiento: azul sin lectura verificable, verde si la unidad confirma
   que no hay avisos y naranja cuando publica avisos activos. La llave inglesa abre el diagnóstico.
@@ -140,8 +148,10 @@ carcasa o nombre comercial similar.
 | `GpsSpeedProvider` | Posición y velocidad mediante `LocationManager` |
 | `AndroidAutomotiveProvider` | Sonda pública AAOS de solo lectura |
 | `FuelStationProvider` | MITECO, caché, distancias y actualización por provincia |
+| `SpeedLimitRepository` | Base SQLite local, consulta por GPS y actualización manual únicamente con Wi-Fi |
 | `MediaSessionProvider` | Metadatos y controles anunciados por sesiones multimedia Android estándar |
 | `BluetoothDeviceProvider` | Estado Bluetooth público, sin escaneo ni conexión |
+| `JancarBluetoothProvider` | Nombre/estado del terminal mediante getters Binder OEM verificados y de solo lectura |
 | `DiagnosticEngine` | Inventario y correlación pasiva del firmware |
 | `OemPackageInspector` | Metadatos OEM dirigidos y selección segura de APK CAN/vehículo para USB |
 | `UsbDiagnosticRecorder` | TXT, recuperación interna y copia binaria acotada a una carpeta autorizada |
@@ -164,6 +174,20 @@ Los precios proceden de los endpoints oficiales de
 - Al tocar una estación, solo la coordenada del destino se entrega a la aplicación de mapas.
 - La app usa la red predeterminada que Android entregue a la radio. Estar emparejado por Bluetooth no garantiza acceso
   a Internet; el tethering o hotspot debe estar configurado en el sistema.
+- `INTERNET` es un permiso normal concedido durante la instalación: no existe un diálogo adicional que la app pueda
+  solicitar. Para usar Bluetooth PAN, la radio debe crear y publicar esa interfaz de red a Android.
+
+## Límites de velocidad locales
+
+La base de límites de velocidad se crea en el almacenamiento privado de la aplicación como `e87_speed_limits.db` e incorpora
+semillas provinciales de Alicante, Murcia, Valencia y Albacete. No se consulta Internet durante la conducción: la UI busca el
+tramo más cercano en esa base local. Desde la llave inglesa > `ACTUALIZACIONES` se puede elegir `Zona GPS actual · 5 km` o
+una de las cuatro provincias; cada actualización descarga únicamente la selección elegida, con Wi-Fi y GPS, conserva los
+datos anteriores si falla y permite seguir consultándolos sin conexión. Los datos de `maxspeed` se obtienen de OpenStreetMap
+mediante un servicio Overpass público, por lo que su disponibilidad y cobertura dependen de esos servicios y de la cartografía
+local.
+
+La atribución de OpenStreetMap y sus condiciones de uso están documentadas en [Avisos y atribuciones](NOTICE.md).
 
 ## Compilación
 
@@ -215,6 +239,8 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 | APK debug v1.13.1 | 2.395.745 bytes |
 | APK debug v1.13.4 | 2.417.374 bytes; SHA-256 `9533944861E8C7EAC6DCD5BE19CA2DFB03BE1D39C4499D5D2751A6B36402DD20` |
 | APK debug v1.13.5 | 2.419.211 bytes; SHA-256 `0E0CFAB6684C14208C46E0611E5A27D388E89B1E7AECC5D7C0851BC8F43BB239` |
+| APK debug v1.14.0 | 2.446.214 bytes; SHA-256 `DA5DF33223FEF124AA6A3152487FFA29DAB395536A881985660F58ABBB4546EF` |
+| APK debug v1.14.1 | 2.656.036 bytes; SHA-256 `8CD5571A778E9712A3FA041B29BC33475BC6A3500B7996BFD3910312CAEBE6CA` |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |
@@ -232,7 +258,8 @@ plataformas comparadas y los límites de reutilización.
 
 - La unidad física no declara Android Automotive y su API efectiva 30 no coincide con su versión comercial.
 - Los getters Jancar integrados son específicos del firmware exportado y requieren validación física señal por señal.
-- PDC y temperatura de motor no se presentan como disponibles hasta identificar una lectura inequívoca y segura.
+- PDC solo se presenta activo cuando `RadarInfo` publica su indicador; sus distancias y la temperatura de motor no se
+  presentan como valores finales hasta identificar una escala inequívoca y segura.
 - Una APK instalada por el usuario normalmente no puede obtener permisos AAOS privilegiados para puertas o luces.
 - Android Auto o una radio OEM pueden no publicar su reproducción como MediaSession del sistema Android. La radio
   Jancar observada no publicó emisora ni RDS por ese mecanismo durante la exportación.

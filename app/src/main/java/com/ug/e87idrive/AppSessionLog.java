@@ -22,6 +22,7 @@ final class AppSessionLog {
 
     static void initialize(Context context) {
         synchronized (LOCK) {
+            VehicleObservationTrace.reset();
             file = new File(context.getFilesDir(), FILE_NAME);
             String header = "BMW E87 iDrive · REGISTRO DE SESIÓN\n"
                     + "Inicio=" + timestamp() + "\n"

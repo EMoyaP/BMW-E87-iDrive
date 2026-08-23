@@ -3,6 +3,7 @@ package com.ug.e87idrive;
 /** Vehicle fields known to the UI. Values are only shown when a provider has a real value. */
 public enum VehicleField {
     SPEED("speed", "Velocidad", true),
+    GEAR("gear", "Caja", true),
     EXTERIOR_TEMPERATURE("temp_ext", "Temperatura exterior", true),
     PDC("pdc", "PDC / Radar", true),
     REVERSE("reverse", "Marcha atrás", true),

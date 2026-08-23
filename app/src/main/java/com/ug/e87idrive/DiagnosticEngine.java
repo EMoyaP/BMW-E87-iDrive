@@ -105,6 +105,7 @@ public final class DiagnosticEngine {
     }
 
     public synchronized void startCorrelation(String label) {
+        VehicleObservationTrace.guided("CORRELACIÓN INICIADA", "prueba=" + (label == null ? "desconocida" : label));
         correlation = new CorrelationSession(label, System.currentTimeMillis(), new LinkedHashMap<>(observed),
                 snapshotSettings(true));
     }
@@ -113,6 +114,8 @@ public final class DiagnosticEngine {
         if (correlation == null) return "No hay una sesión activa.";
         correlation.endedAt = System.currentTimeMillis();
         String report = correlationReport(correlation);
+        VehicleObservationTrace.guided("CORRELACIÓN FINALIZADA", "prueba=" + correlation.label
+                + " · pasos=" + correlation.completedStepReports.size());
         correlation = null;
         return report;
     }
@@ -132,6 +135,8 @@ public final class DiagnosticEngine {
         CorrelationStep step = new CorrelationStep(label, System.currentTimeMillis(),
                 new LinkedHashMap<>(observed), snapshotSettings(true), expectedTokens);
         correlation.activeStep = step;
+        VehicleObservationTrace.guided("PASO GUIADO INICIADO", "prueba=" + correlation.label
+                + " · paso=" + label + " · tokens=" + (expectedTokens == null ? 0 : expectedTokens.size()));
         addStableVisibleCandidates(step);
     }
 
@@ -154,6 +159,9 @@ public final class DiagnosticEngine {
         step.endedAt = System.currentTimeMillis();
         List<LiveCandidate> ranked = rankCandidates(step);
         String report = stepReport(step, skipped, ranked);
+        VehicleObservationTrace.guided("PASO GUIADO CAPTURADO", "paso=" + step.label
+                + " · resultado=" + (skipped ? "omitido" : "realizado")
+                + " · candidatos=" + ranked.size());
         correlation.completedStepReports.add(report);
         if (persistCandidates) {
             candidateStore.record(correlation.label, step.label, correlation.startedAt, ranked);
@@ -274,6 +282,7 @@ public final class DiagnosticEngine {
     /** Records only values obtained from a verified, read-only Android provider. */
     public synchronized void recordVehicleObservation(String key, Object value, String source) {
         if (key == null || value == null) return;
+        VehicleObservationTrace.observe(source, key, value, "observado por proveedor");
         String observedKey = "vehicle." + key;
         String compact = compactValue(value);
         String previous = observed.put(observedKey, compact);

@@ -14,13 +14,14 @@ import android.service.notification.NotificationListenerService;
 import java.util.List;
 
 /**
- * Uses Android's documented MediaSession API only. Transport controls are sent
- * exclusively to a session that explicitly publishes the matching standard action.
- * No OEM radio, CAN, UART, Android Auto or proprietary protocol is accessed.
+ * Reads standard MediaSession/notification data and, when available on this
+ * exact unit, the verified exported Jancar MediaService bridge. Transport
+ * controls are sent only to an explicitly active third-party media source.
+ * No CAN/UART writes or unverified private Bluetooth API is used.
  */
 public final class MediaSessionProvider {
     public static final class Snapshot {
-        public final String title, artist, source, state;
+        public final String title, artist, album, source, state;
         public final Bitmap artwork;
         public final boolean accessGranted, listenerConnected, sessionAvailable;
         public final boolean canPlayPause, canPrevious, canNext;
@@ -29,8 +30,17 @@ public final class MediaSessionProvider {
                  boolean accessGranted, boolean listenerConnected, boolean sessionAvailable,
                  boolean canPlayPause,
                  boolean canPrevious, boolean canNext) {
+            this(title, artist, "", source, state, artwork, accessGranted, listenerConnected,
+                    sessionAvailable, canPlayPause, canPrevious, canNext);
+        }
+
+        Snapshot(String title, String artist, String album, String source, String state,
+                 Bitmap artwork, boolean accessGranted, boolean listenerConnected,
+                 boolean sessionAvailable, boolean canPlayPause,
+                 boolean canPrevious, boolean canNext) {
             this.title = title;
             this.artist = artist;
+            this.album = album;
             this.source = source;
             this.state = state;
             this.artwork = artwork;
@@ -49,8 +59,13 @@ public final class MediaSessionProvider {
     private Snapshot last = unavailable(false);
     private int lastArtworkGeneration = -1;
     private Bitmap lastArtwork;
+    private final JancarMediaProvider jancarMedia;
 
-    public MediaSessionProvider(Context context) { this.context = context.getApplicationContext(); }
+    public MediaSessionProvider(Context context) {
+        this.context = context.getApplicationContext();
+        this.jancarMedia = new JancarMediaProvider(this.context, () -> { });
+        this.jancarMedia.start();
+    }
 
     public Snapshot refresh() {
         try {
@@ -70,6 +85,12 @@ public final class MediaSessionProvider {
     /** Prefers the assigned Android Auto bridge when it exposes a MediaSession, then falls back safely. */
     public Snapshot refreshPreferred(String packageName) {
         try {
+            JancarMediaProvider.Snapshot jancar = jancarMedia.snapshot();
+            if (jancar.hasContent()) return last = fromJancar(jancar);
+            SpeedPlayMediaReceiver.Snapshot speedPlay = SpeedPlayMediaReceiver.latest();
+            if (isSpeedPlayPackage(packageName) && speedPlay != null && speedPlay.hasContent()) {
+                return last = fromSpeedPlay(speedPlay);
+            }
             List<MediaController> controllers = activeSessions();
             MediaController controller = findController(controllers, packageName);
             if (controller == null) {
@@ -142,6 +163,8 @@ public final class MediaSessionProvider {
                 .append(preferredPackage == null ? "(ninguno)" : preferredPackage).append('\n');
         out.append("acceso configurado=").append(isAccessConfigured()).append('\n');
         out.append(MediaNotificationListener.diagnosticSummary());
+        out.append(SpeedPlayMediaReceiver.diagnosticSummary()).append('\n');
+        out.append(jancarMedia.diagnosticReport());
         try {
             List<MediaController> controllers = activeSessions();
             out.append("MediaSession activas=").append(controllers == null ? 0 : controllers.size()).append('\n');
@@ -156,8 +179,8 @@ public final class MediaSessionProvider {
         } catch (Exception error) {
             out.append("lectura de sesiones=").append(error.getClass().getSimpleName()).append('\n');
         }
-        out.append("SpeedPlay solo puede leerse si publica una MediaSession o notificación; "
-                + "iDrive no inicia su servicio privado ni usa protocolos propietarios.\n");
+        out.append("SpeedPlay se observa por broadcast pasivo, MediaSession estándar,")
+                .append(" notificación o el puente MediaService Jancar verificado en esta unidad.\n");
         return out.toString();
     }
 
@@ -177,6 +200,11 @@ public final class MediaSessionProvider {
      */
     public boolean control(Command command, String preferredPackage) {
         try {
+            JancarMediaProvider.Snapshot jancar = jancarMedia.snapshot();
+            if (jancar.canControl()) {
+                int operation = command == Command.TOGGLE ? 0 : command == Command.PREVIOUS ? 1 : 2;
+                return jancarMedia.control(operation);
+            }
             List<MediaController> controllers = activeSessions();
             MediaController controller = findController(controllers, preferredPackage);
             if (controller == null) controller = findKnownMediaController(controllers);
@@ -239,15 +267,34 @@ public final class MediaSessionProvider {
                 MediaMetadata.METADATA_KEY_ARTIST,
                 MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION,
                 MediaMetadata.METADATA_KEY_GENRE);
+        String album = firstText(metadata, "", MediaMetadata.METADATA_KEY_ALBUM);
         PlaybackState playback = controller.getPlaybackState();
         long actions = playback == null ? 0L : playback.getActions();
         boolean canPlayPause = (actions & (PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE)) != 0L;
-        return new Snapshot(title, artist, controller.getPackageName(), state(controller),
+        return new Snapshot(title, artist, album, controller.getPackageName(), state(controller),
                 artwork(metadata), true, MediaNotificationListener.isConnected(), true,
                 canPlayPause,
                 (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L,
                 (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L);
+    }
+
+    private Snapshot fromSpeedPlay(SpeedPlayMediaReceiver.Snapshot speedPlay) {
+        String title = speedPlay.title.isEmpty() ? "Reproducción SpeedPlay" : speedPlay.title;
+        String artist = speedPlay.artist.isEmpty() ? "Artista no publicado" : speedPlay.artist;
+        return new Snapshot(title, artist, speedPlay.album,
+                "SpeedPlay · broadcast", speedPlay.stateLabel(), null,
+                true, MediaNotificationListener.isConnected(), true,
+                false, false, false);
+    }
+
+    private Snapshot fromJancar(JancarMediaProvider.Snapshot jancar) {
+        String title = jancar.title.isEmpty() ? "Reproducción Android Auto" : jancar.title;
+        String artist = jancar.artist.isEmpty() ? "Detalle no publicado" : jancar.artist;
+        return new Snapshot(title, artist, "",
+                "Jancar MediaService · Android Auto", jancar.stateLabel(), null,
+                true, MediaNotificationListener.isConnected(), true,
+                jancar.canControl(), jancar.canControl(), jancar.canControl());
     }
 
     private Snapshot fromNotification(MediaNotificationListener.Snapshot notification) {
@@ -282,6 +329,12 @@ public final class MediaSessionProvider {
             if (value != null && !value.toString().trim().isEmpty()) return value.toString().trim();
         }
         return fallback;
+    }
+
+    private static boolean isSpeedPlayPackage(String packageName) {
+        return packageName == null || packageName.trim().isEmpty()
+                || "com.suding.speedplay".equals(packageName)
+                || packageName.toLowerCase(java.util.Locale.ROOT).contains("speedplay");
     }
 
     private Bitmap artwork(MediaMetadata metadata) {

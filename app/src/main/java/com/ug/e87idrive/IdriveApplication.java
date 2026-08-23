@@ -6,5 +6,6 @@ public final class IdriveApplication extends Application {
     @Override public void onCreate() {
         super.onCreate();
         AppSessionLog.initialize(this);
+        SpeedPlayMediaReceiver.register(this);
     }
 }

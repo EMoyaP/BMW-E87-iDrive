@@ -42,6 +42,11 @@ public final class BluetoothDeviceProvider {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final BluetoothAdapter adapter;
     private final AudioManager audioManager;
+    private final JancarBluetoothProvider jancar;
+    // Android's legacy PAN profile identifier. The constant is no longer in
+    // the public BluetoothProfile interface on recent SDKs, but the profile
+    // proxy API still accepts this framework identifier on compatible units.
+    private static final int PROFILE_PAN = 5;
     private final Map<Integer, BluetoothProfile> proxies = new LinkedHashMap<>();
     private boolean active, receiverRegistered;
     private State state = new State("Comprobando Bluetooth…", "Lectura estándar de Android", false, false);
@@ -85,11 +90,15 @@ public final class BluetoothDeviceProvider {
                 .getSystemService(Context.BLUETOOTH_SERVICE);
         adapter = manager == null ? null : manager.getAdapter();
         audioManager = (AudioManager) this.context.getSystemService(Context.AUDIO_SERVICE);
+        jancar = new JancarBluetoothProvider(this.context, () -> {
+            synchronized (BluetoothDeviceProvider.this) { evaluate(); }
+        });
     }
 
     public synchronized void start() {
         if (active) { evaluate(); return; }
         active = true;
+        jancar.start();
         if (!hasPermission()) {
             publish(new State("Permiso Bluetooth necesario",
                     "Autoriza Dispositivos cercanos", false, false));
@@ -109,6 +118,10 @@ public final class BluetoothDeviceProvider {
         registerReceiver();
         requestProfile(BluetoothProfile.HEADSET);
         requestProfile(BluetoothProfile.A2DP);
+        // PAN is the public profile used by Bluetooth internet tethering. It
+        // is also useful for identifying the phone when the radio exposes PAN
+        // but does not expose an audio profile for Android Auto.
+        requestProfile(PROFILE_PAN);
         publish(new State("Comprobando conexión…", "Bluetooth de Android", false, true));
         main.postDelayed(() -> {
             synchronized (BluetoothDeviceProvider.this) { if (active) evaluate(); }
@@ -117,6 +130,7 @@ public final class BluetoothDeviceProvider {
 
     public synchronized void stop() {
         active = false;
+        jancar.stop();
         main.removeCallbacksAndMessages(null);
         try { if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioCallback); }
         catch (Exception ignored) {}
@@ -172,6 +186,12 @@ public final class BluetoothDeviceProvider {
             return;
         }
         try {
+            JancarBluetoothProvider.Snapshot oem = jancar.snapshot();
+            if (oem.hasDevice()) {
+                publish(new State(oem.deviceName,
+                        "Conectado · servicio Bluetooth OEM", true, true));
+                return;
+            }
             LinkedHashMap<String, String> devices = new LinkedHashMap<>();
             collectBluetoothAudioDevices(devices);
             if (adapter != null && adapter.isEnabled()) {

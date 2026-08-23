@@ -43,6 +43,14 @@ La tarjeta de gasolineras toma como referencia funcional el proyecto
 copiado sus dependencias WebView/Leaflet ni un motor de rutas; la integración de este repositorio es nativa y abre la
 aplicación de mapas instalada.
 
+## Límites de velocidad
+
+Los datos de límites de velocidad usados para la base local proceden de [OpenStreetMap](https://www.openstreetmap.org/)
+y de sus colaboradores, bajo los términos de la [Open Data Commons Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/).
+La aplicación los obtiene, cuando el usuario lo solicita mediante Wi-Fi, usando un servicio público compatible con la
+API Overpass. OpenStreetMap y sus colaboradores no garantizan la exactitud, integridad o actualidad de los límites; el
+dato mostrado es orientativo y no sustituye la señalización vial.
+
 ## Seguridad del vehículo
 
 Este software se entrega sin garantía. No sustituye sistemas de seguridad, instrumentación homologada ni avisos del

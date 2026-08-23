@@ -138,11 +138,13 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
             property = "PERF_VEHICLE_SPEED";
         }
         if (value == null) {
+            trace("PERF_VEHICLE_SPEED", null, "no publicado");
             clear(VehicleField.SPEED);
             return;
         }
         double metersPerSecond = value.doubleValue();
         double kmh = Math.abs(metersPerSecond) * 3.6d;
+        trace(property, metersPerSecond, kmh + " km/h");
         diagnostics.recordVehicleObservation("speed_mps", metersPerSecond,
                 VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
         put(VehicleField.SPEED, kmh, now);
@@ -151,9 +153,11 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
     private void readBoardComputer(long now) {
         Number remainingMeters = asNumber(readGlobal("RANGE_REMAINING", Float.class));
         if (remainingMeters == null) {
+            trace("RANGE_REMAINING", null, "no publicado");
             clear(VehicleField.RANGE);
         } else {
             double rangeKm = Math.max(0d, remainingMeters.doubleValue() / 1_000d);
+            trace("RANGE_REMAINING", remainingMeters, rangeKm + " km");
             diagnostics.recordVehicleObservation("range_remaining.meters", remainingMeters,
                     VehicleSource.ANDROID_AUTOMOTIVE.name() + ".RANGE_REMAINING");
             put(VehicleField.RANGE, rangeKm, now);
@@ -161,9 +165,11 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
         Number consumption = asNumber(readGlobal("INSTANTANEOUS_FUEL_ECONOMY", Float.class));
         if (consumption == null) {
+            trace("INSTANTANEOUS_FUEL_ECONOMY", null, "no publicado");
             clear(VehicleField.CONSUMPTION);
         } else {
             double litersPer100Km = Math.max(0d, consumption.doubleValue());
+            trace("INSTANTANEOUS_FUEL_ECONOMY", consumption, litersPer100Km + " l/100 km");
             diagnostics.recordVehicleObservation("fuel_economy.l_per_100km", litersPer100Km,
                     VehicleSource.ANDROID_AUTOMOTIVE.name() + ".INSTANTANEOUS_FUEL_ECONOMY");
             put(VehicleField.CONSUMPTION, litersPer100Km, now);
@@ -173,11 +179,13 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
     private void readExteriorTemperature(long now) {
         Number value = asNumber(readGlobal("ENV_OUTSIDE_TEMPERATURE", Float.class));
         if (value == null) {
+            trace("ENV_OUTSIDE_TEMPERATURE", null, "no publicado");
             clear(VehicleField.EXTERIOR_TEMPERATURE);
             return;
         }
         diagnostics.recordVehicleObservation("temp_ext.celsius", value,
                 VehicleSource.ANDROID_AUTOMOTIVE.name() + ".ENV_OUTSIDE_TEMPERATURE");
+        trace("ENV_OUTSIDE_TEMPERATURE", value, value + " °C");
         put(VehicleField.EXTERIOR_TEMPERATURE, value.doubleValue(), now);
     }
 
@@ -190,10 +198,12 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         }
         Integer reverse = vehicleGearId("GEAR_REVERSE");
         if (selected == null || reverse == null) {
+            trace(property, selected, "marcha atrás no determinable");
             clear(VehicleField.REVERSE);
             return;
         }
         int gear = selected.intValue();
+        trace(property, gear, gear == reverse ? "Activa" : "Inactiva");
         diagnostics.recordVehicleObservation("gear.raw", gear,
                 VehicleSource.ANDROID_AUTOMOTIVE.name() + "." + property);
         put(VehicleField.REVERSE, gear == reverse ? "Activa" : "Inactiva", now);
@@ -201,6 +211,8 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
     private void readParkingBrake(long now) {
         Object value = readGlobal("PARKING_BRAKE_ON", Boolean.class);
+        trace("PARKING_BRAKE_ON", value, value instanceof Boolean
+                ? ((Boolean) value ? "Activado" : "Liberado") : "no publicado");
         if (value instanceof Boolean) {
             put(VehicleField.PARKING_BRAKE, (Boolean) value ? "Activado" : "Liberado", now);
         } else clear(VehicleField.PARKING_BRAKE);
@@ -208,6 +220,7 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
     private void readDoors(long now) {
         AreaRead doors = readAreas("DOOR_POS", Integer.class);
+        trace("DOOR_POS", doors.values, doors.readable ? "áreas publicadas" : "no publicado");
         if (!doors.readable || doors.values.isEmpty()) {
             clear(VehicleField.DOORS);
             return;
@@ -238,6 +251,11 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
         Integer frontFog = asInteger(readGlobal("FRONT_FOG_LIGHTS_STATE", Integer.class));
         Integer rearFog = asInteger(readGlobal("REAR_FOG_LIGHTS_STATE", Integer.class));
         Integer hazard = asInteger(readGlobal("HAZARD_LIGHTS_STATE", Integer.class));
+        trace("HEADLIGHTS_STATE", head, lightState(head));
+        trace("HIGH_BEAM_LIGHTS_STATE", high, lightState(high));
+        trace("FRONT_FOG_LIGHTS_STATE", frontFog, lightState(frontFog));
+        trace("REAR_FOG_LIGHTS_STATE", rearFog, lightState(rearFog));
+        trace("HAZARD_LIGHTS_STATE", hazard, lightState(hazard));
         if (head == null && high == null && frontFog == null && rearFog == null && hazard == null) {
             clear(VehicleField.LIGHTS);
             return;
@@ -255,18 +273,21 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
 
     private void readClimate(long now) {
         AreaRead temperatures = readAreas("HVAC_TEMPERATURE_SET", Float.class);
+        trace("HVAC_TEMPERATURE_SET", temperatures.values, temperatures.readable ? "temperatura publicada" : "no publicado");
         if (temperatures.readable && !temperatures.values.isEmpty()) {
             recordAreaValues("climate_temp", "HVAC_TEMPERATURE_SET", temperatures);
             put(VehicleField.CLIMATE_TEMPERATURE, summarizeNumbers(temperatures.values, " °C"), now);
         } else clear(VehicleField.CLIMATE_TEMPERATURE);
 
         AreaRead fans = readAreas("HVAC_FAN_SPEED", Integer.class);
+        trace("HVAC_FAN_SPEED", fans.values, fans.readable ? "ventilación publicada" : "no publicado");
         if (fans.readable && !fans.values.isEmpty()) {
             recordAreaValues("climate_fan", "HVAC_FAN_SPEED", fans);
             put(VehicleField.CLIMATE_FAN, summarizeNumbers(fans.values, ""), now);
         } else clear(VehicleField.CLIMATE_FAN);
 
         AreaRead power = readAreas("HVAC_POWER_ON", Boolean.class);
+        trace("HVAC_POWER_ON", power.values, power.readable ? "climatización publicada" : "no publicado");
         if (power.readable && !power.values.isEmpty()) {
             recordAreaValues("climate_power", "HVAC_POWER_ON", power);
             boolean anyOn = false;
@@ -301,6 +322,15 @@ public final class AndroidAutomotiveProvider implements VehicleDataProvider {
     }
 
     private boolean isOn(Integer value) { return value != null && value == 1; }
+
+    private static void trace(String field, Object raw, Object interpreted) {
+        VehicleObservationTrace.observe("Android Automotive", field, raw, interpreted);
+    }
+
+    private static String lightState(Integer value) {
+        if (value == null) return "no publicado";
+        return value == 1 ? "activo" : value == 0 ? "apagado" : "desconocido";
+    }
     private Integer asInteger(Object value) { return value instanceof Integer ? (Integer) value : null; }
     private Number asNumber(Object value) { return value instanceof Number ? (Number) value : null; }
 

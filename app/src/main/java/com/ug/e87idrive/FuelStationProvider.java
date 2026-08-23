@@ -617,6 +617,7 @@ public final class FuelStationProvider {
 
     private void publishNetworkStateIfNeeded() {
         if (!active || snapshot == null || hasActiveInternet()) return;
+        AppSessionLog.event("GASOLINERAS", networkDiagnostic().replace('\n', ' ').trim());
         publish(new Snapshot(snapshot.fuelLabel, snapshot.radiusKm, snapshot.datasetDate,
                 "Android sin Internet · activa hotspot, PAN o Wi-Fi",
                 snapshot.cheapest, snapshot.nearest, false,

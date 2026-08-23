@@ -229,6 +229,8 @@ public final class UsbDebugWizardDialog {
         sessionStartedAt = System.currentTimeMillis();
         host.ensureDiagnosticSourcesStarted();
         diagnostics.startCorrelation("USB DEBUG · " + plan.title());
+        VehicleObservationTrace.guided("ASISTENTE INICIADO", "plan=" + plan.title()
+                + " · id=" + plan.id());
         recorder.startSession("wizard_" + plan.id(), buildUsbReport("INICIADA", ""),
                 (success, message) -> activity.runOnUiThread(() -> host.message(message)));
         host.onCaptureStateChanged(true, "Asistente activo · " + plan.title());
@@ -244,6 +246,9 @@ public final class UsbDebugWizardDialog {
 
     private void beginStep() {
         UsbDebugWizard.Step step = plan.steps().get(stepIndex);
+        VehicleObservationTrace.guided("INSTRUCCIÓN MOSTRADA", "plan=" + plan.title()
+                + " · paso=" + (stepIndex + 1) + "/" + plan.steps().size()
+                + " · acción=" + step.title());
         diagnostics.startCorrelationStep(step.title(), plan.tokens());
         stepReadyAt = System.currentTimeMillis() + MIN_STEP_MS;
         progress.setProgress(stepIndex);
@@ -259,6 +264,8 @@ public final class UsbDebugWizardDialog {
     private void repeatStep() {
         if (!running || finished) return;
         diagnostics.repeatCorrelationStep();
+        VehicleObservationTrace.guided("PASO REPETIDO", "paso=" + (stepIndex + 1)
+                + " · acción=" + plan.steps().get(stepIndex).title());
         stepReadyAt = System.currentTimeMillis() + MIN_STEP_MS;
         candidatesBox.removeAllViews();
         candidatesBox.addView(emptyCandidate("Línea base renovada. Repite ahora la maniobra indicada."));
@@ -273,6 +280,8 @@ public final class UsbDebugWizardDialog {
             return;
         }
         diagnostics.finishCorrelationStep(skipped);
+        VehicleObservationTrace.guided("ACCIÓN DEL USUARIO", "paso=" + (stepIndex + 1)
+                + " · " + (skipped ? "omitido" : "confirmado"));
         if (stepIndex >= plan.steps().size() - 1) {
             finishAndSave("FINALIZADA", true);
             return;
@@ -356,6 +365,8 @@ public final class UsbDebugWizardDialog {
         handler.removeCallbacks(timeout);
         if (diagnostics.currentCorrelationStepStartedAt() != 0) diagnostics.finishCorrelationStep(true, true);
         String correlationReport = diagnostics.stopCorrelation();
+        VehicleObservationTrace.guided("ASISTENTE CERRADO", "estado=" + stage
+                + " · pasos_realizados=" + (stepIndex + 1));
         running = false;
         finished = true;
         String finalReport = buildUsbReport(stage, correlationReport);

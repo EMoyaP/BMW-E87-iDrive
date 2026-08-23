@@ -37,6 +37,8 @@ import android.widget.GridLayout;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.Spinner;
@@ -56,14 +58,17 @@ public class MainActivity extends Activity {
     private SharedPreferences vehiclePreferences, uiPreferences;
     private AppRepository apps;
     private LinearLayout root, vehicleRows, statusBar;
+    private LinearLayout boardSummaryRows;
     private LinearLayout fuelRows;
     private GridLayout quickGrid;
-    private TextView clock, date, mediaTitle, mediaArtist, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
+    private TextView clock, date, mediaTitle, mediaArtist, mediaAlbum, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
     private TextView mediaPrevious, mediaPlayPause, mediaNext;
     private TextView phoneDevice, phoneConnection;
     private TextView radioBand, radioStation, radioDetail;
     private ImageView mediaArtwork;
     private SpeedGaugeView speedGauge;
+    private SpeedLimitView speedLimitView;
+    private TextView boardSummarySpeed, boardSummarySpeedSource, speedLimitState, speedLimitRefresh, speedSource;
     private final java.util.Map<String, TextView> roleLabels = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, TextView> roleHints = new java.util.LinkedHashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -73,6 +78,7 @@ public class MainActivity extends Activity {
     private MediaSessionProvider media;
     private JancarRadioProvider oemRadio;
     private FuelStationProvider fuelStations;
+    private SpeedLimitRepository speedLimits;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
     private UsbDebugWizardDialog activeUsbWizard;
@@ -96,10 +102,13 @@ public class MainActivity extends Activity {
         diagnostics = new DiagnosticEngine(this);
         usbDiagnostics = new UsbDiagnosticRecorder(this);
         fuelStations = new FuelStationProvider(this, this::refreshFuelWidget);
+        speedLimits = new SpeedLimitRepository(this);
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
             refreshVehicle();
             fuelStations.onLocation(location);
+            speedLimits.onLocation(location);
+            refreshSpeedLimitWidget();
         }));
         vehicleData = new VehicleDataRepository(this, gps, diagnostics, () -> {
             refreshVehicle();
@@ -124,6 +133,7 @@ public class MainActivity extends Activity {
         bluetoothState.start();
         oemRadio.start();
         fuelStations.start(gps.getLastLocation());
+        speedLimits.start(gps.getLastLocation());
         vehicleData.start();
         diagnostics.startPassiveProbe();
     }
@@ -139,6 +149,7 @@ public class MainActivity extends Activity {
         bluetoothState.stop();
         oemRadio.stop();
         fuelStations.stop();
+        speedLimits.stop();
         if (!usbCaptureRunning) {
             diagnostics.stopPassiveProbe();
             vehicleData.stop();
@@ -152,6 +163,7 @@ public class MainActivity extends Activity {
         diagnostics.stopPassiveProbe();
         bluetoothState.stop();
         fuelStations.close();
+        speedLimits.close();
         oemRadio.stop();
         vehicleData.stop();
         if (usbDiagnostics != null) usbDiagnostics.close();
@@ -170,7 +182,9 @@ public class MainActivity extends Activity {
         content.setPadding(dp(10), dp(10), dp(10), 0);
         root.addView(content, lp(-1, 0, 1));
         LinearLayout upper = horizontal();
-        upper.addView(sideMenu(), lp(dp(235), -1));
+        // The former full-height role menu consumed the clearest part of the dashboard.
+        // Its actions remain available from the compact MENU button in this replacement panel.
+        upper.addView(boardSummaryPanel(), lp(dp(235), -1));
         upper.addView(dashboardUpper(), lp(0, -1, 1));
         content.addView(upper, lp(-1, 0, 1));
         content.addView(dashboardLower(), lp(-1, dp(190)));
@@ -192,6 +206,8 @@ public class MainActivity extends Activity {
         HeaderBrandView logo = new HeaderBrandView(this);
         logo.setContentDescription("BMW iDrive");
         brand.addView(logo, lp(-1, -1));
+        brand.setContentDescription("BMW iDrive · abrir menú");
+        brand.setOnClickListener(v -> mainMenuModal());
         bar.setBackground(headerBg());
         bar.addView(brand, lp(dp(460), -1));
         LinearLayout middle = vertical();
@@ -255,10 +271,73 @@ public class MainActivity extends Activity {
 
         LinearLayout right = vertical();
         right.setPadding(dp(8), 0, 0, 0);
-        right.addView(mediaWidget(), lp(-1, 0, 1));
-        right.addView(vehicleWidget(), lp(-1, 0, 1.15f));
+        // Media access is still available from Ajustes and its passive receiver keeps
+        // collecting diagnostics, but an empty/unverified media card no longer dominates
+        // the home screen. The live vehicle gauge gets the entire right-hand area.
+        right.addView(vehicleWidget(), lp(-1, -1));
         upper.addView(right, lp(0, -1, 1));
         return upper;
+    }
+
+    /** Compact board computer replacing the redundant vertical role menu on the home screen. */
+    private View boardSummaryPanel() {
+        LinearLayout box = card();
+        box.setPadding(dp(10), dp(9), dp(10), dp(8));
+
+        LinearLayout heading = horizontal();
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = txt("ORDENADOR DE A BORDO", 12, BLUE, true);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        heading.addView(title, lp(0, dp(28), 1));
+        TextView menuGlyph = txt("☰", 22, BLUE, true);
+        menuGlyph.setGravity(Gravity.CENTER);
+        menuGlyph.setContentDescription("Abrir menú iDrive");
+        menuGlyph.setOnClickListener(v -> mainMenuModal());
+        heading.addView(menuGlyph, lp(dp(34), dp(28)));
+        box.addView(heading, lp(-1, dp(28)));
+
+        LinearLayout speed = vertical();
+        speed.setGravity(Gravity.CENTER);
+        speed.setPadding(0, dp(4), 0, dp(5));
+        TextView speedLabel = txt("VELOCIDAD", 10, MUTED, true);
+        speedLabel.setGravity(Gravity.CENTER);
+        boardSummarySpeed = txt("—", 29, MUTED, true);
+        boardSummarySpeed.setGravity(Gravity.CENTER);
+        boardSummarySpeedSource = txt("Esperando GPS", 9, MUTED, false);
+        boardSummarySpeedSource.setGravity(Gravity.CENTER);
+        speed.addView(speedLabel, lp(-1, dp(17)));
+        speed.addView(boardSummarySpeed, lp(-1, dp(39)));
+        speed.addView(boardSummarySpeedSource, lp(-1, dp(17)));
+        box.addView(speed, lp(-1, dp(78)));
+        box.addView(horizontalDivider(), lp(-1, dp(1)));
+
+        boardSummaryRows = vertical();
+        boardSummaryRows.setPadding(0, dp(3), 0, dp(3));
+        box.addView(boardSummaryRows, lp(-1, 0, 1));
+
+        TextView note = txt("Solo valores disponibles", 9, MUTED, false);
+        note.setGravity(Gravity.CENTER);
+        box.addView(note, lp(-1, dp(17)));
+        TextView menu = txt("☰  MENÚ COMPLETO", 11, BLUE, true);
+        menu.setGravity(Gravity.CENTER);
+        menu.setBackground(slotBg());
+        menu.setContentDescription("Abrir menú completo de iDrive");
+        menu.setOnClickListener(v -> mainMenuModal());
+        box.addView(menu, lp(-1, dp(34)));
+        return box;
+    }
+
+    /** Keeps every existing role reachable after the full-height menu is replaced visually. */
+    private void mainMenuModal() {
+        String[] options = {"Multimedia", "Radio", "Navegación", "Android Auto",
+                "Teléfono", "Aplicaciones", "Ajustes"};
+        String[] roles = {"media", "radio", "nav", "auto", "phone", null, null};
+        new AlertDialog.Builder(this).setTitle("Menú iDrive")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 5) quickAppsModal();
+                    else if (which == 6) settingsModal();
+                    else launchRole(roles[which]);
+                }).setNegativeButton("CERRAR", null).show();
     }
 
     private View dashboardLower() {
@@ -365,16 +444,22 @@ public class MainActivity extends Activity {
         copy.setGravity(Gravity.CENTER_VERTICAL);
         copy.setPadding(dp(5), 0, 0, 0);
         LinearLayout top = horizontal();
-        TextView label = txt(kind, 8, tone, true);
-        TextView price = txt(String.format(new Locale("es", "ES"), "%.3f €/L", station.price), 11, TEXT, true);
+        TextView label = txt(kind, 9, tone, true);
+        TextView price = txt(String.format(new Locale("es", "ES"), "%.3f €/L", station.price), 14, TEXT, true);
         price.setGravity(Gravity.END);
         top.addView(label, lp(0, -1, 1));
-        top.addView(price, lp(dp(82), -1));
-        TextView name = txt(station.brand + " · "
-                + String.format(new Locale("es", "ES"), "%.1f km", station.distanceKm), 10, TEXT, false);
+        top.addView(price, lp(dp(96), -1));
+        LinearLayout bottom = horizontal();
+        bottom.setGravity(Gravity.CENTER_VERTICAL);
+        TextView name = txt(station.brand, 11, TEXT, false);
         name.setMaxLines(1);
-        copy.addView(top, lp(-1, dp(17)));
-        copy.addView(name, lp(-1, dp(19)));
+        TextView distance = txt(String.format(new Locale("es", "ES"), "%.1f km",
+                station.distanceKm), 13, tone, true);
+        distance.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        bottom.addView(name, lp(0, -1, 1));
+        bottom.addView(distance, lp(dp(74), -1));
+        copy.addView(top, lp(-1, dp(19)));
+        copy.addView(bottom, lp(-1, dp(21)));
         row.addView(copy, lp(0, -1, 1));
         row.setContentDescription(kind + ": " + station.brand + ", " + station.price
                 + " euros por litro, " + station.distanceKm + " kilómetros");
@@ -428,10 +513,13 @@ public class MainActivity extends Activity {
         mediaTitle = txt("Acceso multimedia pendiente", 17, TEXT, false);
         mediaTitle.setMaxLines(2);
         mediaArtist = txt("Actívalo en Ajustes para leer carátula y título", 13, MUTED, false);
-        mediaArtist.setMaxLines(2);
+        mediaArtist.setMaxLines(1);
+        mediaAlbum = txt("Álbum no publicado", 11, MUTED, false);
+        mediaAlbum.setMaxLines(1);
         mediaSource = txt("MediaSession estándar", 10, MUTED, false);
         details.addView(mediaTitle);
         details.addView(mediaArtist);
+        details.addView(mediaAlbum);
         details.addView(mediaSource);
         content.addView(details, lp(0, -1, 1));
         box.addView(content, lp(-1, 0, 1));
@@ -472,6 +560,7 @@ public class MainActivity extends Activity {
         }
         mediaTitle.setText(snapshot.title);
         mediaArtist.setText(snapshot.artist);
+        mediaAlbum.setText(snapshot.album.isEmpty() ? "Álbum no publicado" : snapshot.album);
         mediaSource.setText(snapshot.source);
         mediaState.setText(snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
         updateMediaControls(snapshot);
@@ -520,16 +609,46 @@ public class MainActivity extends Activity {
         LinearLayout box = card();
         LinearLayout title = horizontal();
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.addView(txt("ORDENADOR DE A BORDO", 13, BLUE, true), lp(0, -1, 1));
+        title.addView(txt("VELOCÍMETRO", 13, BLUE, true), lp(0, -1, 1));
+        speedSource = txt("GPS · esperando señal", 9, MUTED, false);
+        speedSource.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        title.addView(speedSource, lp(dp(155), -1));
         title.setOnClickListener(v -> vehicleModal());
         box.addView(title, lp(-1, dp(34)));
         LinearLayout content = horizontal();
-        vehicleRows = vertical();
-        content.addView(vehicleRows, lp(0, -1, 1.5f));
+        LinearLayout gaugeColumn = vertical();
+        gaugeColumn.setGravity(Gravity.CENTER);
         speedGauge = new SpeedGaugeView(this);
-        content.addView(speedGauge, lp(0, -1, .9f));
+        gaugeColumn.addView(speedGauge, lp(-1, 0, 1));
+        content.addView(gaugeColumn, lp(0, -1, 1.28f));
+
+        LinearLayout limitColumn = vertical();
+        limitColumn.setGravity(Gravity.CENTER_HORIZONTAL);
+        limitColumn.setPadding(dp(4), dp(2), dp(2), dp(2));
+        TextView limitHeading = txt("LÍMITE DE LA VÍA", 10, BLUE, true);
+        limitHeading.setGravity(Gravity.CENTER);
+        limitColumn.addView(limitHeading, lp(-1, dp(25)));
+        speedLimitView = new SpeedLimitView(this, TEXT, Color.rgb(225, 38, 38), MUTED);
+        speedLimitView.setContentDescription("Límite de velocidad obtenido de una fuente de mapa");
+        limitColumn.addView(speedLimitView, lp(dp(105), dp(105)));
+        speedLimitState = txt("Sin fuente de mapa", 9, MUTED, false);
+        speedLimitState.setGravity(Gravity.CENTER);
+        speedLimitState.setMaxLines(2);
+        limitColumn.addView(speedLimitState, lp(-1, dp(32)));
+        speedLimitRefresh = txt("↻  ACTUALIZAR LÍMITES", 9, BLUE, true);
+        speedLimitRefresh.setGravity(Gravity.CENTER);
+        speedLimitRefresh.setBackground(slotBg());
+        speedLimitRefresh.setContentDescription("Actualizar límites de velocidad locales mediante Wi-Fi");
+        speedLimitRefresh.setOnClickListener(v -> chooseSpeedLimitProvince());
+        limitColumn.addView(speedLimitRefresh, lp(-1, dp(30)));
+        TextView limitNote = txt("No se inventa 50 km/h\nsi el mapa no lo publica", 9, MUTED, false);
+        limitNote.setGravity(Gravity.CENTER);
+        limitNote.setMaxLines(2);
+        limitColumn.addView(limitNote, lp(-1, dp(32)));
+        content.addView(limitColumn, lp(0, -1, .72f));
         box.addView(content, lp(-1, 0, 1));
         box.setOnLongClickListener(v -> { vehicleModal(); return true; });
+        speedLimitView.setLimit(null);
         return box;
     }
 
@@ -725,28 +844,177 @@ public class MainActivity extends Activity {
     }
 
     private void refreshVehicle() {
-        if (vehicleRows == null) return;
-        vehicleRows.removeAllViews();
         VehicleValue<?> speed = vehicleData.get(VehicleField.SPEED);
         if (speedGauge != null) {
-            speedGauge.setSpeed(speed.isAvailable() && speed.value() instanceof Double ? (Double) speed.value() : null);
+            Double speedValue = speed.isAvailable() && speed.value() instanceof Number
+                    ? ((Number) speed.value()).doubleValue() : null;
+            speedGauge.setSpeed(speedValue);
+            // Gear is still an historical/stale CAN observation on this unit. Do not paint
+            // P/R/N as current until a live source is validated in a guided test.
+            speedGauge.setGear(null);
+            if (speedSource != null) {
+                speedSource.setText(speedValue == null
+                        ? "GPS · sin señal" : "Fuente " + shortSource(speed.source()));
+                speedSource.setTextColor(speedValue == null ? MUTED : BLUE);
+            }
         }
-        boolean autoHide = vehiclePreferences.getBoolean("auto_hide", false);
+        if (boardSummarySpeed != null) {
+            Double speedValue = speed.isAvailable() && speed.value() instanceof Number
+                    ? ((Number) speed.value()).doubleValue() : null;
+            boardSummarySpeed.setText(speedValue == null
+                    ? "—" : String.format(Locale.getDefault(), "%.0f km/h", speedValue));
+            boardSummarySpeed.setTextColor(speedValue == null ? MUTED
+                    : speedValue > 120d ? Color.rgb(246, 126, 13) : Color.rgb(72, 196, 118));
+            boardSummarySpeedSource.setText(speedValue == null
+                    ? "Esperando señal GPS" : "Fuente " + shortSource(speed.source()));
+            boardSummarySpeedSource.setTextColor(speedValue == null ? MUTED : BLUE);
+            refreshBoardSummaryRows();
+        }
+        if (speedLimitView != null) {
+            // GPS supplies position and speed, not the legal limit of the current road.
+            // Until a map source publishes maxspeed, keep the sign visibly unavailable.
+            refreshSpeedLimitWidget();
+        }
+    }
+
+    private void refreshSpeedLimitWidget() {
+        if (speedLimitView == null || speedLimits == null || gps == null) return;
+        SpeedLimitRepository.Match match = speedLimits.lookup(gps.getLastLocation());
+        if (match == null) {
+            speedLimitView.setLimit(null);
+            if (speedLimitState != null) {
+                speedLimitState.setText("Sin límite local cercano");
+                speedLimitState.setTextColor(MUTED);
+            }
+        } else {
+            speedLimitView.setLimit(match.limitKmh);
+            if (speedLimitState != null) {
+                String region = match.province == null || match.province.isEmpty()
+                        ? "OSM local" : "OSM " + SpeedLimitRepository.provinceLabel(match.province);
+                speedLimitState.setText(String.format(Locale.getDefault(), "%s · %.0f m",
+                        region, match.distanceMeters));
+                speedLimitState.setTextColor(BLUE);
+            }
+        }
+        if (speedLimitRefresh != null) {
+            boolean internet = speedLimits.isInternetAvailable();
+            speedLimitRefresh.setText(internet ? "↻  ACTUALIZAR" : "↻  SIN INTERNET");
+            speedLimitRefresh.setTextColor(internet ? BLUE : MUTED);
+            speedLimitRefresh.setEnabled(internet);
+            speedLimitRefresh.setAlpha(internet ? 1f : .65f);
+        }
+    }
+
+    private void chooseSpeedLimitProvince() {
+        if (speedLimits == null) return;
+        if (!speedLimits.isInternetAvailable()) {
+            toast("La radio no tiene una conexión a Internet disponible");
+            return;
+        }
+        String[] labels = SpeedLimitRepository.supportedProvinceLabels();
+        String[] codes = SpeedLimitRepository.supportedProvinceCodes();
+        LinearLayout box = vertical();
+        box.setBackgroundColor(PANEL);
+        box.setPadding(dp(12), dp(6), dp(12), dp(4));
+        TextView description = txt("Actualiza solo una zona. La opción GPS consulta 5 km;\n"
+                + "Alicante, Murcia, Valencia y Albacete actualizan su provincia completa.",
+                12, TEXT, false);
+        description.setPadding(dp(8), dp(2), dp(8), dp(10));
+        box.addView(description, lp(-1, dp(48)));
+        RadioGroup choices = new RadioGroup(this);
+        choices.setOrientation(LinearLayout.VERTICAL);
+        RadioButton firstChoice = null;
+        for (int i = 0; i < labels.length; i++) {
+            RadioButton choice = new RadioButton(this);
+            choice.setId(1000 + i);
+            if (firstChoice == null) firstChoice = choice;
+            choice.setText(labels[i]);
+            choice.setTextColor(TEXT);
+            choice.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            choice.setGravity(Gravity.CENTER_VERTICAL);
+            choice.setPadding(dp(4), 0, dp(4), 0);
+            choices.addView(choice, new RadioGroup.LayoutParams(-1, dp(48)));
+        }
+        if (firstChoice != null) choices.check(firstChoice.getId());
+        box.addView(choices, lp(-1, dp(48 * labels.length)));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Actualizar límites locales")
+                .setView(box)
+                .setNegativeButton("CANCELAR", null)
+                .create();
+        choices.setOnCheckedChangeListener((group, checkedId) -> {
+            int which = checkedId - 1000;
+            if (which < 0 || which >= codes.length) return;
+            dialog.dismiss();
+            updateSpeedLimitsFromInternet(codes[which]);
+        });
+        showSized(dialog, .60f, .72f);
+    }
+
+    private void updateSpeedLimitsFromWifi() {
+        chooseSpeedLimitProvince();
+    }
+
+    private void updateSpeedLimitsFromInternet(String province) {
+        if (speedLimits == null) return;
+        if (!speedLimits.isInternetAvailable()) {
+            toast("La radio no tiene una conexión a Internet disponible");
+            return;
+        }
+        if (speedLimitRefresh != null) {
+            speedLimitRefresh.setEnabled(false);
+            speedLimitRefresh.setText("ACTUALIZANDO…");
+        }
+        speedLimits.refreshFromInternet(gps.getLastLocation(), province, result -> {
+            refreshSpeedLimitWidget();
+            toast(result.message);
+        });
+    }
+
+    private void refreshBoardSummaryRows() {
+        if (boardSummaryRows == null) return;
+        boardSummaryRows.removeAllViews();
+        VehicleField[] fields = {VehicleField.RANGE, VehicleField.CONSUMPTION,
+                VehicleField.EXTERIOR_TEMPERATURE};
         int shown = 0;
-        VehicleField[] dashboardFields = {VehicleField.SPEED, VehicleField.RANGE,
-                VehicleField.CONSUMPTION, VehicleField.EXTERIOR_TEMPERATURE};
-        for (VehicleField field : dashboardFields) {
+        for (VehicleField field : fields) {
+            if (!vehiclePreferences.getBoolean("show_" + field.key(), true)) continue;
             String value = vehicleValue(field);
-            if (autoHide && value == null) continue;
-            if (shown > 0) vehicleRows.addView(horizontalDivider(), lp(-1, dp(1)));
-            vehicleRows.addView(vehicleRow(field, value), lp(-1, 0, 1));
-            if (++shown >= 5) break;
+            if (value == null) continue;
+            if (shown > 0) boardSummaryRows.addView(horizontalDivider(), lp(-1, dp(1)));
+            boardSummaryRows.addView(summaryRow(field, value), lp(-1, 0, 1));
+            shown++;
         }
         if (shown == 0) {
-            TextView empty = txt("Sin datos visibles\nPulsa ⚙ para configurar", 12, MUTED, false);
+            TextView empty = txt("Esperando datos reales", 11, MUTED, false);
             empty.setGravity(Gravity.CENTER);
-            vehicleRows.addView(empty, lp(-1, 0, 1));
+            boardSummaryRows.addView(empty, lp(-1, 0, 1));
         }
+    }
+
+    private View summaryRow(VehicleField field, String value) {
+        LinearLayout row = horizontal();
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(2), 0, dp(2));
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(vehicleIcon(field));
+        row.addView(icon, lp(dp(27), dp(27)));
+        TextView label = txt(vehiclePanelLabel(field), 11, TEXT, false);
+        label.setPadding(dp(6), 0, 0, 0);
+        row.addView(label, lp(0, -1, 1));
+        TextView reading = txt(value, 13, TEXT, true);
+        reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        row.addView(reading, lp(dp(92), -1));
+        return row;
+    }
+
+    private String shortSource(VehicleSource source) {
+        if (source == null) return "desconocida";
+        if (source == VehicleSource.GPS) return "GPS";
+        if (source == VehicleSource.OEM_CAN_SERVICE) return "CAN";
+        if (source == VehicleSource.JCRK01_CYA) return "JCRK01";
+        if (source == VehicleSource.ANDROID_AUTOMOTIVE) return "Android Automotive";
+        return source.name();
     }
 
     private void refreshStatus() {
@@ -802,6 +1070,9 @@ public class MainActivity extends Activity {
             if (field == VehicleField.RANGE) return String.format(Locale.getDefault(), "%.0f km", number);
             if (field == VehicleField.CONSUMPTION) return String.format(Locale.getDefault(), "%.1f l/100km", number);
             if (field == VehicleField.RPM) return String.format(Locale.getDefault(), "%.0f rpm", number);
+            if (field == VehicleField.EXTERIOR_TEMPERATURE) {
+                return String.format(Locale.getDefault(), "%.1f °C", number);
+            }
             return String.format(Locale.getDefault(), "%.0f °C", number);
         }
         if (value.value() instanceof Boolean) return (Boolean) value.value() ? "Activo" : "Inactivo";
@@ -836,12 +1107,16 @@ public class MainActivity extends Activity {
 
     private int vehicleIcon(VehicleField field) {
         if (field == VehicleField.SPEED) return R.drawable.ic_vehicle_speed;
+        if (field == VehicleField.GEAR) return R.drawable.ic_vehicle_speed;
+        if (field == VehicleField.RPM) return R.drawable.ic_vehicle_consumption;
         if (field == VehicleField.RANGE) return R.drawable.ic_vehicle_range;
         if (field == VehicleField.CONSUMPTION) return R.drawable.ic_vehicle_consumption;
         return R.drawable.ic_vehicle_temperature;
     }
 
     private String vehiclePanelLabel(VehicleField field) {
+        if (field == VehicleField.GEAR) return "Caja";
+        if (field == VehicleField.RPM) return "Revoluciones";
         if (field == VehicleField.CONSUMPTION) return "Consumo";
         if (field == VehicleField.CLIMATE_TEMPERATURE) return "Temperatura";
         return field.label();
@@ -869,11 +1144,100 @@ public class MainActivity extends Activity {
         FrameLayout button = new FrameLayout(this);
         button.setForegroundGravity(Gravity.CENTER);
         button.setBackground(slotBg());
-        button.setContentDescription("Abrir diagnóstico y herramientas");
+        button.setContentDescription("Abrir debug, permisos y actualizaciones");
         StatusIconView wrench = new StatusIconView(this, StatusIconKind.DIAGNOSTIC, BLUE);
         button.addView(wrench, frameLp(dp(34), dp(34), Gravity.CENTER));
-        button.setOnClickListener(v -> diagnosticModal());
+        button.setOnClickListener(v -> toolsModal());
         return button;
+    }
+
+    /** Three stable entry points keep the original debug/permission flow separate from updates. */
+    private void toolsModal() {
+        LinearLayout box = vertical();
+        box.setBackgroundColor(PANEL);
+        box.setPadding(dp(12), dp(10), dp(12), dp(10));
+        TextView note = txt("Herramientas de iDrive. Cada opción abre su pantalla original sin cambiar\n"
+                + "la lectura pasiva del vehículo ni los ajustes OEM.", 12, TEXT, false);
+        note.setPadding(dp(8), dp(4), dp(8), dp(12));
+        box.addView(note, lp(-1, dp(52)));
+
+        Button debug = dialogButton("DEBUG / USB · LOGS Y EXPORTACIÓN");
+        Button permissions = dialogButton("PERMISOS · UBICACIÓN Y MULTIMEDIA");
+        Button updates = dialogButton("ACTUALIZACIONES · VELOCIDAD Y GASOLINERAS");
+        box.addView(debug, lp(-1, dp(56)));
+        box.addView(permissions, lp(-1, dp(56)));
+        box.addView(updates, lp(-1, dp(56)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Herramientas")
+                .setView(box)
+                .setPositiveButton("CERRAR", null)
+                .create();
+        debug.setOnClickListener(v -> {
+            dialog.dismiss();
+            diagnosticModal();
+        });
+        permissions.setOnClickListener(v -> {
+            dialog.dismiss();
+            permissionsModal();
+        });
+        updates.setOnClickListener(v -> {
+            dialog.dismiss();
+            updatesModal();
+        });
+        showSized(dialog, .54f, .47f);
+    }
+
+    private void updatesModal() {
+        LinearLayout box = vertical();
+        box.setBackgroundColor(PANEL);
+        box.setPadding(dp(12), dp(8), dp(12), dp(8));
+        TextView description = txt("Las gasolineras se actualizan al detectar Internet. Los límites se guardan "
+                + "en local y se refrescan automáticamente por provincia GPS.", 12, TEXT, false);
+        description.setPadding(dp(8), dp(4), dp(8), dp(12));
+        box.addView(description);
+
+        Button speed = dialogButton("ACTUALIZAR LÍMITES DE VELOCIDAD");
+        box.addView(speed, lp(-1, dp(52)));
+
+        Button fuel = dialogButton("ACTUALIZAR PRECIOS DE GASOLINERAS");
+        box.addView(fuel, lp(-1, dp(52)));
+
+        FuelStationProvider.Snapshot fuelSnapshot = fuelStations.getSnapshot();
+        TextView network = txt("Red actual: " + fuelStations.networkLabel()
+                + "\nGasolineras: " + lastUpdateText(fuelSnapshot == null ? 0L : fuelSnapshot.updatedAt)
+                + "\nLímites OSM: " + lastUpdateText(speedLimits.lastSuccessfulUpdate())
+                + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
+                        speedLimits.automaticProvince(gps.getLastLocation()))
+                + "\nAutomático: precios cada 10 min; límites máx. una vez/24 h por provincia.",
+                10, MUTED, false);
+        network.setPadding(dp(8), dp(12), dp(8), dp(10));
+        box.addView(network, lp(-1, dp(92)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Actualizaciones y herramientas")
+                .setView(box)
+                .setPositiveButton("CERRAR", null)
+                .create();
+        // The wrench still exposes the original diagnostic/export flow. Close this
+        // lightweight chooser before opening another dialog so no legacy action is
+        // hidden behind a second modal.
+        speed.setOnClickListener(v -> {
+            dialog.dismiss();
+            chooseSpeedLimitProvince();
+        });
+        fuel.setOnClickListener(v -> {
+            dialog.dismiss();
+            fuelStations.forceRefresh();
+            toast("Actualizando precios con la red disponible");
+        });
+        showSized(dialog, .58f, .64f);
+    }
+
+    private String lastUpdateText(long timestamp) {
+        if (timestamp <= 0L) return "aún no actualizada";
+        return "correcta el " + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+                .format(new Date(timestamp));
     }
 
     private View statusMaintenanceButton() {
@@ -969,14 +1333,9 @@ public class MainActivity extends Activity {
                     .putBoolean("show_" + field.key(), checked).apply());
             box.addView(toggle);
         }
-        CheckBox autoHide = new CheckBox(this);
-        autoHide.setText("Ocultar automáticamente datos no disponibles");
-        autoHide.setTextColor(TEXT);
-        autoHide.setChecked(vehiclePreferences.getBoolean("auto_hide", false));
-        autoHide.setOnCheckedChangeListener((button, checked) -> vehiclePreferences.edit().putBoolean("auto_hide", checked).apply());
-        box.addView(autoHide);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Datos del vehículo")
-                .setMessage("Solo se muestran valores reales. Si no existe una fuente confirmada se muestra —.")
+                .setMessage("El panel es dinámico: solo aparecen campos habilitados que tengan un valor real. "
+                        + "La marcha, cuando la unidad la publique, se muestra dentro del velocímetro.")
                 .setView(scroll).setPositiveButton("GUARDAR", (d, w) -> refreshAll())
                 .setNeutralButton("DIAGNÓSTICO", (d, w) -> diagnosticModal())
                 .setNegativeButton("CANCELAR", null).create();
@@ -1517,24 +1876,26 @@ public class MainActivity extends Activity {
     }
 
     private void settingsModal() {
-        String[] options = {"Datos del vehículo", "Gasolineras: combustible y radio", "Accesos rápidos", "Cambiar Multimedia", "Cambiar Radio",
-                "Cambiar Navegación", "Cambiar Android Auto", "Cambiar Teléfono / Bluetooth",
-                "Acceso a contenido multimedia", "Diagnóstico JCRK01/CYA", "Modo día / noche", "Restaurar configuración"};
+        String[] options = {"Datos del vehículo", "Gasolineras: combustible y radio", "Actualizar límites GPS",
+                "Accesos rápidos", "Cambiar Multimedia", "Cambiar Radio", "Cambiar Navegación",
+                "Cambiar Android Auto", "Cambiar Teléfono / Bluetooth", "Acceso a contenido multimedia",
+                "Diagnóstico JCRK01/CYA", "Modo día / noche", "Restaurar configuración"};
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Ajustes iDrive")
                 .setItems(options, (d, which) -> {
                     switch (which) {
                         case 0: vehicleModal(); break;
                         case 1: fuelSettingsModal(); break;
-                        case 2: quickAppsModal(); break;
-                        case 3: appPicker("media", "Multimedia"); break;
-                        case 4: appPicker("radio", "Radio"); break;
-                        case 5: appPicker("nav", "Navegación"); break;
-                        case 6: appPicker("auto", "Android Auto / S-Play"); break;
-                        case 7: appPicker("phone", "Teléfono / Bluetooth"); break;
-                        case 8: openMediaAccessSettings(); break;
-                        case 9: diagnosticModal(); break;
-                        case 10: themeModeModal(); break;
-                        case 11:
+                        case 2: updateSpeedLimitsFromWifi(); break;
+                        case 3: quickAppsModal(); break;
+                        case 4: appPicker("media", "Multimedia"); break;
+                        case 5: appPicker("radio", "Radio"); break;
+                        case 6: appPicker("nav", "Navegación"); break;
+                        case 7: appPicker("auto", "Android Auto / S-Play"); break;
+                        case 8: appPicker("phone", "Teléfono / Bluetooth"); break;
+                        case 9: openMediaAccessSettings(); break;
+                        case 10: diagnosticModal(); break;
+                        case 11: themeModeModal(); break;
+                        case 12:
                             apps.clearAll();
                             vehiclePreferences.edit().clear().apply();
                             uiPreferences.edit().clear().apply();
@@ -1621,14 +1982,19 @@ public class MainActivity extends Activity {
                 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
         boolean mediaGranted = hasMediaAccess();
         boolean mediaConnected = MediaNotificationListener.isConnected();
+        String network = fuelStations == null ? "sin comprobar" : fuelStations.networkLabel();
         String message = "Ubicación precisa: " + (locationGranted ? "concedida" : "pendiente") + "\n"
                 + "Bluetooth: " + (bluetoothGranted ? "concedido/no necesario" : "pendiente") + "\n"
                 + "Acceso multimedia: " + (mediaGranted ? "concedido" : "pendiente") + "\n"
                 + "Lector multimedia: " + (mediaConnected ? "conectado" : mediaGranted
-                        ? "pendiente de reconexión" : "sin permiso") + "\n\n"
+                        ? "pendiente de reconexión" : "sin permiso") + "\n"
+                + "Red usada por Android: " + network + "\n"
+                + "Internet: permiso normal concedido al instalar\n\n"
                 + "La ubicación permite GPS y gasolineras. El acceso multimedia permite leer "
                 + "solo sesiones o notificaciones que SpeedPlay publique en Android. El análisis "
-                + "del firmware confirma que SpeedPlay puede no publicar la sesión de Android Auto.";
+                + "del firmware confirma que SpeedPlay puede no publicar la sesión de Android Auto.\n\n"
+                + "Bluetooth PAN no tiene un permiso que iDrive pueda solicitar: el teléfono comparte "
+                + "la conexión, pero la radio debe crear y publicar esa red al sistema Android.";
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Permisos de iDrive")
                 .setMessage(message)
                 .setPositiveButton(locationGranted && bluetoothGranted ? "UBICACIÓN OK" : "CONCEDER UBICACIÓN",
@@ -1910,6 +2276,7 @@ public class MainActivity extends Activity {
                 + "Destino actual=Google Maps local mediante google.navigation/geo.\n"
                 + "SpeedPlay exportado no publica un Intent o comando verificable para enviar destinos "
                 + "a la proyección Android Auto; no se transmite ningún protocolo supuesto.\n"
+                + "\n" + speedLimits.diagnostic()
                 + "\nREGISTRO DE LA SESIÓN ACTUAL\n\n" + AppSessionLog.read();
     }
 
@@ -2184,7 +2551,45 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Gauge draws only actual GPS speed when it is available; otherwise the value stays unavailable. */
+    /** Local-map speed sign. A blank sign means no verified nearby maxspeed is cached. */
+    private static final class SpeedLimitView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int foreground, red, muted;
+        private Integer limit;
+
+        SpeedLimitView(Context context, int foreground, int red, int muted) {
+            super(context);
+            this.foreground = foreground;
+            this.red = red;
+            this.muted = muted;
+        }
+
+        void setLimit(Integer limit) { this.limit = limit; invalidate(); }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float size = Math.min(getWidth(), getHeight()) * .84f;
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.WHITE);
+            canvas.drawCircle(cx, cy, size * .45f, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(3f, size * .085f));
+            paint.setColor(red);
+            canvas.drawCircle(cx, cy, size * .43f, paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextSize(size * .29f);
+            paint.setColor(limit == null ? muted : Color.rgb(18, 23, 29));
+            canvas.drawText(limit == null ? "—" : String.valueOf(limit), cx,
+                    cy - (paint.ascent() + paint.descent()) / 2f, paint);
+            paint.setTypeface(Typeface.DEFAULT);
+        }
+    }
+
+    /** Gauge draws the repository-selected GPS speed; raw CAN is never promoted to the dial. */
     private static final class SpeedGaugeView extends View {
         private static final double GREEN_LIMIT_KMH = 120d;
         private static final double GAUGE_MAX_KMH = 260d;
@@ -2193,18 +2598,22 @@ public class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF arc = new RectF();
         private Double speed;
+        private String gear;
 
         SpeedGaugeView(Context context) { super(context); }
 
         void setSpeed(Double speed) { this.speed = speed; invalidate(); }
 
+        void setGear(String gear) { this.gear = gear; invalidate(); }
+
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             float width = getWidth();
             float height = getHeight();
-            float size = Math.min(width, height) * .91f;
+            float gaugeHeight = height;
+            float size = Math.min(width, gaugeHeight) * .91f;
             float left = (width - size) / 2f;
-            float top = (height - size) / 2f;
+            float top = Math.max(0f, (gaugeHeight - size) / 2f);
             float centerX = width / 2f;
             float centerY = top + size / 2f;
             arc.set(left, top, left + size, top + size);
@@ -2251,15 +2660,24 @@ public class MainActivity extends Activity {
             paint.setTextSize(size * .29f);
             paint.setColor(displaySpeed == null ? Color.rgb(243, 246, 249)
                     : displaySpeed > GREEN_LIMIT_KMH ? SPEED_ORANGE : SPEED_GREEN);
-            canvas.drawText(value, centerX, centerY + size * .08f, paint);
-            paint.setTextSize(size * .105f);
+            canvas.drawText(value, centerX, centerY + size * .015f, paint);
+            paint.setTextSize(size * .10f);
             paint.setColor(Color.rgb(154, 170, 186));
-            canvas.drawText("km/h", centerX, centerY + size * .23f, paint);
+            canvas.drawText("km/h", centerX, centerY + size * .15f, paint);
+            String activeGear = gear == null ? "" : gear.trim();
+            if (!activeGear.isEmpty()) {
+                paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                paint.setTextSize(size * .20f);
+                paint.setColor("R".equals(activeGear) ? SPEED_ORANGE
+                        : Color.rgb(124, 180, 239));
+                canvas.drawText(activeGear, centerX, centerY + size * .39f, paint);
+                paint.setTypeface(Typeface.DEFAULT);
+            }
             paint.setTextAlign(Paint.Align.LEFT);
             paint.setTextSize(size * .09f);
-            canvas.drawText("0", left + size * .13f, top + size * .86f, paint);
+            canvas.drawText("0", left + size * .10f, top + size * .83f, paint);
             paint.setTextAlign(Paint.Align.RIGHT);
-            canvas.drawText("260", left + size * .87f, top + size * .86f, paint);
+            canvas.drawText("260", left + size * .90f, top + size * .83f, paint);
         }
     }
 
