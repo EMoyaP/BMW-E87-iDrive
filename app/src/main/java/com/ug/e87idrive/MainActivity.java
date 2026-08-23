@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
     private ImageView mediaArtwork;
     private SpeedGaugeView speedGauge;
     private SpeedLimitView speedLimitView;
-    private TextView boardSummarySpeed, boardSummarySpeedSource, speedLimitState, speedLimitRefresh, speedSource;
+    private TextView speedLimitState, speedLimitRefresh, speedLimitUpdateInfo, speedSource;
     private final java.util.Map<String, TextView> roleLabels = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, TextView> roleHints = new java.util.LinkedHashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -296,23 +296,8 @@ public class MainActivity extends Activity {
         heading.addView(menuGlyph, lp(dp(34), dp(28)));
         box.addView(heading, lp(-1, dp(28)));
 
-        LinearLayout speed = vertical();
-        speed.setGravity(Gravity.CENTER);
-        speed.setPadding(0, dp(4), 0, dp(5));
-        TextView speedLabel = txt("VELOCIDAD", 10, MUTED, true);
-        speedLabel.setGravity(Gravity.CENTER);
-        boardSummarySpeed = txt("—", 29, MUTED, true);
-        boardSummarySpeed.setGravity(Gravity.CENTER);
-        boardSummarySpeedSource = txt("Esperando GPS", 9, MUTED, false);
-        boardSummarySpeedSource.setGravity(Gravity.CENTER);
-        speed.addView(speedLabel, lp(-1, dp(17)));
-        speed.addView(boardSummarySpeed, lp(-1, dp(39)));
-        speed.addView(boardSummarySpeedSource, lp(-1, dp(17)));
-        box.addView(speed, lp(-1, dp(78)));
-        box.addView(horizontalDivider(), lp(-1, dp(1)));
-
         boardSummaryRows = vertical();
-        boardSummaryRows.setPadding(0, dp(3), 0, dp(3));
+        boardSummaryRows.setPadding(0, dp(7), 0, dp(7));
         box.addView(boardSummaryRows, lp(-1, 0, 1));
 
         TextView note = txt("Solo valores disponibles", 9, MUTED, false);
@@ -638,13 +623,13 @@ public class MainActivity extends Activity {
         speedLimitRefresh = txt("↻  ACTUALIZAR LÍMITES", 9, BLUE, true);
         speedLimitRefresh.setGravity(Gravity.CENTER);
         speedLimitRefresh.setBackground(slotBg());
-        speedLimitRefresh.setContentDescription("Actualizar límites de velocidad locales mediante Wi-Fi");
+        speedLimitRefresh.setContentDescription("Actualizar límites de velocidad locales usando la conexión disponible");
         speedLimitRefresh.setOnClickListener(v -> chooseSpeedLimitProvince());
         limitColumn.addView(speedLimitRefresh, lp(-1, dp(30)));
-        TextView limitNote = txt("No se inventa 50 km/h\nsi el mapa no lo publica", 9, MUTED, false);
-        limitNote.setGravity(Gravity.CENTER);
-        limitNote.setMaxLines(2);
-        limitColumn.addView(limitNote, lp(-1, dp(32)));
+        speedLimitUpdateInfo = txt("Base local incluida", 9, MUTED, false);
+        speedLimitUpdateInfo.setGravity(Gravity.CENTER);
+        speedLimitUpdateInfo.setMaxLines(2);
+        limitColumn.addView(speedLimitUpdateInfo, lp(-1, dp(32)));
         content.addView(limitColumn, lp(0, -1, .72f));
         box.addView(content, lp(-1, 0, 1));
         box.setOnLongClickListener(v -> { vehicleModal(); return true; });
@@ -858,18 +843,7 @@ public class MainActivity extends Activity {
                 speedSource.setTextColor(speedValue == null ? MUTED : BLUE);
             }
         }
-        if (boardSummarySpeed != null) {
-            Double speedValue = speed.isAvailable() && speed.value() instanceof Number
-                    ? ((Number) speed.value()).doubleValue() : null;
-            boardSummarySpeed.setText(speedValue == null
-                    ? "—" : String.format(Locale.getDefault(), "%.0f km/h", speedValue));
-            boardSummarySpeed.setTextColor(speedValue == null ? MUTED
-                    : speedValue > 120d ? Color.rgb(246, 126, 13) : Color.rgb(72, 196, 118));
-            boardSummarySpeedSource.setText(speedValue == null
-                    ? "Esperando señal GPS" : "Fuente " + shortSource(speed.source()));
-            boardSummarySpeedSource.setTextColor(speedValue == null ? MUTED : BLUE);
-            refreshBoardSummaryRows();
-        }
+        refreshBoardSummaryRows();
         if (speedLimitView != null) {
             // GPS supplies position and speed, not the legal limit of the current road.
             // Until a map source publishes maxspeed, keep the sign visibly unavailable.
@@ -882,12 +856,14 @@ public class MainActivity extends Activity {
         SpeedLimitRepository.Match match = speedLimits.lookup(gps.getLastLocation());
         if (match == null) {
             speedLimitView.setLimit(null);
+            if (speedGauge != null) speedGauge.setRoadLimit(null);
             if (speedLimitState != null) {
                 speedLimitState.setText("Sin límite local cercano");
                 speedLimitState.setTextColor(MUTED);
             }
         } else {
             speedLimitView.setLimit(match.limitKmh);
+            if (speedGauge != null) speedGauge.setRoadLimit(match.limitKmh);
             if (speedLimitState != null) {
                 String region = match.province == null || match.province.isEmpty()
                         ? "OSM local" : "OSM " + SpeedLimitRepository.provinceLabel(match.province);
@@ -902,6 +878,18 @@ public class MainActivity extends Activity {
             speedLimitRefresh.setTextColor(internet ? BLUE : MUTED);
             speedLimitRefresh.setEnabled(internet);
             speedLimitRefresh.setAlpha(internet ? 1f : .65f);
+        }
+        if (speedLimitUpdateInfo != null) {
+            SpeedLimitRepository.UpdateStamp stamp = speedLimits.lastSuccessfulUpdateStamp();
+            if (stamp == null) {
+                speedLimitUpdateInfo.setText("Base local instalada\nAlicante · Murcia · Valencia · Albacete");
+                speedLimitUpdateInfo.setTextColor(MUTED);
+            } else {
+                speedLimitUpdateInfo.setText("Última actualización\n"
+                        + SpeedLimitRepository.provinceLabel(stamp.province) + " · "
+                        + shortDateTime(stamp.timestamp));
+                speedLimitUpdateInfo.setTextColor(BLUE);
+            }
         }
     }
 
@@ -1238,6 +1226,10 @@ public class MainActivity extends Activity {
         if (timestamp <= 0L) return "aún no actualizada";
         return "correcta el " + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
                 .format(new Date(timestamp));
+    }
+
+    private String shortDateTime(long timestamp) {
+        return new SimpleDateFormat("dd/MM · HH:mm", Locale.getDefault()).format(new Date(timestamp));
     }
 
     private View statusMaintenanceButton() {
@@ -2599,12 +2591,19 @@ public class MainActivity extends Activity {
         private final RectF arc = new RectF();
         private Double speed;
         private String gear;
+        private Integer roadLimit;
 
         SpeedGaugeView(Context context) { super(context); }
 
         void setSpeed(Double speed) { this.speed = speed; invalidate(); }
 
         void setGear(String gear) { this.gear = gear; invalidate(); }
+
+        void setRoadLimit(Integer roadLimit) {
+            this.roadLimit = roadLimit != null && roadLimit > 0 && roadLimit <= GAUGE_MAX_KMH
+                    ? roadLimit : null;
+            invalidate();
+        }
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
@@ -2627,30 +2626,58 @@ public class MainActivity extends Activity {
             canvas.drawArc(arc, 205, 130, false, paint);
             arc.inset(-size * .035f, -size * .035f);
             Double displaySpeed = speed != null && Double.isFinite(speed) ? Math.max(0d, speed) : null;
+            // Without a verified map limit the dial stays green. Orange is reserved for a
+            // confirmed local limit that the current GPS speed has exceeded.
+            double colourLimit = roadLimit == null ? Double.POSITIVE_INFINITY : roadLimit;
             if (displaySpeed != null && displaySpeed > 0d) {
                 double clamped = Math.min(displaySpeed, GAUGE_MAX_KMH);
-                float greenSweep = (float) (270d * Math.min(clamped, GREEN_LIMIT_KMH) / GAUGE_MAX_KMH);
+                float greenSweep = (float) (270d * Math.min(clamped, colourLimit) / GAUGE_MAX_KMH);
+                // The E87 dial fills only along its outer ring: no pie/triangle obscures the centre.
+                // Tick marks and the real 0–260 km/h scale are drawn afterwards.
                 paint.setStrokeWidth(Math.max(3f, size * .020f));
                 paint.setStrokeCap(Paint.Cap.ROUND);
+                paint.setAlpha(58);
                 paint.setColor(SPEED_GREEN);
                 canvas.drawArc(arc, 135, greenSweep, false, paint);
-                if (clamped > GREEN_LIMIT_KMH) {
-                    float orangeSweep = (float) (270d * (clamped - GREEN_LIMIT_KMH) / GAUGE_MAX_KMH);
+                if (clamped > colourLimit) {
+                    float orangeSweep = (float) (270d * (clamped - colourLimit) / GAUGE_MAX_KMH);
+                    paint.setColor(SPEED_ORANGE);
+                    canvas.drawArc(arc, 135 + greenSweep, orangeSweep, false, paint);
+                }
+                paint.setAlpha(255);
+                paint.setStrokeWidth(Math.max(1.5f, size * .010f));
+                paint.setColor(SPEED_GREEN);
+                canvas.drawArc(arc, 135, greenSweep, false, paint);
+                if (clamped > colourLimit) {
+                    float orangeSweep = (float) (270d * (clamped - colourLimit) / GAUGE_MAX_KMH);
                     paint.setColor(SPEED_ORANGE);
                     canvas.drawArc(arc, 135 + greenSweep, orangeSweep, false, paint);
                 }
                 paint.setStrokeCap(Paint.Cap.BUTT);
             }
-            for (int i = 0; i <= 30; i++) {
-                double radians = Math.toRadians(135 + i * (270d / 30d));
+            for (int kmh = 0; kmh <= 260; kmh += 10) {
+                double radians = Math.toRadians(135 + 270d * kmh / GAUGE_MAX_KMH);
                 float outer = size * .49f;
-                float inner = outer - (i % 5 == 0 ? size * .07f : size * .035f);
+                boolean major = kmh % 20 == 0;
+                float inner = outer - (major ? size * .065f : size * .032f);
                 float x1 = centerX + (float) Math.cos(radians) * outer;
                 float y1 = centerY + (float) Math.sin(radians) * outer;
                 float x2 = centerX + (float) Math.cos(radians) * inner;
                 float y2 = centerY + (float) Math.sin(radians) * inner;
-                paint.setStrokeWidth(i % 5 == 0 ? Math.max(2f, size * .012f) : Math.max(1f, size * .006f));
-                paint.setColor(i > 26 ? Color.rgb(231, 74, 34) : Color.rgb(73, 159, 244));
+                paint.setStrokeWidth(major ? Math.max(2f, size * .011f) : Math.max(1f, size * .005f));
+                paint.setColor(Color.rgb(186, 215, 239));
+                canvas.drawLine(x1, y1, x2, y2, paint);
+            }
+            if (roadLimit != null) {
+                double radians = Math.toRadians(135 + 270d * roadLimit / GAUGE_MAX_KMH);
+                float outer = size * .515f;
+                float inner = outer - size * .105f;
+                float x1 = centerX + (float) Math.cos(radians) * outer;
+                float y1 = centerY + (float) Math.sin(radians) * outer;
+                float x2 = centerX + (float) Math.cos(radians) * inner;
+                float y2 = centerY + (float) Math.sin(radians) * inner;
+                paint.setStrokeWidth(Math.max(3f, size * .017f));
+                paint.setColor(SPEED_ORANGE);
                 canvas.drawLine(x1, y1, x2, y2, paint);
             }
             String value = displaySpeed == null ? "—" : String.format(Locale.getDefault(), "%.0f", displaySpeed);
@@ -2659,7 +2686,7 @@ public class MainActivity extends Activity {
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
             paint.setTextSize(size * .29f);
             paint.setColor(displaySpeed == null ? Color.rgb(243, 246, 249)
-                    : displaySpeed > GREEN_LIMIT_KMH ? SPEED_ORANGE : SPEED_GREEN);
+                    : displaySpeed > colourLimit ? SPEED_ORANGE : SPEED_GREEN);
             canvas.drawText(value, centerX, centerY + size * .015f, paint);
             paint.setTextSize(size * .10f);
             paint.setColor(Color.rgb(154, 170, 186));
@@ -2673,11 +2700,30 @@ public class MainActivity extends Activity {
                 canvas.drawText(activeGear, centerX, centerY + size * .39f, paint);
                 paint.setTypeface(Typeface.DEFAULT);
             }
-            paint.setTextAlign(Paint.Align.LEFT);
-            paint.setTextSize(size * .09f);
-            canvas.drawText("0", left + size * .10f, top + size * .83f, paint);
-            paint.setTextAlign(Paint.Align.RIGHT);
-            canvas.drawText("260", left + size * .90f, top + size * .83f, paint);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTextSize(Math.max(8f, size * .055f));
+            paint.setColor(Color.rgb(218, 230, 240));
+            for (int scaleSpeed = 0; scaleSpeed <= 260; scaleSpeed += 20) {
+                double radians = Math.toRadians(135 + 270d * scaleSpeed / GAUGE_MAX_KMH);
+                float labelRadius = size * .385f;
+                float x = centerX + (float) Math.cos(radians) * labelRadius;
+                float y = centerY + (float) Math.sin(radians) * labelRadius
+                        - (paint.ascent() + paint.descent()) / 2f;
+                if (roadLimit != null && scaleSpeed == roadLimit) paint.setColor(SPEED_ORANGE);
+                canvas.drawText(String.valueOf(scaleSpeed), x, y, paint);
+                paint.setColor(Color.rgb(218, 230, 240));
+            }
+            if (roadLimit != null && roadLimit % 20 != 0) {
+                double radians = Math.toRadians(135 + 270d * roadLimit / GAUGE_MAX_KMH);
+                float labelRadius = size * .345f;
+                float x = centerX + (float) Math.cos(radians) * labelRadius;
+                float y = centerY + (float) Math.sin(radians) * labelRadius
+                        - (paint.ascent() + paint.descent()) / 2f;
+                paint.setColor(SPEED_ORANGE);
+                canvas.drawText(String.valueOf(roadLimit), x, y, paint);
+            }
+            paint.setTypeface(Typeface.DEFAULT);
         }
     }
 

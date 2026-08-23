@@ -42,7 +42,15 @@ final class SpeedLimitRepository {
     private static final String TAG = "LÍMITES GPS";
     private static final String ENDPOINT = "https://overpass-api.de/api/interpreter";
     private static final int QUERY_RADIUS_METERS = 5_000;
-    private static final int MATCH_RADIUS_METERS = 350;
+    /** A broad nearest-road match can pick a parallel carriageway. Prefer no limit over an
+     * ambiguous one; this app is an aid, never a legal/realtime traffic-sign source. */
+    private static final int MAX_MATCH_RADIUS_METERS = 60;
+    private static final int MIN_MATCH_RADIUS_METERS = 20;
+    private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 30f;
+    /** GPS is requested once per second while driving. Keep lookup reuse below that cadence so a
+     * new road/maxspeed can be reflected on the next fix without any network request. */
+    private static final long LIVE_LOOKUP_CACHE_MS = 750L;
+    private static final double LIVE_LOOKUP_CACHE_METERS = 15d;
     private static final long MIN_REFRESH_INTERVAL_MS = 120_000L;
     /** One successful download per province per day avoids repeated Overpass traffic while the
      * local database remains current enough for this dashboard. */
@@ -133,12 +141,21 @@ final class SpeedLimitRepository {
 
     Match lookup(Location location) {
         if (location == null) return null;
+        if (location.hasAccuracy() && location.getAccuracy() > MAX_ACCEPTED_GPS_ACCURACY_METERS) {
+            return null;
+        }
         long now = System.currentTimeMillis();
-        if (now - cachedLookupAt < 3_000L
-                && distanceMeters(cachedLat, cachedLon, location.getLatitude(), location.getLongitude()) < 80d) {
+        if (now - cachedLookupAt < LIVE_LOOKUP_CACHE_MS
+                && distanceMeters(cachedLat, cachedLon, location.getLatitude(), location.getLongitude())
+                < LIVE_LOOKUP_CACHE_METERS) {
             return cachedMatch;
         }
-        Match result = database.nearest(location.getLatitude(), location.getLongitude(), MATCH_RADIUS_METERS);
+        int matchRadius = MAX_MATCH_RADIUS_METERS;
+        if (location.hasAccuracy()) {
+            matchRadius = Math.max(MIN_MATCH_RADIUS_METERS, Math.min(MAX_MATCH_RADIUS_METERS,
+                    Math.round(location.getAccuracy() * 2f)));
+        }
+        Match result = database.nearest(location.getLatitude(), location.getLongitude(), matchRadius);
         cachedLat = location.getLatitude();
         cachedLon = location.getLongitude();
         cachedLookupAt = now;
@@ -242,6 +259,19 @@ final class SpeedLimitRepository {
         return updatePreferences.getLong(successPreference(provinceCode), 0L);
     }
 
+    UpdateStamp lastSuccessfulUpdateStamp() {
+        String newestProvince = null;
+        long newest = 0L;
+        for (Province province : SUPPORTED_PROVINCES) {
+            long candidate = lastSuccessfulUpdate(province.code);
+            if (candidate > newest) {
+                newest = candidate;
+                newestProvince = province.code;
+            }
+        }
+        return newestProvince == null ? null : new UpdateStamp(newestProvince, newest);
+    }
+
     String automaticProvince(Location location) {
         if (location != null) {
             Match match = lookup(location);
@@ -260,7 +290,8 @@ final class SpeedLimitRepository {
                 + "semillas=" + seedStatus + "\n"
                 + "última actualización=" + lastResult + "\n"
                 + "actualización automática=Internet Android · máximo una vez por provincia/24 h\n"
-                + "radio de descarga=" + QUERY_RADIUS_METERS + " m · radio de lectura=" + MATCH_RADIUS_METERS + " m\n"
+                + "radio de descarga=" + QUERY_RADIUS_METERS + " m · radio de lectura="
+                + MIN_MATCH_RADIUS_METERS + "–" + MAX_MATCH_RADIUS_METERS + " m según precisión GPS\n"
                 + "semilla provincial=Alicante, Murcia, Valencia, Albacete\n"
                 + "actualización provincial=una provincia por pulsación · respuesta máxima=" + MAX_RESPONSE_BYTES + " bytes\n"
                 + "fuente=OpenStreetMap maxspeed · endpoint Overpass · no se inventan límites\n";
@@ -603,6 +634,15 @@ final class SpeedLimitRepository {
         final boolean success;
         final String message;
         UpdateResult(boolean success, String message) { this.success = success; this.message = message; }
+    }
+
+    static final class UpdateStamp {
+        final String province;
+        final long timestamp;
+        UpdateStamp(String province, long timestamp) {
+            this.province = province;
+            this.timestamp = timestamp;
+        }
     }
 
     static final class Match {

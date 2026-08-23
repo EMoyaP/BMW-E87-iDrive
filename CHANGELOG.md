@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 1.15.2 — 23/08/2026
+
+- El texto bajo `ACTUALIZAR` del indicador de límite se sustituye por el estado de la última base instalada: provincia
+  y fecha/hora de la última actualización satisfactoria. Si aún no existe una descarga, identifica la base local incluida
+  de Alicante, Murcia, Valencia y Albacete.
+- Se elimina la duplicación de velocidad del panel izquierdo: el velocímetro derecho es la única presentación de la
+  velocidad y el ordenador de a bordo usa el espacio liberado para autonomía, consumo, temperatura y otros valores reales.
+- El velocímetro recupera la escala real del cuadro E87 (0, 20, 40 … 260 km/h) y rellena únicamente el aro exterior,
+  sin sector triangular. Cuando existe un `maxspeed` local verificado, su punto se marca en naranja y tanto el aro como
+  la cifra pasan a naranja al superarlo; sin límite local verificado, el aro y la cifra permanecen verdes.
+- La consulta de límite próximo reduce la caché de 3 segundos/80 m a menos de un ciclo GPS: se ejecuta localmente en el
+  siguiente fix de conducción (normalmente 1 s), sin nuevas solicitudes de red.
+- La coincidencia local descarta fixes GPS de precisión superior a 30 m y limita la carretera candidata a 20–60 m según
+  dicha precisión. Ante vías paralelas o posición ambigua muestra `—`, no un límite posiblemente incorrecto.
+
 ## 1.15.1 — 23/08/2026
 
 - Gasolineras conserva la actualización ya automática: cuando Android publica una red IP válida, actualiza los
