@@ -42,6 +42,10 @@ import java.util.zip.GZIPInputStream;
 final class SpeedLimitRepository {
     private static final String TAG = "LÍMITES GPS";
     private static final String ENDPOINT = "https://overpass-api.de/api/interpreter";
+    /** Compact, reviewed OSM snapshot published with the project. It carries all drivable
+     * Alicante classes, unlike a maxspeed-only provincial Overpass request. */
+    private static final String ALICANTE_ROADS_SEED_URL = "https://raw.githubusercontent.com/EMoyaP/"
+            + "BMW-E87-iDrive/main/app/src/main/assets/e87_speed_limits_alicante.tsv.gz";
     private static final int QUERY_RADIUS_METERS = 5_000;
     /** A broad nearest-road match can pick a parallel carriageway. Prefer no limit over an
      * ambiguous one; this app is an aid, never a legal/realtime traffic-sign source. */
@@ -52,7 +56,8 @@ final class SpeedLimitRepository {
     private static final double EXACT_PREFERENCE_TOLERANCE_METERS = 8d;
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
-    private static final int BUNDLED_SEED_VERSION = 2;
+    /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
+    private static final int BUNDLED_SEED_VERSION = 3;
     /** GPS is requested once per second while driving. Keep lookup reuse below that cadence so a
      * new road/maxspeed can be reflected on the next fix without any network request. */
     private static final long LIVE_LOOKUP_CACHE_MS = 750L;
@@ -230,24 +235,32 @@ final class SpeedLimitRepository {
         Thread worker = new Thread(() -> {
             HttpURLConnection connection = null;
             try {
-                String query = buildQuery(location, selectedProvince);
-                String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
-                URL url = new URL(ENDPOINT + "?data=" + encoded);
-                // Bind the request to the network Android has actually exposed. This covers
-                // Wi-Fi, Ethernet and BT PAN if the OEM creates a usable IP interface.
-                connection = (HttpURLConnection) selectedNetwork.openConnection(url);
-                connection.setConnectTimeout(15_000);
-                connection.setReadTimeout((PROVINCE_QUERY_TIMEOUT_SECONDS + 20) * 1_000);
-                connection.setRequestMethod("GET");
-                connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("User-Agent", "BMW-E87-iDrive/1.15 (offline speed-limit cache)");
-                int response = connection.getResponseCode();
-                if (response < 200 || response >= 300) {
-                    throw new IOException("HTTP " + response);
+                int imported;
+                if (provincialUpdate && "ALICANTE".equals(selectedProvince.code)) {
+                    // Loading an 84 MB Overpass JSON response into the head unit would be
+                    // wasteful and fragile. This compact stream carries every road class and
+                    // explicit maxspeed without accumulating it in the Java heap.
+                    imported = replaceAlicanteFromPublishedSeed(selectedNetwork, selectedProvince);
+                } else {
+                    String query = buildQuery(location, selectedProvince);
+                    String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
+                    URL url = new URL(ENDPOINT + "?data=" + encoded);
+                    // Bind the request to the network Android has actually exposed. This covers
+                    // Wi-Fi, Ethernet and BT PAN if the OEM creates a usable IP interface.
+                    connection = (HttpURLConnection) selectedNetwork.openConnection(url);
+                    connection.setConnectTimeout(15_000);
+                    connection.setReadTimeout((PROVINCE_QUERY_TIMEOUT_SECONDS + 20) * 1_000);
+                    connection.setRequestMethod("GET");
+                    connection.setRequestProperty("Accept", "application/json");
+                    connection.setRequestProperty("User-Agent", "BMW-E87-iDrive/1.18 (offline speed-limit cache)");
+                    int response = connection.getResponseCode();
+                    if (response < 200 || response >= 300) {
+                        throw new IOException("HTTP " + response);
+                    }
+                    String json = read(connection, MAX_RESPONSE_BYTES);
+                    imported = importResponse(new JSONObject(json),
+                            provincialUpdate ? selectedProvince.code : province, provincialUpdate);
                 }
-                String json = read(connection, MAX_RESPONSE_BYTES);
-                int imported = importResponse(new JSONObject(json), provincialUpdate ? selectedProvince.code : province,
-                        provincialUpdate);
                 lastResult = provincialUpdate
                         ? imported + " tramos provinciales guardados en local · " + selectedProvince.label
                         + " · OpenStreetMap"
@@ -312,8 +325,11 @@ final class SpeedLimitRepository {
     }
 
     String diagnostic() {
+        int exact = database.countKind("EXACT");
+        int advisory = database.countKind("ADVISORY");
         return "LÍMITES GPS LOCALES\n"
-                + "registros=" + database.count() + "\n"
+                + "registros=" + database.count() + " · explícitos=" + exact
+                + " · clases DGT=" + advisory + "\n"
                 + "semillas=" + seedStatus + "\n"
                 + "última actualización=" + lastResult + "\n"
                 + "última consulta=" + lastLookupResult + "\n"
@@ -321,8 +337,9 @@ final class SpeedLimitRepository {
                 + "radio de descarga=" + QUERY_RADIUS_METERS + " m · radio de lectura="
                 + MIN_MATCH_RADIUS_METERS + "–" + MAX_MATCH_RADIUS_METERS + " m según precisión GPS\n"
                 + "semilla provincial=Alicante, Murcia, Valencia, Albacete\n"
-                + "actualización provincial=una provincia por pulsación · respuesta máxima=" + MAX_RESPONSE_BYTES + " bytes\n"
-                + "fuente=OpenStreetMap maxspeed · endpoint Overpass · no se inventan límites\n";
+                + "Alicante=mapa completo local · maxspeed + clasificación de vía\n"
+                + "actualización Alicante=instantánea OSM compacta publicada · importación en flujo\n"
+                + "fuente=OpenStreetMap · límite rojo solo con maxspeed; recomendación azul por clase DGT\n";
     }
 
     void close() { stop(); database.close(); }
@@ -388,15 +405,22 @@ final class SpeedLimitRepository {
                         < BUNDLED_SEED_VERSION;
                 seedStatus = needsSeedCheck ? "Verificando semillas provinciales" : "Verificando base local";
                 int imported = 0;
+                boolean replaceOldMapCache = updatePreferences.getInt("bundled_seed_version", 0)
+                        < BUNDLED_SEED_VERSION;
                 SQLiteDatabase db = database.getWritableDatabase();
                 long now = System.currentTimeMillis();
                 db.beginTransaction();
                 try {
+                    // This intentionally resets only iDrive's own speed-map cache. It does not
+                    // touch fuel prices, diagnostics, OEM settings or any radio application.
+                    // Keeping the old maxspeed-only cache would prevent the bundled Alicante
+                    // class rows from replacing it after an APK upgrade.
+                    if (replaceOldMapCache) db.delete("speed_limits", null, null);
                     for (Province province : SUPPORTED_PROVINCES) {
                         // Older builds could retain generic records and therefore omit the
                         // packaged provincial base. Do not replace a province already updated
                         // by the user; only fill one that is absent.
-                        if (database.countProvince(province.code) == 0) {
+                        if (replaceOldMapCache || database.countProvince(province.code) == 0) {
                             imported += importSeedAsset(db, province, now);
                         }
                     }
@@ -415,7 +439,14 @@ final class SpeedLimitRepository {
                 } else {
                     seedStatus = "Base local existente";
                 }
-                updatePreferences.edit().putInt("bundled_seed_version", BUNDLED_SEED_VERSION).apply();
+                SharedPreferences.Editor seedEditor = updatePreferences.edit()
+                        .putInt("bundled_seed_version", BUNDLED_SEED_VERSION);
+                if (replaceOldMapCache) {
+                    for (Province province : SUPPORTED_PROVINCES) {
+                        seedEditor.remove(successPreference(province.code));
+                    }
+                }
+                seedEditor.apply();
                 main.post(SpeedLimitRepository.this::autoRefreshIfNeeded);
             }
         }, "e87-speed-limit-seed");
@@ -426,17 +457,64 @@ final class SpeedLimitRepository {
     private int importSeedAsset(SQLiteDatabase db, Province province, long now) {
         int imported = 0;
         try (BufferedReader reader = openSeedReader(province)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.isEmpty() || line.charAt(0) == '#') continue;
-                String[] columns = line.split("\\t", 4);
-                if (columns.length < 3) continue;
-                int limit = parseLimit(columns[1]);
-                if (limit <= 0 || columns[0].isEmpty() || columns[2].isEmpty()) continue;
-                imported += insertRecord(db, columns[0], limit, columns[2], now, province.code);
-            }
+            imported = importSeedReader(db, reader, province, now);
         } catch (IOException error) {
             AppSessionLog.event(TAG, "Semilla no disponible · " + province.label + " · " + error.getMessage());
+        }
+        return imported;
+    }
+
+    /** Replaces only iDrive's Alicante road map with a compact OSM snapshot. This never
+     * accesses CAN, MCU, OEM settings, fuel caches or any other application data. */
+    private int replaceAlicanteFromPublishedSeed(Network network, Province province) throws IOException {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(ALICANTE_ROADS_SEED_URL + "?revision=" + System.currentTimeMillis());
+            connection = (HttpURLConnection) network.openConnection(url);
+            connection.setConnectTimeout(15_000);
+            connection.setReadTimeout(90_000);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Accept", "application/gzip, application/octet-stream");
+            connection.setRequestProperty("User-Agent", "BMW-E87-iDrive/1.18 (Alicante offline road map)");
+            int response = connection.getResponseCode();
+            if (response < 200 || response >= 300) throw new IOException("HTTP " + response);
+            synchronized (databaseLock) {
+                SQLiteDatabase db = database.getWritableDatabase();
+                db.beginTransaction();
+                try (BufferedReader reader = openSeedReader(connection.getInputStream())) {
+                    db.delete("speed_limits", "province = ?", new String[]{province.code});
+                    int imported = importSeedReader(db, reader, province, System.currentTimeMillis());
+                    if (imported <= 0) throw new IOException("Semilla Alicante vacía");
+                    db.setTransactionSuccessful();
+                    cachedLookupAt = 0L;
+                    return imported;
+                } finally {
+                    db.endTransaction();
+                }
+            }
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    /** Imports v1 explicit-maxspeed rows and v2 complete road-class rows without loading the
+     * compressed map into the Java heap. */
+    private int importSeedReader(SQLiteDatabase db, BufferedReader reader, Province province, long now)
+            throws IOException {
+        int imported = 0;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            if (line.isEmpty() || line.charAt(0) == '#') continue;
+            String[] columns = line.split("\\t", 5);
+            boolean v2 = columns.length == 5 && ("EXACT".equals(columns[1])
+                    || "ADVISORY".equals(columns[1]));
+            String id = columns[0];
+            int limit = parseLimit(v2 ? columns[2] : (columns.length > 1 ? columns[1] : ""));
+            String roadClass = v2 ? columns[3] : "";
+            String geometry = v2 ? columns[4] : (columns.length > 2 ? columns[2] : "");
+            boolean exact = !v2 || "EXACT".equals(columns[1]);
+            if (limit <= 0 || id.isEmpty() || geometry.isEmpty()) continue;
+            imported += insertRecord(db, id, limit, geometry, now, province.code, exact, roadClass);
         }
         return imported;
     }
@@ -461,6 +539,10 @@ final class SpeedLimitRepository {
             }
         }
         if (raw == null) throw failure == null ? new IOException("Asset no encontrado") : failure;
+        return openSeedReader(raw);
+    }
+
+    private BufferedReader openSeedReader(InputStream raw) throws IOException {
         BufferedInputStream input = new BufferedInputStream(raw);
         input.mark(2);
         int first = input.read();
@@ -856,6 +938,14 @@ final class SpeedLimitRepository {
             SQLiteDatabase db = getReadableDatabase();
             try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM speed_limits WHERE province = ?",
                     new String[]{province == null ? "" : province})) {
+                return cursor.moveToFirst() ? cursor.getInt(0) : 0;
+            }
+        }
+
+        int countKind(String kind) {
+            SQLiteDatabase db = getReadableDatabase();
+            try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM speed_limits WHERE record_kind = ?",
+                    new String[]{kind})) {
                 return cursor.moveToFirst() ? cursor.getInt(0) : 0;
             }
         }

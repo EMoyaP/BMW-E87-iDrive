@@ -58,7 +58,7 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 - Diesel and a 7 km working radius by default; both are configurable.
 - Fuel prices come from the official Spanish service, are filtered locally and cached within 150 km of the vehicle.
 - Nearby prices refresh every ten minutes while the app is visible, when Android exposes an IP network.
-- The APK includes compact local speed-limit seeds for **Alicante, Murcia, Valencia and Albacete**. It never downloads all of Spain.
+- The APK includes a complete drivable-road map for **Alicante**: explicit `maxspeed` values plus classes for **112,709** roads. Therefore, when OpenStreetMap does not tag a limit, it can show blue class-based guidance without a driving-time download. Murcia, Valencia and Albacete keep their compact explicit-limit seeds.
 - The APK also includes the compact national DGT DATEX II inventory of fixed and section cameras (about 2 MB before compression). Camera matching remains entirely local while driving; it never queries a radar service on each GPS fix.
 - The nearby-road lookup is local and runs with each driving GPS fix (normally about once per second); it does not make a network request when the limit changes.
 - Each province has an independent 24-hour refresh marker: a fresh Alicante update does not block a pending Murcia update.
@@ -72,7 +72,7 @@ The lower-right wrench opens three separate tools:
 
 1. **Debug / USB** — passive diagnostics, guided correlation tests, USB export and runtime logs.
 2. **Permissions** — location, nearby Bluetooth devices and Android media access.
-3. **Updates** — fuel-price refresh, local OSM speed-limit updates and DGT fixed/section-camera updates by GPS area or province.
+3. **Updates** — one Alicante update button for the complete OSM road map, DGT fixed/section cameras and fuel prices. Map import is streamed and replaces only iDrive's own speed-limit cache.
 
 The dashboard shows the province, date and time of the latest successful speed-map update. Before an update is installed, it identifies the bundled local base.
 

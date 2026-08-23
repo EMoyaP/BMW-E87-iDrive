@@ -227,10 +227,21 @@ public class MainActivity extends Activity {
         bar.addView(brand, lp(dp(460), -1));
         LinearLayout middle = vertical();
         middle.setGravity(Gravity.CENTER);
+        middle.setPadding(dp(10), 0, dp(10), 0);
         clock = txt("--:--", 34, TEXT, true);
         date = txt("", 13, MUTED, false);
         clock.setGravity(Gravity.CENTER);
         date.setGravity(Gravity.CENTER);
+        clock.setSingleLine(true);
+        date.setSingleLine(true);
+        clock.setIncludeFontPadding(false);
+        date.setIncludeFontPadding(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            clock.setAutoSizeTextTypeUniformWithConfiguration(Math.round(px(24)), Math.round(px(34)), 1,
+                    TypedValue.COMPLEX_UNIT_PX);
+            date.setAutoSizeTextTypeUniformWithConfiguration(Math.round(px(9)), Math.round(px(13)), 1,
+                    TypedValue.COMPLEX_UNIT_PX);
+        }
         middle.addView(clock);
         middle.addView(date);
         bar.addView(middle, lp(0, -1, 1));
@@ -315,9 +326,6 @@ public class MainActivity extends Activity {
         boardSummaryRows.setPadding(0, dp(7), 0, dp(7));
         box.addView(boardSummaryRows, lp(-1, 0, 1));
 
-        TextView note = txt("Solo valores disponibles", 9, MUTED, false);
-        note.setGravity(Gravity.CENTER);
-        box.addView(note, lp(-1, dp(17)));
         TextView menu = txt("☰  MENÚ COMPLETO", 11, BLUE, true);
         menu.setGravity(Gravity.CENTER);
         menu.setBackground(slotBg());
@@ -994,7 +1002,7 @@ public class MainActivity extends Activity {
         int shown = 0;
         for (VehicleField field : fields) {
             if (!vehiclePreferences.getBoolean("show_" + field.key(), true)) continue;
-            String value = vehicleValue(field);
+            String value = boardSummaryValue(field);
             if (value == null) continue;
             if (shown > 0) boardSummaryRows.addView(horizontalDivider(), lp(-1, dp(1)));
             boardSummaryRows.addView(summaryRow(field, value), lp(-1, 0, 1));
@@ -1014,13 +1022,34 @@ public class MainActivity extends Activity {
         ImageView icon = new ImageView(this);
         icon.setImageResource(vehicleIcon(field));
         row.addView(icon, lp(dp(27), dp(27)));
-        TextView label = txt(vehiclePanelLabel(field), 11, TEXT, false);
+        TextView label = txt(boardSummaryLabel(field), 10, TEXT, false);
+        label.setSingleLine(true);
         label.setPadding(dp(6), 0, 0, 0);
         row.addView(label, lp(0, -1, 1));
-        TextView reading = txt(value, 19, TEXT, true);
+        TextView reading = txt(value, 22, TEXT, true);
+        reading.setSingleLine(true);
+        reading.setIncludeFontPadding(false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        row.addView(reading, lp(dp(112), -1));
+        row.addView(reading, lp(dp(82), -1));
         return row;
+    }
+
+    /** Labels carry the unit so the large value remains a clean, one-line reading. */
+    private String boardSummaryLabel(VehicleField field) {
+        if (field == VehicleField.RANGE) return "Autonomía (km)";
+        if (field == VehicleField.CONSUMPTION) return "Consumo (l/100km)";
+        if (field == VehicleField.EXTERIOR_TEMPERATURE) return "Exterior (°C)";
+        return vehiclePanelLabel(field);
+    }
+
+    private String boardSummaryValue(VehicleField field) {
+        VehicleValue<?> value = vehicleData.get(field);
+        if (!value.isAvailable() || !(value.value() instanceof Double)) return null;
+        double number = (Double) value.value();
+        if (field == VehicleField.CONSUMPTION || field == VehicleField.EXTERIOR_TEMPERATURE) {
+            return String.format(Locale.getDefault(), "%.1f", number);
+        }
+        return String.format(Locale.getDefault(), "%.0f", number);
     }
 
     private String shortSource(VehicleSource source) {
@@ -1212,17 +1241,8 @@ public class MainActivity extends Activity {
         description.setPadding(dp(8), dp(4), dp(8), dp(12));
         box.addView(description);
 
-        Button alicante = dialogButton("ACTUALIZAR ALICANTE · LÍMITES Y RADARES");
-        box.addView(alicante, lp(-1, dp(52)));
-
-        Button speed = dialogButton("ACTUALIZAR LÍMITES DE VELOCIDAD");
-        box.addView(speed, lp(-1, dp(52)));
-
-        Button radar = dialogButton("ACTUALIZAR RADARES FIJOS Y DE TRAMO");
-        box.addView(radar, lp(-1, dp(52)));
-
-        Button fuel = dialogButton("ACTUALIZAR PRECIOS DE GASOLINERAS");
-        box.addView(fuel, lp(-1, dp(52)));
+        Button updateAll = dialogButton("ACTUALIZAR TODO · ALICANTE");
+        box.addView(updateAll, lp(-1, dp(56)));
 
         Switch radarVoice = new Switch(this);
         radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS DGT");
@@ -1239,6 +1259,7 @@ public class MainActivity extends Activity {
                 + "\nRadares DGT: " + lastRadarUpdateText()
                 + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
                         speedLimits.automaticProvince(gps.getLastLocation()))
+                + "\nAlicante: mapa local completo (maxspeed + tipo de vía), radares DGT y precios."
                 + "\nAutomático: precios cada 10 min; límites y radares máx. una vez/24 h por provincia.",
                 10, MUTED, false);
         network.setPadding(dp(8), dp(12), dp(8), dp(10));
@@ -1252,28 +1273,15 @@ public class MainActivity extends Activity {
         // The wrench still exposes the original diagnostic/export flow. Close this
         // lightweight chooser before opening another dialog so no legacy action is
         // hidden behind a second modal.
-        speed.setOnClickListener(v -> {
-            dialog.dismiss();
-            chooseSpeedLimitProvince();
-        });
-        radar.setOnClickListener(v -> {
-            dialog.dismiss();
-            chooseRadarProvince();
-        });
-        alicante.setOnClickListener(v -> {
+        updateAll.setOnClickListener(v -> {
             dialog.dismiss();
             updateAlicanteRoadData();
-        });
-        fuel.setOnClickListener(v -> {
-            dialog.dismiss();
-            fuelStations.forceRefresh();
-            toast("Actualizando precios con la red disponible");
         });
         radarVoice.setOnCheckedChangeListener((button, enabled) -> {
             uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
             toast(enabled ? "Locución activada para radares fijos DGT" : "Locución de radares desactivada");
         });
-        showSized(dialog, .60f, .87f);
+        showSized(dialog, .60f, .62f);
     }
 
     private String lastRadarUpdateText() {
@@ -1310,12 +1318,13 @@ public class MainActivity extends Activity {
             toast("La radio no tiene una conexión a Internet disponible");
             return;
         }
-        toast("Comprobando límites y radares de Alicante en segundo plano");
+        toast("Actualizando Alicante: mapa vial, radares y precios en segundo plano");
+        fuelStations.forceRefresh();
         speedLimits.refreshFromInternet(gps.getLastLocation(), "ALICANTE", limits -> {
             refreshSpeedLimitWidget();
             radars.refreshFromInternet("ALICANTE", radar -> {
                 refreshRadarWidget();
-                toast("Alicante: " + limits.message + " · " + radar.message);
+                toast("Alicante: " + limits.message + " · " + radar.message + " · precios solicitados");
             });
         });
     }

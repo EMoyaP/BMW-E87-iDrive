@@ -58,7 +58,7 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 - Diésel y radio de 7 km como valores predeterminados, ambos configurables.
 - Precios procedentes del servicio oficial español, filtrados localmente y guardados en una caché de 150 km alrededor del vehículo.
 - Los precios próximos se actualizan cada diez minutos mientras la app está visible y Android publica una red IP.
-- La APK incorpora semillas compactas de límites para **Alicante, Murcia, Valencia y Albacete**. No descarga una base completa de España.
+- La APK incorpora un mapa completo de carretera de **Alicante**: límites `maxspeed` explícitos y clases de **112.709** vías transitables. Así, cuando OpenStreetMap no etiqueta el límite, puede mostrar la recomendación azul por clase sin depender de una descarga al conducir. Murcia, Valencia y Albacete mantienen sus semillas compactas de límites explícitos.
 - La APK incorpora además el inventario nacional DATEX II de la DGT para radares fijos y de tramo (unos 2 MB antes de comprimir). Durante la marcha la coincidencia se realiza por completo en local; no consulta un servicio de radares en cada posición GPS.
 - La búsqueda de la vía próxima es local y se ejecuta con cada fix GPS de conducción (normalmente alrededor de una vez por segundo); no realiza una consulta de red al cambiar el límite.
 - Cada provincia tiene su propia marca de 24 horas: una actualización reciente de Alicante no bloquea una actualización pendiente de Murcia.
@@ -72,7 +72,7 @@ La llave inglesa inferior derecha abre tres herramientas separadas:
 
 1. **Debug / USB** — diagnóstico pasivo, pruebas guiadas de correlación, exportación USB y registros de ejecución.
 2. **Permisos** — ubicación, dispositivos Bluetooth cercanos y acceso multimedia Android.
-3. **Actualizaciones** — actualización de precios, de límites OSM y de radares fijos/tramo DGT por zona GPS o provincia.
+3. **Actualizaciones** — un único botón para actualizar Alicante: mapa vial completo OSM, radares fijos/tramo DGT y precios de gasolineras. La importación del mapa se hace en flujo y solo sustituye la caché de límites propia de iDrive.
 
 El panel principal muestra provincia, fecha y hora de la última actualización correcta de la base de límites. Antes de instalar una descarga identifica la base local incluida.
 

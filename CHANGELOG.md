@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 1.18.0 — 23/08/2026
+
+- Se sustituye la semilla de Alicante limitada a `maxspeed` por un mapa local completo de
+  **112.709** vías transitables OpenStreetMap: 8.882 límites explícitos y 103.827 clases de
+  vía para el respaldo azul DGT. La consulta sigue siendo íntegramente local durante la marcha.
+- Al actualizar desde una versión previa se reemplaza exclusivamente la base `e87_speed_limits`
+  de iDrive; no se modifican CAN, MCU, PDC, climatización, aplicaciones OEM, diagnósticos ni
+  precios de gasolineras.
+- El botón de Actualizaciones de Alicante sincroniza en una sola acción el mapa vial completo,
+  los radares fijos/tramo DGT y los precios. El mapa remoto es un TSV comprimido importado en
+  flujo, evitando cargar respuestas provinciales grandes de Overpass en memoria.
+- El reloj y la fecha se ajustan al ancho disponible. El ordenador de a bordo muestra cada valor
+  en su propia línea con la unidad en la etiqueta y el número grande separado; se retiró el texto
+  de relleno de valores disponibles.
+
 ## 1.17.1 — 23/08/2026
 
 - Cuando OpenStreetMap no publica `maxspeed`, el cuadrado azul usa una referencia genérica DGT
