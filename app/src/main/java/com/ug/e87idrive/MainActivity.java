@@ -1030,15 +1030,15 @@ public class MainActivity extends Activity {
         reading.setSingleLine(true);
         reading.setIncludeFontPadding(false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        row.addView(reading, lp(dp(82), -1));
+        row.addView(reading, lp(dp(120), -1));
         return row;
     }
 
-    /** Labels carry the unit so the large value remains a clean, one-line reading. */
+    /** Keep labels short and place units after the large reading for distance legibility. */
     private String boardSummaryLabel(VehicleField field) {
-        if (field == VehicleField.RANGE) return "Autonomía (km)";
-        if (field == VehicleField.CONSUMPTION) return "Consumo (l/100km)";
-        if (field == VehicleField.EXTERIOR_TEMPERATURE) return "Exterior (°C)";
+        if (field == VehicleField.RANGE) return "Autonomía";
+        if (field == VehicleField.CONSUMPTION) return "Consumo";
+        if (field == VehicleField.EXTERIOR_TEMPERATURE) return "Exterior";
         return vehiclePanelLabel(field);
     }
 
@@ -1046,9 +1046,9 @@ public class MainActivity extends Activity {
         VehicleValue<?> value = vehicleData.get(field);
         if (!value.isAvailable() || !(value.value() instanceof Double)) return null;
         double number = (Double) value.value();
-        if (field == VehicleField.CONSUMPTION || field == VehicleField.EXTERIOR_TEMPERATURE) {
-            return String.format(Locale.getDefault(), "%.1f", number);
-        }
+        if (field == VehicleField.RANGE) return String.format(Locale.getDefault(), "%.0f km", number);
+        if (field == VehicleField.CONSUMPTION) return String.format(Locale.getDefault(), "%.1f l/100km", number);
+        if (field == VehicleField.EXTERIOR_TEMPERATURE) return String.format(Locale.getDefault(), "%.1f °C", number);
         return String.format(Locale.getDefault(), "%.0f", number);
     }
 

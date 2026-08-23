@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 1.18.1 — 23/08/2026
+
+- El ordenador de a bordo muestra la unidad detrás de la cifra grande: `772 km`,
+  `10,8 l/100` y `30,0 °C`. Las etiquetas vuelven a ser cortas para conservar una línea clara.
+
 ## 1.18.0 — 23/08/2026
 
 - Se sustituye la semilla de Alicante limitada a `maxspeed` por un mapa local completo de
