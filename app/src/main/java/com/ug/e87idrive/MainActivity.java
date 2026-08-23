@@ -105,7 +105,8 @@ public class MainActivity extends Activity {
         usbDiagnostics = new UsbDiagnosticRecorder(this);
         fuelStations = new FuelStationProvider(this, this::refreshFuelWidget);
         speedLimits = new SpeedLimitRepository(this);
-        radars = new RadarRepository(this);
+        radars = new RadarRepository(this, () -> speedLimits == null
+                ? "AUTO" : speedLimits.automaticProvince(gps == null ? null : gps.getLastLocation()));
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
             refreshVehicle();
@@ -135,6 +136,7 @@ public class MainActivity extends Activity {
         autoDetectApps();
         media.requestListenerRebind();
         refreshAll();
+        gps.start();
         bluetoothState.start();
         oemRadio.start();
         fuelStations.start(gps.getLastLocation());
@@ -152,6 +154,7 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         AppSessionLog.event("APP", "Sesión en segundo plano; deteniendo sondeos periódicos");
         foreground = false;
+        gps.stop();
         bluetoothState.stop();
         oemRadio.stop();
         fuelStations.stop();
@@ -2271,6 +2274,8 @@ public class MainActivity extends Activity {
                                                      int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == 100) {
+            gps.stop();
+            if (foreground) gps.start();
             bluetoothState.stop();
             bluetoothState.start();
             vehicleData.stop();
@@ -2661,6 +2666,7 @@ public class MainActivity extends Activity {
     private static final class RadarNoticeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF rect = new RectF();
+        private final RectF signBounds = new RectF();
         private final int foreground, blue, muted;
         private final Bitmap officialRadarSign;
         private RadarRepository.Alert alert;
@@ -2697,7 +2703,7 @@ public class MainActivity extends Activity {
             // the bitmap's proportions; no custom redraw or third-party icon is involved.
             float signHeight = Math.min(h * .90f, w * .28f / ((float) officialRadarSign.getWidth() / officialRadarSign.getHeight()));
             float signWidth = signHeight * officialRadarSign.getWidth() / officialRadarSign.getHeight();
-            RectF signBounds = new RectF(dp(8), (h - signHeight) / 2f, dp(8) + signWidth,
+            signBounds.set(dp(8), (h - signHeight) / 2f, dp(8) + signWidth,
                     (h + signHeight) / 2f);
             paint.setFilterBitmap(true);
             canvas.drawBitmap(officialRadarSign, null, signBounds, paint);

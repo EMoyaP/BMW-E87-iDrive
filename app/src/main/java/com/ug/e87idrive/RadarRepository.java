@@ -36,6 +36,7 @@ import java.util.Locale;
  * province, and all driving-time matching is against this small local SQLite cache.
  */
 final class RadarRepository {
+    interface ProvinceResolver { String resolve(); }
     private static final String TAG = "RADARES DGT";
     private static final String DGT_ENDPOINT =
             "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml";
@@ -49,6 +50,7 @@ final class RadarRepository {
     private final ConnectivityManager connectivity;
     private final SharedPreferences preferences;
     private final Database database;
+    private final ProvinceResolver provinceResolver;
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile boolean active;
     private volatile boolean updateRunning;
@@ -71,8 +73,9 @@ final class RadarRepository {
                 }
             };
 
-    RadarRepository(Context context) {
+    RadarRepository(Context context, ProvinceResolver provinceResolver) {
         this.context = context.getApplicationContext();
+        this.provinceResolver = provinceResolver;
         connectivity = (ConnectivityManager) this.context.getSystemService(Context.CONNECTIVITY_SERVICE);
         preferences = this.context.getSharedPreferences("dgt_radar_updates", Context.MODE_PRIVATE);
         database = new Database(this.context);
@@ -249,7 +252,12 @@ final class RadarRepository {
         if (!active || updateRunning || availableNetwork() == null) return;
         long now = System.currentTimeMillis();
         if (now - lastAutomaticAttempt < RETRY_INTERVAL_MS) return;
-        String province = provinceFor(lastLocation);
+        String province = provinceResolver == null ? null : provinceResolver.resolve();
+        if (province == null || "AUTO".equals(province)) {
+            lastAutomaticAttempt = now;
+            AppSessionLog.event(TAG, "Comprobación automática omitida · provincia GPS no confirmada por mapa local");
+            return;
+        }
         if (lastSuccessfulUpdate(province) > 0L
                 && now - lastSuccessfulUpdate(province) < REFRESH_INTERVAL_MS) return;
         lastAutomaticAttempt = now;
@@ -257,16 +265,6 @@ final class RadarRepository {
         refreshFromInternet(province, result -> AppSessionLog.event(TAG,
                 "Actualización automática " + (result.success ? "correcta" : "omitida/fallida")
                         + " · " + result.message));
-    }
-
-    private static String provinceFor(Location location) {
-        if (location == null) return "ALICANTE";
-        double lat = location.getLatitude();
-        double lon = location.getLongitude();
-        if (lat >= 38.00 && lat <= 39.95 && lon >= -2.98 && lon <= -0.68) return "ALBACETE";
-        if (lat >= 38.55 && lat <= 40.92 && lon >= -1.92 && lon <= 0.02) return "VALENCIA";
-        if (lat >= 37.35 && lat <= 38.80 && lon >= -2.40 && lon <= -0.62) return "MURCIA";
-        return "ALICANTE";
     }
 
     private void seedFromAssetsAsync() {
@@ -378,25 +376,31 @@ final class RadarRepository {
     }
 
     private static String normalizeProvince(String province) {
-        if (province == null) return "ALICANTE";
+        String canonical = canonicalProvince(province);
+        return canonical == null ? "ALICANTE" : canonical;
+    }
+
+    private static String canonicalProvince(String province) {
+        if (province == null) return null;
         String normalized = province.trim().toUpperCase(Locale.ROOT);
+        if (normalized.contains("ALICANTE") || normalized.contains("ALACANT")) return "ALICANTE";
         if (normalized.contains("MURCIA")) return "MURCIA";
-        if (normalized.contains("VALENCIA")) return "VALENCIA";
+        if (normalized.contains("VALENCIA") || normalized.contains("VALÈNCIA")) return "VALENCIA";
         if (normalized.contains("ALBACETE")) return "ALBACETE";
-        return "ALICANTE";
+        return null;
     }
 
     private static boolean provinceMatches(String dgtProvince, String desired) {
         if ("TODAS".equals(desired)) return true;
-        return normalizeProvince(dgtProvince).equals(normalizeProvince(desired));
+        String actual = canonicalProvince(dgtProvince);
+        String expected = canonicalProvince(desired);
+        return actual != null && actual.equals(expected);
     }
 
     private static String storageProvince(String dgtProvince) {
-        String upper = dgtProvince == null ? "" : dgtProvince.toUpperCase(Locale.ROOT);
-        if (upper.contains("ALICANTE")) return "ALICANTE";
-        if (upper.contains("MURCIA")) return "MURCIA";
-        if (upper.contains("VALENCIA")) return "VALENCIA";
-        if (upper.contains("ALBACETE")) return "ALBACETE";
+        String canonical = canonicalProvince(dgtProvince);
+        if (canonical != null) return canonical;
+        String upper = dgtProvince == null ? "" : dgtProvince.trim().toUpperCase(Locale.ROOT);
         return upper.isEmpty() ? "DGT" : upper;
     }
 

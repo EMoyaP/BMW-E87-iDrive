@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
@@ -358,16 +359,29 @@ public final class UsbDiagnosticRecorder {
 
     private void writeDocument(Uri document, String report) throws Exception {
         ContentResolver resolver = context.getContentResolver();
-        // SAF supports the documented write modes "w", "wa", "rw" and "rwt";
-        // "wt" is rejected by several Android 13/15 document providers used
-        // by aftermarket head units and was making USB DEBUG appear to export
-        // successfully while producing no file.
-        try (OutputStream stream = resolver.openOutputStream(document, "w")) {
-            if (stream == null) throw new IllegalStateException("No se pudo abrir el archivo para escritura");
-            try (OutputStreamWriter writer = new OutputStreamWriter(stream, StandardCharsets.UTF_8)) {
-                writer.write(report);
-                writer.flush();
+        Exception failure = null;
+        // Some head-unit document providers accept a stream in "w" mode but silently leave
+        // the freshly-created SAF document empty. Try the documented truncate/read-write mode
+        // first and verify the result; retry "w" only if the provider rejects or loses it.
+        for (String mode : new String[]{"rwt", "w"}) {
+            try (OutputStream stream = resolver.openOutputStream(document, mode)) {
+                if (stream == null) throw new IllegalStateException("No se pudo abrir el archivo para escritura");
+                try (OutputStreamWriter writer = new OutputStreamWriter(stream, StandardCharsets.UTF_8)) {
+                    writer.write(report);
+                    writer.flush();
+                }
+                if (documentHasContent(resolver, document)) return;
+                throw new IllegalStateException("El proveedor USB dejó el archivo vacío");
+            } catch (Exception error) {
+                failure = error;
             }
+        }
+        throw failure == null ? new IllegalStateException("No se pudo escribir en la memoria USB") : failure;
+    }
+
+    private static boolean documentHasContent(ContentResolver resolver, Uri document) throws Exception {
+        try (InputStream input = resolver.openInputStream(document)) {
+            return input != null && input.read() >= 0;
         }
     }
 

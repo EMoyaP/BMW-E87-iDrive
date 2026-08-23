@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## 1.16.1 — 23/08/2026
+
+- Se corrige el fallo raíz que impedía los límites de vía: el proveedor GPS tenía permiso, pero
+  no se iniciaba al entrar en la aplicación. Ahora se inicia y detiene con la pantalla, se reactiva
+  tras conceder permisos y registra los proveedores activos sin guardar coordenadas.
+- En Android 11 o posterior se solicita además una posición puntual al arrancar para reducir el
+  tiempo de espera en frío; siguen activos los callbacks GPS, network y passive disponibles.
+- La detección de límite calcula ahora la distancia al tramo completo de OSM, no únicamente a
+  sus vértices. Esto evita que un punto GPS situado entre dos nodos separados deje el límite en
+  blanco. La tolerancia continúa siendo prudente y depende de la precisión GPS publicada.
+- Al actualizar desde versiones anteriores se comprueba la semilla por provincia y se completa
+  Alicante (además de Murcia, Valencia y Albacete) si faltaba, sin sobrescribir una provincia
+  descargada posteriormente por el usuario.
+- Durante el arranque no se infiere una provincia con rectángulos geográficos solapados: si aún
+  no hay un tramo local que identifique la zona, la actualización automática usa únicamente el
+  área GPS de 5 km hasta disponer de una coincidencia fiable.
+- El registro de sesión indica precisión, radio de búsqueda y resultado del límite local sin
+  guardar coordenadas. La exportación USB escribe con dos modos SAF y verifica contenido para no
+  informar éxito si el proveedor de la radio deja TXT vacíos.
+- La actualización provincial de radares DGT ya no convierte provincias desconocidas en Alicante;
+  solo importa registros cuya provincia coincide explícitamente con la seleccionada.
+
 ## 1.16.0 — 23/08/2026
 
 - El aviso de radar abandona la columna estrecha del límite: la esfera queda arriba y el radar

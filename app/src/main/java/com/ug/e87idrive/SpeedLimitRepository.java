@@ -44,9 +44,11 @@ final class SpeedLimitRepository {
     private static final int QUERY_RADIUS_METERS = 5_000;
     /** A broad nearest-road match can pick a parallel carriageway. Prefer no limit over an
      * ambiguous one; this app is an aid, never a legal/realtime traffic-sign source. */
-    private static final int MAX_MATCH_RADIUS_METERS = 60;
-    private static final int MIN_MATCH_RADIUS_METERS = 20;
-    private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 30f;
+    private static final int MAX_MATCH_RADIUS_METERS = 90;
+    private static final int MIN_MATCH_RADIUS_METERS = 25;
+    private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
+    /** Bump when a bundled provincial seed must be checked on top of an older installation. */
+    private static final int BUNDLED_SEED_VERSION = 2;
     /** GPS is requested once per second while driving. Keep lookup reuse below that cadence so a
      * new road/maxspeed can be reflected on the next fix without any network request. */
     private static final long LIVE_LOOKUP_CACHE_MS = 750L;
@@ -81,6 +83,8 @@ final class SpeedLimitRepository {
     private volatile double cachedLat;
     private volatile double cachedLon;
     private volatile Location lastLocation;
+    private volatile String lastLookupResult = "Sin consulta GPS todavía";
+    private volatile String lastLoggedLookup = "";
     private volatile boolean active;
     private volatile boolean updateRunning;
     private boolean networkCallbackRegistered;
@@ -119,6 +123,7 @@ final class SpeedLimitRepository {
     void onLocation(Location location) {
         if (location == null) return;
         lastLocation = new Location(location);
+        logLookupResult(location, lookup(location));
         autoRefreshIfNeeded();
     }
 
@@ -150,17 +155,34 @@ final class SpeedLimitRepository {
                 < LIVE_LOOKUP_CACHE_METERS) {
             return cachedMatch;
         }
-        int matchRadius = MAX_MATCH_RADIUS_METERS;
-        if (location.hasAccuracy()) {
-            matchRadius = Math.max(MIN_MATCH_RADIUS_METERS, Math.min(MAX_MATCH_RADIUS_METERS,
-                    Math.round(location.getAccuracy() * 2f)));
-        }
+        int matchRadius = matchRadiusFor(location);
         Match result = database.nearest(location.getLatitude(), location.getLongitude(), matchRadius);
         cachedLat = location.getLatitude();
         cachedLon = location.getLongitude();
         cachedLookupAt = now;
         cachedMatch = result;
         return result;
+    }
+
+    private static int matchRadiusFor(Location location) {
+        if (location == null || !location.hasAccuracy()) return MAX_MATCH_RADIUS_METERS;
+        return Math.max(MIN_MATCH_RADIUS_METERS, Math.min(MAX_MATCH_RADIUS_METERS,
+                Math.round(location.getAccuracy() * 2f)));
+    }
+
+    /** Logs the matching decision without coordinates, so an exported session explains a blank sign. */
+    private void logLookupResult(Location location, Match match) {
+        String accuracy = location.hasAccuracy()
+                ? String.format(Locale.ROOT, "%.0f m", location.getAccuracy()) : "no publicada";
+        String result = match == null
+                ? "sin límite · precisión=" + accuracy + " · radio=" + matchRadiusFor(location) + " m"
+                : String.format(Locale.ROOT, "%d km/h · %.0f m · %s · precisión=%s",
+                        match.limitKmh, match.distanceMeters, provinceLabel(match.province), accuracy);
+        lastLookupResult = result;
+        if (!result.equals(lastLoggedLookup)) {
+            lastLoggedLookup = result;
+            AppSessionLog.event(TAG, "Consulta local " + result);
+        }
     }
 
     void refreshFromInternet(Location location, UpdateCallback callback) {
@@ -226,8 +248,9 @@ final class SpeedLimitRepository {
                         + " · OpenStreetMap"
                         : imported + " tramos guardados en local · " + provinceLabel(province)
                         + " · OpenStreetMap";
-                if (provincialUpdate) {
-                    updatePreferences.edit().putLong(successPreference(selectedProvince.code),
+                if (provincialUpdate || automatic) {
+                    updatePreferences.edit().putLong(successPreference(
+                                    provincialUpdate ? selectedProvince.code : province),
                             System.currentTimeMillis()).apply();
                 }
                 AppSessionLog.event(TAG, "Actualización Wi-Fi correcta · " + lastResult);
@@ -276,12 +299,11 @@ final class SpeedLimitRepository {
         if (location != null) {
             Match match = lookup(location);
             if (match != null && findProvince(match.province) != null) return match.province;
-            String bounded = provinceFromBounds(location);
-            if (bounded != null) return bounded;
         }
-        // The bundled starting dataset is Alicante-first. If GPS is still acquiring, do not
-        // guess a different province; the next valid position can replace this selection.
-        return "ALICANTE";
+        // A broad administrative rectangle can overlap Alicante, Murcia and Albacete. Until
+        // a local way proves the province, refresh only the 5 km GPS area instead of storing a
+        // provincial update under the wrong name.
+        return "AUTO";
     }
 
     String diagnostic() {
@@ -289,6 +311,7 @@ final class SpeedLimitRepository {
                 + "registros=" + database.count() + "\n"
                 + "semillas=" + seedStatus + "\n"
                 + "última actualización=" + lastResult + "\n"
+                + "última consulta=" + lastLookupResult + "\n"
                 + "actualización automática=Internet Android · máximo una vez por provincia/24 h\n"
                 + "radio de descarga=" + QUERY_RADIUS_METERS + " m · radio de lectura="
                 + MIN_MATCH_RADIUS_METERS + "–" + MAX_MATCH_RADIUS_METERS + " m según precisión GPS\n"
@@ -353,18 +376,21 @@ final class SpeedLimitRepository {
     private void seedFromAssetsAsync() {
         Thread worker = new Thread(() -> {
             synchronized (databaseLock) {
-                if (database.count() > 0) {
-                    seedStatus = "Base local existente";
-                    return;
-                }
-                seedStatus = "Importando cuatro provincias";
+                boolean needsSeedCheck = updatePreferences.getInt("bundled_seed_version", 0)
+                        < BUNDLED_SEED_VERSION;
+                seedStatus = needsSeedCheck ? "Verificando semillas provinciales" : "Verificando base local";
                 int imported = 0;
                 SQLiteDatabase db = database.getWritableDatabase();
                 long now = System.currentTimeMillis();
                 db.beginTransaction();
                 try {
                     for (Province province : SUPPORTED_PROVINCES) {
-                        imported += importSeedAsset(db, province, now);
+                        // Older builds could retain generic records and therefore omit the
+                        // packaged provincial base. Do not replace a province already updated
+                        // by the user; only fill one that is absent.
+                        if (database.countProvince(province.code) == 0) {
+                            imported += importSeedAsset(db, province, now);
+                        }
                     }
                     db.setTransactionSuccessful();
                 } catch (Exception error) {
@@ -378,7 +404,11 @@ final class SpeedLimitRepository {
                     lastResult = imported + " tramos iniciales · Alicante/Murcia/Valencia/Albacete";
                     AppSessionLog.event(TAG, "Semillas locales listas · " + lastResult);
                     cachedLookupAt = 0L;
+                } else {
+                    seedStatus = "Base local existente";
                 }
+                updatePreferences.edit().putInt("bundled_seed_version", BUNDLED_SEED_VERSION).apply();
+                main.post(SpeedLimitRepository.this::autoRefreshIfNeeded);
             }
         }, "e87-speed-limit-seed");
         worker.setPriority(Thread.MIN_PRIORITY);
@@ -702,7 +732,7 @@ final class SpeedLimitRepository {
                 while (cursor.moveToNext()) {
                     int limit = cursor.getInt(0);
                     String geometry = cursor.getString(1);
-                    double distance = nearestPointDistance(latitude, longitude, geometry);
+                    double distance = nearestPolylineDistance(latitude, longitude, geometry);
                     if (distance > maxDistanceMeters) continue;
                     if (nearest == null || distance < nearest.distanceMeters) {
                         nearest = new Match(limit, distance, cursor.getLong(2), cursor.getString(3));
@@ -719,19 +749,57 @@ final class SpeedLimitRepository {
             }
         }
 
-        private static double nearestPointDistance(double latitude, double longitude, String geometry) {
+        int countProvince(String province) {
+            SQLiteDatabase db = getReadableDatabase();
+            try (Cursor cursor = db.rawQuery("SELECT COUNT(*) FROM speed_limits WHERE province = ?",
+                    new String[]{province == null ? "" : province})) {
+                return cursor.moveToFirst() ? cursor.getInt(0) : 0;
+            }
+        }
+
+        /** Distance to the complete OSM way, not just to its individual vertices. */
+        private static double nearestPolylineDistance(double latitude, double longitude, String geometry) {
             double nearest = Double.MAX_VALUE;
             if (geometry == null) return nearest;
+            double previousLat = Double.NaN;
+            double previousLon = Double.NaN;
             for (String point : geometry.split(";")) {
                 String[] pair = point.split(",");
                 if (pair.length != 2) continue;
                 try {
-                    double pointDistance = distanceMeters(latitude, longitude,
-                            Double.parseDouble(pair[0]), Double.parseDouble(pair[1]));
+                    double currentLat = Double.parseDouble(pair[0]);
+                    double currentLon = Double.parseDouble(pair[1]);
+                    double pointDistance = distanceMeters(latitude, longitude, currentLat, currentLon);
                     if (pointDistance < nearest) nearest = pointDistance;
+                    if (!Double.isNaN(previousLat)) {
+                        double segmentDistance = distanceToSegment(latitude, longitude, previousLat,
+                                previousLon, currentLat, currentLon);
+                        if (segmentDistance < nearest) nearest = segmentDistance;
+                    }
+                    previousLat = currentLat;
+                    previousLon = currentLon;
                 } catch (Exception ignored) { }
             }
             return nearest;
+        }
+
+        private static double distanceToSegment(double latitude, double longitude, double latA,
+                                                double lonA, double latB, double lonB) {
+            // Local equirectangular projection is accurate enough for an OSM road segment and
+            // prevents 100–300 m gaps between OSM vertices from becoming blank road limits.
+            double metersLat = 110_540d;
+            double metersLon = 111_320d * Math.cos(Math.toRadians(latitude));
+            double ax = (lonA - longitude) * metersLon;
+            double ay = (latA - latitude) * metersLat;
+            double bx = (lonB - longitude) * metersLon;
+            double by = (latB - latitude) * metersLat;
+            double dx = bx - ax;
+            double dy = by - ay;
+            double lengthSquared = dx * dx + dy * dy;
+            if (lengthSquared <= 0.0001d) return Math.hypot(ax, ay);
+            double t = -(ax * dx + ay * dy) / lengthSquared;
+            t = Math.max(0d, Math.min(1d, t));
+            return Math.hypot(ax + t * dx, ay + t * dy);
         }
     }
 }

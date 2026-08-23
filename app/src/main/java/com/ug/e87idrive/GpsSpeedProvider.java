@@ -6,8 +6,10 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.Build;
 import android.os.Bundle;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -21,6 +23,7 @@ public class GpsSpeedProvider implements LocationListener {
     private Location lastLocation;
     private String lastLoggedState = "";
     private long lastLoggedAt;
+    private boolean started;
 
     public GpsSpeedProvider(Context c, Listener l) {
         context=c; listener=l;
@@ -28,30 +31,57 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     public void start() {
-        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
-            AppSessionLog.event("GPS", "Permiso de ubicación precisa no concedido");
+        boolean fine = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean coarse = context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        if (!fine && !coarse) {
+            AppSessionLog.event("GPS", "Permiso de ubicación no concedido");
             return;
         }
         try {
-            if (lm == null) return;
+            if (lm == null) {
+                AppSessionLog.event("GPS", "LocationManager no disponible");
+                return;
+            }
+            started = true;
             Location newest = null;
+            ArrayList<String> enabled = new ArrayList<>();
             for (String provider : new String[]{LocationManager.GPS_PROVIDER,
                     LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER}) {
-                if (!lm.isProviderEnabled(provider)) continue;
+                boolean available;
+                try { available = lm.getAllProviders().contains(provider) && lm.isProviderEnabled(provider); }
+                catch (Exception ignored) { available = false; }
+                if (!available) continue;
+                enabled.add(provider);
                 // GPS is preferred for driving speed; network/passive make the fuel card useful
                 // immediately while the receiver is acquiring a satellite fix.
                 lm.requestLocationUpdates(provider, provider.equals(LocationManager.GPS_PROVIDER) ? 1000 : 5000,
                         0, this);
                 Location last = lm.getLastKnownLocation(provider);
                 if (last != null && (newest == null || last.getTime() > newest.getTime())) newest = last;
+                // API 30 on this head unit supports an active one-shot request. It complements
+                // the listener after a cold start, where no cached location exists yet.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    try {
+                        lm.getCurrentLocation(provider, null, context.getMainExecutor(), location -> {
+                            if (location != null) onLocationChanged(location);
+                        });
+                    } catch (Exception ignored) { }
+                }
             }
+            AppSessionLog.event("GPS", "Inicio · permiso=" + (fine ? "preciso" : "aproximado")
+                    + " · proveedores activos=" + (enabled.isEmpty() ? "ninguno" : enabled));
             if (newest != null) onLocationChanged(newest);
         } catch(Exception error) {
             AppSessionLog.event("GPS", "Error al iniciar: " + error.getClass().getSimpleName());
         }
     }
 
-    public void stop() { try { lm.removeUpdates(this); } catch(Exception ignored) {} }
+    public void stop() {
+        started = false;
+        try { lm.removeUpdates(this); } catch(Exception ignored) {}
+    }
     public Double getKmh() { return kmh; }
     public Double getLastValue() { return kmh; }
     public long getLastTimestamp() { return timestamp; }
@@ -61,9 +91,13 @@ public class GpsSpeedProvider implements LocationListener {
     public String diagnosticReport() {
         StringBuilder out = new StringBuilder(700);
         out.append("GPS ANDROID ESTÁNDAR · SOLO LECTURA\n");
-        boolean granted = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        boolean fine = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
-        out.append("permiso ubicación precisa=").append(granted).append('\n');
+        boolean coarse = context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        out.append("permiso ubicación precisa=").append(fine).append('\n');
+        out.append("permiso ubicación aproximada=").append(coarse).append('\n');
+        out.append("escucha activa=").append(started).append('\n');
         if (lm == null) {
             out.append("LocationManager=no disponible\n");
             return out.toString();
@@ -132,7 +166,13 @@ public class GpsSpeedProvider implements LocationListener {
             AppSessionLog.event("GPS", logState);
         }
     }
-    @Override public void onStatusChanged(String p,int s,Bundle e) {}
-    @Override public void onProviderEnabled(String p) {}
-    @Override public void onProviderDisabled(String p) {}
+    @Override public void onStatusChanged(String p,int s,Bundle e) {
+        AppSessionLog.event("GPS", "Estado proveedor=" + p + " · código=" + s);
+    }
+    @Override public void onProviderEnabled(String p) {
+        AppSessionLog.event("GPS", "Proveedor habilitado=" + p);
+    }
+    @Override public void onProviderDisabled(String p) {
+        AppSessionLog.event("GPS", "Proveedor deshabilitado=" + p);
+    }
 }
