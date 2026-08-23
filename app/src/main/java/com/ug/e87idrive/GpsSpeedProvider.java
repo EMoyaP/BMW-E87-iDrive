@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 
 public class GpsSpeedProvider implements LocationListener {
+    static final String DEBUG_PREFERENCES = "ui";
+    static final String KEY_LOG_COORDINATES = "debug_log_gps_coordinates";
     public interface Listener { void onLocation(Location location, Double kmh); }
     private final Context context;
     private final LocationManager lm;
@@ -88,6 +90,24 @@ public class GpsSpeedProvider implements LocationListener {
     public Location getLastLocation() { return lastLocation == null ? null : new Location(lastLocation); }
     public long getLocationTimestamp() { return locationTimestamp; }
 
+    static boolean coordinateLoggingEnabled(Context context) {
+        return context != null && context.getSharedPreferences(DEBUG_PREFERENCES, Context.MODE_PRIVATE)
+                .getBoolean(KEY_LOG_COORDINATES, false);
+    }
+
+    boolean isCoordinateLoggingEnabled() { return coordinateLoggingEnabled(context); }
+
+    void setCoordinateLoggingEnabled(boolean enabled) {
+        context.getSharedPreferences(DEBUG_PREFERENCES, Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_LOG_COORDINATES, enabled).apply();
+        lastLoggedState = "";
+        lastLoggedAt = 0L;
+        AppSessionLog.event("GPS PRIVACIDAD", enabled
+                ? "ACTIVADO por el usuario · el log incluirá coordenadas hasta desmarcar la opción"
+                : "DESACTIVADO por el usuario · el log vuelve a omitir coordenadas");
+        if (enabled && lastLocation != null) logLocationState(lastLocation, true);
+    }
+
     public String diagnosticReport() {
         StringBuilder out = new StringBuilder(700);
         out.append("GPS ANDROID ESTÁNDAR · SOLO LECTURA\n");
@@ -129,7 +149,14 @@ public class GpsSpeedProvider implements LocationListener {
                     .append(" · velocidad=").append(fix.hasSpeed()
                             ? String.format(Locale.ROOT, "%.1f km/h", Math.max(0f, fix.getSpeed() * 3.6f))
                             : "no publicada").append('\n');
-            out.append("coordenadas omitidas del diagnóstico por privacidad\n");
+            if (isCoordinateLoggingEnabled()) {
+                out.append("coordenadas DEBUG: lat=")
+                        .append(String.format(Locale.ROOT, "%.6f", fix.getLatitude()))
+                        .append(" · lon=")
+                        .append(String.format(Locale.ROOT, "%.6f", fix.getLongitude())).append('\n');
+            } else {
+                out.append("coordenadas omitidas del diagnóstico por privacidad\n");
+            }
         }
         return out.toString();
     }
@@ -154,13 +181,20 @@ public class GpsSpeedProvider implements LocationListener {
             }
         }
         if(listener!=null) listener.onLocation(new Location(l), kmh);
+        logLocationState(l, false);
+    }
+
+    private void logLocationState(Location l, boolean force) {
         String logState = "proveedor=" + l.getProvider() + " · precisión="
                 + (l.hasAccuracy() ? Math.round(l.getAccuracy()) + "m" : "no publicada")
                 + " · velocidad=" + (kmh == null ? "no publicada"
                 : Math.round(kmh) + " km/h")
-                + (l.hasSpeed() ? " (directa)" : " (estimada/ausente)");
+                + (l.hasSpeed() ? " (directa)" : " (estimada/ausente)")
+                + (isCoordinateLoggingEnabled()
+                ? String.format(Locale.ROOT, " · lat=%.6f · lon=%.6f",
+                        l.getLatitude(), l.getLongitude()) : "");
         long now = System.currentTimeMillis();
-        if (!logState.equals(lastLoggedState) && now - lastLoggedAt >= 5_000L) {
+        if (!logState.equals(lastLoggedState) && (force || now - lastLoggedAt >= 5_000L)) {
             lastLoggedState = logState;
             lastLoggedAt = now;
             AppSessionLog.event("GPS", logState);

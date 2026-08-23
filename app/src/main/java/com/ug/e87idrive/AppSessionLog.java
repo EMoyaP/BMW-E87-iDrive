@@ -28,7 +28,9 @@ final class AppSessionLog {
                     + "Inicio=" + timestamp() + "\n"
                     + "Android SDK=" + Build.VERSION.SDK_INT + " · dispositivo="
                     + Build.MANUFACTURER + " " + Build.MODEL + "\n"
-                    + "Privacidad: no se guardan coordenadas GPS.\n\n";
+                    + (GpsSpeedProvider.coordinateLoggingEnabled(context)
+                    ? "Privacidad: coordenadas GPS habilitadas explícitamente para DEBUG.\n\n"
+                    : "Privacidad: no se guardan coordenadas GPS.\n\n");
             write(header, false);
         }
     }

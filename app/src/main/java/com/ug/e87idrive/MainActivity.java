@@ -1468,6 +1468,14 @@ public class MainActivity extends Activity {
                 + "No transmite CAN, no escribe UART y no cambia ajustes OEM.", 12, ACCENT, false);
         warning.setPadding(dp(14), dp(8), dp(14), dp(8));
         box.addView(warning);
+        CheckBox logGpsCoordinates = new CheckBox(this);
+        logGpsCoordinates.setText("Guardar posición GPS en logs (DEBUG) · permanece activo hasta desmarcar");
+        logGpsCoordinates.setTextColor(MUTED);
+        logGpsCoordinates.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(11));
+        logGpsCoordinates.setButtonTintList(android.content.res.ColorStateList.valueOf(BLUE));
+        logGpsCoordinates.setPadding(dp(12), dp(2), dp(12), dp(2));
+        logGpsCoordinates.setChecked(gps.isCoordinateLoggingEnabled());
+        box.addView(logGpsCoordinates, lp(-1, dp(42)));
         TextView reportView = txt(diagnostics.buildScreenSummary(), 12, TEXT, false);
         reportView.setTextIsSelectable(true);
         reportView.setPadding(dp(14), dp(8), dp(14), dp(8));
@@ -1525,6 +1533,11 @@ public class MainActivity extends Activity {
         exportOem.setOnClickListener(v -> requestOemExport(exportOem));
         exportFull.setOnClickListener(v -> requestFullExport());
         inspectCan.setOnClickListener(v -> canbusInspectorModal());
+        logGpsCoordinates.setOnCheckedChangeListener((button, enabled) -> {
+            gps.setCoordinateLoggingEnabled(enabled);
+            button.setTextColor(enabled ? ACCENT : MUTED);
+            toast(enabled ? "Registro de posición GPS activado" : "Registro de posición GPS desactivado");
+        });
         dialog.setOnShowListener(v -> {
             stop.setEnabled(diagnostics.isCorrelationRunning());
             start.setEnabled(!diagnostics.isCorrelationRunning());

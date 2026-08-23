@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 1.16.2 — 23/08/2026
+
+- DEBUG incorpora una casilla voluntaria para guardar posición GPS en los logs. Está desactivada
+  por defecto, permanece activa hasta que el usuario la desmarca y deja constancia explícita del
+  cambio de privacidad en el registro.
+- Con la opción activa se exportan latitud, longitud, proveedor, precisión, velocidad y hora; con
+  la opción desactivada los diagnósticos y el log vuelven a omitir las coordenadas.
+
 ## 1.16.1 — 23/08/2026
 
 - Se corrige el fallo raíz que impedía los límites de vía: el proveedor GPS tenía permiso, pero
