@@ -613,7 +613,7 @@ public class MainActivity extends Activity {
         gaugeColumn.setGravity(Gravity.CENTER);
         speedGauge = new SpeedGaugeView(this);
         gaugeColumn.addView(speedGauge, lp(-1, 0, 1));
-        content.addView(gaugeColumn, lp(0, -1, 1.28f));
+        content.addView(gaugeColumn, lp(0, -1, 1.32f));
 
         LinearLayout limitColumn = vertical();
         limitColumn.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -628,16 +628,18 @@ public class MainActivity extends Activity {
         speedLimitState.setGravity(Gravity.CENTER);
         speedLimitState.setMaxLines(2);
         limitColumn.addView(speedLimitState, lp(-1, dp(32)));
+        content.addView(limitColumn, lp(0, -1, .68f));
+        // Keep the dial and road sign in the upper row. A radar notice needs a full-width
+        // row below them; the former narrow column made its distance and approach state unreadable.
+        box.addView(content, lp(-1, dp(198)));
         radarNoticeView = new RadarNoticeView(this, TEXT, BLUE, MUTED);
         radarNoticeView.setContentDescription("Aviso local de radar fijo o de tramo");
         radarNoticeView.setVisibility(View.GONE);
-        limitColumn.addView(radarNoticeView, lp(-1, dp(72)));
+        box.addView(radarNoticeView, lp(-1, dp(84)));
         speedLimitUpdateInfo = txt("Base local incluida", 9, MUTED, false);
         speedLimitUpdateInfo.setGravity(Gravity.CENTER);
         speedLimitUpdateInfo.setMaxLines(2);
-        limitColumn.addView(speedLimitUpdateInfo, lp(-1, dp(32)));
-        content.addView(limitColumn, lp(0, -1, .72f));
-        box.addView(content, lp(-1, 0, 1));
+        box.addView(speedLimitUpdateInfo, lp(-1, dp(30)));
         box.setOnLongClickListener(v -> { vehicleModal(); return true; });
         speedLimitView.setLimit(null);
         return box;
@@ -1166,7 +1168,7 @@ public class MainActivity extends Activity {
 
         Button debug = dialogButton("DEBUG / USB · LOGS Y EXPORTACIÓN");
         Button permissions = dialogButton("PERMISOS · UBICACIÓN Y MULTIMEDIA");
-        Button updates = dialogButton("ACTUALIZACIONES · VELOCIDAD Y GASOLINERAS");
+        Button updates = dialogButton("ACTUALIZACIONES · VELOCIDAD, RADARES Y GASOLINERAS");
         box.addView(debug, lp(-1, dp(56)));
         box.addView(permissions, lp(-1, dp(56)));
         box.addView(updates, lp(-1, dp(56)));
@@ -2690,21 +2692,47 @@ public class MainActivity extends Activity {
             paint.setColor(Color.rgb(38, 93, 143));
             canvas.drawRoundRect(rect, dp(8), dp(8), paint);
 
-            float iconX = s * .62f, iconY = h * .57f;
+            // A separated radar/transmitter and front-car silhouette: do not overlap the
+            // waves with wheels or body, as it becomes illegible at the unit's 720p density.
+            float iconY = h * .55f;
             paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(Math.max(1.8f, s * .06f));
+            paint.setStrokeWidth(Math.max(1.5f, s * .046f));
+            paint.setStrokeCap(Paint.Cap.ROUND);
             paint.setColor(blue);
-            RectF car = new RectF(iconX - s * .25f, iconY - s * .12f, iconX + s * .25f, iconY + s * .16f);
-            canvas.drawRoundRect(car, s * .05f, s * .05f, paint);
-            canvas.drawLine(iconX - s * .17f, iconY - s * .12f, iconX - s * .08f, iconY - s * .28f, paint);
-            canvas.drawLine(iconX - s * .08f, iconY - s * .28f, iconX + s * .13f, iconY - s * .28f, paint);
-            canvas.drawLine(iconX + s * .13f, iconY - s * .28f, iconX + s * .20f, iconY - s * .12f, paint);
-            canvas.drawCircle(iconX - s * .14f, iconY + s * .18f, s * .045f, paint);
-            canvas.drawCircle(iconX + s * .14f, iconY + s * .18f, s * .045f, paint);
-            RectF wave = new RectF(iconX - s * .62f, iconY - s * .32f, iconX - s * .13f, iconY + s * .30f);
-            canvas.drawArc(wave, -64, 128, false, paint);
-            wave.inset(-s * .09f, -s * .09f);
-            canvas.drawArc(wave, -56, 112, false, paint);
+            float dotX = s * .13f;
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawCircle(dotX, iconY, s * .060f, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            RectF wave = new RectF(s * .20f, iconY - s * .16f, s * .46f, iconY + s * .16f);
+            canvas.drawArc(wave, -66, 132, false, paint);
+            wave.inset(-s * .075f, -s * .075f);
+            canvas.drawArc(wave, -62, 124, false, paint);
+            wave.inset(-s * .075f, -s * .075f);
+            canvas.drawArc(wave, -58, 116, false, paint);
+
+            float carLeft = s * .59f, carRight = s * 1.09f;
+            float carTop = iconY - s * .15f, carBottom = iconY + s * .22f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(blue);
+            RectF car = new RectF(carLeft, carTop, carRight, carBottom);
+            canvas.drawRoundRect(car, s * .055f, s * .055f, paint);
+            Path roof = new Path();
+            roof.moveTo(carLeft + s * .10f, carTop);
+            roof.lineTo(carLeft + s * .18f, iconY - s * .32f);
+            roof.lineTo(carRight - s * .18f, iconY - s * .32f);
+            roof.lineTo(carRight - s * .10f, carTop);
+            roof.close();
+            canvas.drawPath(roof, paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(5, 22, 39));
+            canvas.drawRoundRect(new RectF(carLeft + s * .14f, iconY - s * .26f,
+                    carRight - s * .14f, carTop + s * .02f), s * .025f, s * .025f, paint);
+            canvas.drawCircle(carLeft + s * .13f, carBottom, s * .073f, paint);
+            canvas.drawCircle(carRight - s * .13f, carBottom, s * .073f, paint);
+            paint.setColor(foreground);
+            canvas.drawCircle(carLeft + s * .11f, iconY + s * .035f, s * .038f, paint);
+            canvas.drawCircle(carRight - s * .11f, iconY + s * .035f, s * .038f, paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
 
             float textLeft = s * 1.22f;
             paint.setStyle(Paint.Style.FILL);

@@ -14,7 +14,9 @@ It combines GPS-backed driving information, nearby Spanish fuel prices, locally 
 
 ## Main dashboard
 
-![Main iDrive dashboard: dynamic trip computer, GPS speedometer, local road limit, fuel stations and OEM shortcuts](docs/screenshots/bmw-e87-ui-v1.15.2-speed-50.png)
+![Main iDrive dashboard: trip computer, GPS speedometer, local road limit, nearby DGT fixed camera, fuel stations and OEM shortcuts](docs/screenshots/bmw-e87-ui-v1.16.0-dgt-radars-preview.png)
+
+*Emulator documentation simulation: 700 km range, 6.0 l/100 km average consumption, 34 °C exterior temperature and a nearby fixed camera. The radio only shows values its real sources publish.*
 
 The dashboard targets 1280×720 / 16:9 automotive displays. It has a central vehicle image, a dynamic trip-computer panel, configurable OEM app cards and a contextual vehicle-status strip.
 
@@ -64,7 +66,7 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 
 ### Tools, diagnostics and updates
 
-![Tools menu: separate Debug/USB, Permissions and Updates entries](docs/screenshots/bmw-e87-ui-v1.15.2-tools.png)
+![Tools menu: separate Debug/USB, Permissions and Updates entries](docs/screenshots/bmw-e87-ui-v1.16.0-tools.png)
 
 The lower-right wrench opens three separate tools:
 
@@ -74,7 +76,7 @@ The lower-right wrench opens three separate tools:
 
 The dashboard shows the province, date and time of the latest successful speed-map update. Before an update is installed, it identifies the bundled local base.
 
-![Updates screen: selected source, provincial speed-map status and fuel-price refresh](docs/screenshots/bmw-e87-ui-v1.15.2-updates.png)
+![Updates screen: provincial speed-map, DGT fixed/section-camera and fuel-price refresh](docs/screenshots/bmw-e87-ui-v1.16.0-updates.png)
 
 USB DEBUG supports guided checks for doors, lights, parking brake, belts, reverse/PDC, climate and custom observations. It records raw values, interpretation, source, timestamp and previous → new value for all available sources. It can also export a bounded OEM inventory and diagnostic log to a folder selected by the user. A green candidate is only a *strong candidate awaiting validation*; it is never a confirmed proprietary CAN code.
 

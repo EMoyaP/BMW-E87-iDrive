@@ -2,6 +2,12 @@
 
 ## 1.16.0 — 23/08/2026
 
+- El aviso de radar abandona la columna estrecha del límite: la esfera queda arriba y el radar
+  ocupa una franja completa debajo, con vía, distancia, acercamiento y señal `VÍA` legibles.
+- El pictograma se redibuja como coche frontal separado, punto y tres ondas de radar, sin el
+  solapamiento anterior entre ruedas y señal. Se renovaron las capturas de portada, herramientas
+  y actualizaciones de GitHub; la portada identifica explícitamente sus datos como simulación.
+
 - La APK incluye el inventario nacional DATEX II de la DGT de radares fijos y de velocidad media
   (tramo), de aproximadamente 2 MB antes de compresión. La consulta durante la marcha usa solo
   SQLite local; no hay peticiones de red por cada posición GPS.

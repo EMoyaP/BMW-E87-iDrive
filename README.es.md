@@ -14,7 +14,9 @@ Reúne información de conducción obtenida por GPS, precios españoles de gasol
 
 ## Panel principal
 
-![Panel principal: ordenador de a bordo dinámico, velocímetro GPS, límite local, gasolineras y accesos OEM](docs/screenshots/bmw-e87-ui-v1.15.2-speed-50.png)
+![Panel principal: ordenador de a bordo, velocímetro GPS, límite local, radar fijo DGT cercano, gasolineras y accesos OEM](docs/screenshots/bmw-e87-ui-v1.16.0-dgt-radars-preview.png)
+
+*Simulación documental en emulador: autonomía 700 km, consumo medio 6,0 l/100 km, exterior 34 °C y radar fijo cercano. La radio solo mostrará los valores que publiquen sus fuentes reales.*
 
 El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehículo central, ordenador de a bordo dinámico, tarjetas de aplicaciones OEM configurables y una fila contextual de estado del vehículo.
 
@@ -64,7 +66,7 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 
 ### Herramientas, diagnóstico y actualizaciones
 
-![Menú de herramientas: Debug/USB, Permisos y Actualizaciones independientes](docs/screenshots/bmw-e87-ui-v1.15.2-tools.png)
+![Menú de herramientas: Debug/USB, Permisos y Actualizaciones independientes](docs/screenshots/bmw-e87-ui-v1.16.0-tools.png)
 
 La llave inglesa inferior derecha abre tres herramientas separadas:
 
@@ -74,7 +76,7 @@ La llave inglesa inferior derecha abre tres herramientas separadas:
 
 El panel principal muestra provincia, fecha y hora de la última actualización correcta de la base de límites. Antes de instalar una descarga identifica la base local incluida.
 
-![Panel de actualizaciones: origen elegido, estado provincial de límites y actualización de gasolineras](docs/screenshots/bmw-e87-ui-v1.15.2-updates.png)
+![Panel de actualizaciones: límites provinciales, radares fijos/tramo DGT y precios de gasolineras](docs/screenshots/bmw-e87-ui-v1.16.0-updates.png)
 
 USB DEBUG incluye asistentes para puertas, luces, freno de mano, cinturones, marcha atrás/PDC, climatización y pruebas personalizadas. El registro conserva valor bruto, interpretación, fuente, hora y transición anterior → nueva para todas las fuentes disponibles. También puede exportar un inventario OEM y diagnóstico limitado a una carpeta USB elegida por el usuario. Un candidato verde significa *candidato fuerte pendiente de validar*, no un código CAN propietario confirmado.
 
