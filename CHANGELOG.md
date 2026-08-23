@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## 1.16.0 — 23/08/2026
+
+- La APK incluye el inventario nacional DATEX II de la DGT de radares fijos y de velocidad media
+  (tramo), de aproximadamente 2 MB antes de compresión. La consulta durante la marcha usa solo
+  SQLite local; no hay peticiones de red por cada posición GPS.
+- El nuevo aviso inferior del velocímetro aparece únicamente si el vehículo se aproxima o está
+  junto a un fijo/tramo. Indica vía, distancia y sentido de aproximación; se oculta al alejarse
+  para no dejar avisos obsoletos en pantalla.
+- Los controles móviles se excluyen de forma explícita del importador, de la base local y de la
+  interfaz. No se infieren ubicaciones ni se utilizan fuentes colaborativas para móviles.
+- El valor del círculo del aviso se etiqueta `VÍA` y solo muestra el límite de carretera verificado
+  por la base OSM local. La DGT no publica un límite para cada registro que pueda presentarse como
+  límite de radar.
+- Actualizaciones añade `RADARES FIJOS Y DE TRAMO`, con selección de Alicante, Murcia, Valencia o
+  Albacete. Al iniciar o reabrir la aplicación se comprueba en segundo plano la provincia GPS
+  cuando Android expone una red IP; una actualización correcta se limita a una por provincia y 24 h.
+- La tarea de compilación descarga la semilla nacional de la publicación DGT y mantiene una semilla
+  de respaldo de Alicante si se construye sin red. La aplicación y el informe conservan atribución
+  y URL de origen de la DGT.
+
 ## 1.15.2 — 23/08/2026
 
 - El texto bajo `ACTUALIZAR` del indicador de límite se sustituye por el estado de la última base instalada: provincia

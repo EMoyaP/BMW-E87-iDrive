@@ -23,6 +23,7 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 - **GPS speedometer.** GPS is the validated speed source on the physical radio. The E87-style 0–260 km/h dial progressively fills its outer ring. A verified local road limit is marked in orange and the speed value/progress ring turn orange only once it is exceeded; without a verified local limit, both remain green.
 - **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A strict GPS-accuracy and nearby-road match is required; if the road is ambiguous, it displays `—` rather than guessing. Physical signs and the vehicle's instruments remain the legal reference.
 - **Dynamic trip computer.** Range, average consumption, exterior temperature, climate values and other data are shown only when the radio provides a plausible reading. Unavailable data is hidden.
+- **Fixed and section camera warning.** The APK carries the national DGT inventory locally. The panel appears only for a nearby fixed/section camera while distance decreases, then disappears when the vehicle moves away. Mobile controls are intentionally excluded. The circular value is the verified **road** limit from the local map, not an invented radar limit.
 - **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app.
 - **OEM app cards.** Radio, Android Auto, phone and app cards open their assigned OEM applications. Metadata is displayed only when Android or an OEM service actually publishes it.
 
@@ -56,9 +57,10 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 - Fuel prices come from the official Spanish service, are filtered locally and cached within 150 km of the vehicle.
 - Nearby prices refresh every ten minutes while the app is visible, when Android exposes an IP network.
 - The APK includes compact local speed-limit seeds for **Alicante, Murcia, Valencia and Albacete**. It never downloads all of Spain.
+- The APK also includes the compact national DGT DATEX II inventory of fixed and section cameras (about 2 MB before compression). Camera matching remains entirely local while driving; it never queries a radar service on each GPS fix.
 - The nearby-road lookup is local and runs with each driving GPS fix (normally about once per second); it does not make a network request when the limit changes.
 - Each province has an independent 24-hour refresh marker: a fresh Alicante update does not block a pending Murcia update.
-- With GPS and Internet exposed by Android, the detected province can update automatically; manual provincial updates are also available.
+- With GPS and Internet exposed by Android, the detected province can update local limits and the DGT fixed/section inventory automatically. Manual provincial updates are also available, and a successful update is never repeated for that province for 24 hours.
 
 ### Tools, diagnostics and updates
 
@@ -68,7 +70,7 @@ The lower-right wrench opens three separate tools:
 
 1. **Debug / USB** — passive diagnostics, guided correlation tests, USB export and runtime logs.
 2. **Permissions** — location, nearby Bluetooth devices and Android media access.
-3. **Updates** — fuel-price refresh plus local OSM speed-limit updates by GPS area or province.
+3. **Updates** — fuel-price refresh, local OSM speed-limit updates and DGT fixed/section-camera updates by GPS area or province.
 
 The dashboard shows the province, date and time of the latest successful speed-map update. Before an update is installed, it identifies the bundled local base.
 
@@ -129,6 +131,7 @@ These details describe one tested radio, not a guarantee that a similar-looking 
 | `VehicleDataRepository` | Conservative aggregation and source priority |
 | `GpsSpeedProvider` | GPS position and validated speed |
 | `SpeedLimitRepository` | Local SQLite limits and per-province OSM updates |
+| `RadarRepository` | Local DGT fixed/section camera cache and 24-hour provincial updates |
 | `FuelStationProvider` | Official fuel prices, local cache and distance selection |
 | `JancarCarProvider` | Verified read-only getters from exported OEM packages |
 | `MediaSessionProvider` | Standard media metadata and actions when exposed |
@@ -141,14 +144,15 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 - Fuel prices: official Spanish [Fuel Prices service](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/help).
 - Speed limits: OpenStreetMap `maxspeed` data through public Overpass services; see [NOTICE.md](NOTICE.md) for attribution and terms.
+- Fixed and section cameras: official [DGT DATEX II publication](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), locally cached. Mobile controls are not part of the feature.
 - Vehicle coordinates are not sent to the fuel-price service. Filtering and distance calculations run on the head unit. A map app receives the destination coordinate only after the user presses a station.
 - The app uses only an IP network Android exposes: Wi-Fi, Ethernet or Bluetooth PAN if the radio firmware truly publishes it.
 
 ## Project status
 
-Current version: **1.15.2**.
+Current version: **1.16.0**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

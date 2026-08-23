@@ -1,5 +1,31 @@
 plugins { id 'com.android.application' }
 
+def dgtRadarAssetDir = layout.buildDirectory.dir('generated/dgtRadarAssets')
+def dgtRadarAsset = dgtRadarAssetDir.map { it.file('e87_dgt_radars_spain.xml') }
+
+// The DGT DATEX II feed is a compact (~2 MB) public national inventory. Bundling the current
+// response keeps fixed/tramo alerts entirely offline after installation. A build without network
+// still succeeds with the Alicante fallback seed committed in src/main/assets.
+tasks.register('prepareDgtRadarSeed') {
+    outputs.file(dgtRadarAsset)
+    doLast {
+        def output = dgtRadarAsset.get().asFile
+        if (output.exists() && output.length() > 1024) return
+        output.parentFile.mkdirs()
+        try {
+            def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml').openConnection()
+            connection.connectTimeout = 15000
+            connection.readTimeout = 70000
+            connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
+            connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
+            if (output.length() < 1024) throw new GradleException('Respuesta DGT de radares vacía')
+        } catch (Exception error) {
+            logger.warn("No se pudo preparar la semilla nacional DGT: ${error.class.simpleName}. Se empaquetará la semilla de Alicante.")
+            output.delete()
+        }
+    }
+}
+
 android {
     namespace 'com.ug.e87idrive'
     compileSdk 35
@@ -8,15 +34,20 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 40
-        versionName "1.15.2"
+        versionCode 41
+        versionName "1.16.0"
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    sourceSets {
+        main.assets.srcDir(dgtRadarAssetDir)
+    }
 }
+
+tasks.named('preBuild').configure { dependsOn(tasks.named('prepareDgtRadarSeed')) }
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'

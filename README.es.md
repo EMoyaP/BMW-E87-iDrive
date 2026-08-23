@@ -23,6 +23,7 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 - **Velocímetro GPS.** GPS es la fuente de velocidad validada en la radio física. La esfera E87 de 0–260 km/h rellena progresivamente solo su aro exterior. Un límite local verificado se marca en naranja y, al superarlo, la cifra y el aro pasan a naranja; sin límite local verificado, ambos se mantienen en verde.
 - **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Exige una coincidencia estricta de precisión GPS y tramo próximo; si la vía es ambigua se muestra `—` en lugar de adivinar. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
 - **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. Si un dato no está disponible se oculta.
+- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT. El panel aparece únicamente ante un radar fijo/tramo próximo mientras disminuye la distancia y desaparece si el coche se aleja. Los controles móviles se excluyen expresamente. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
 - **Gasolineras.** La más barata y la más cercana se calculan respecto al GPS de la radio para el combustible seleccionado. Al pulsar un resultado se navega mediante una aplicación de mapas compatible.
 - **Tarjetas OEM.** Radio, Android Auto, teléfono y aplicaciones abren la aplicación OEM asignada. Los metadatos solo aparecen si Android o un servicio OEM los publica realmente.
 
@@ -56,9 +57,10 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 - Precios procedentes del servicio oficial español, filtrados localmente y guardados en una caché de 150 km alrededor del vehículo.
 - Los precios próximos se actualizan cada diez minutos mientras la app está visible y Android publica una red IP.
 - La APK incorpora semillas compactas de límites para **Alicante, Murcia, Valencia y Albacete**. No descarga una base completa de España.
+- La APK incorpora además el inventario nacional DATEX II de la DGT para radares fijos y de tramo (unos 2 MB antes de comprimir). Durante la marcha la coincidencia se realiza por completo en local; no consulta un servicio de radares en cada posición GPS.
 - La búsqueda de la vía próxima es local y se ejecuta con cada fix GPS de conducción (normalmente alrededor de una vez por segundo); no realiza una consulta de red al cambiar el límite.
 - Cada provincia tiene su propia marca de 24 horas: una actualización reciente de Alicante no bloquea una actualización pendiente de Murcia.
-- Con GPS y una red Android con Internet, la provincia detectada puede actualizarse automáticamente; también existe selección manual.
+- Con GPS y una red Android con Internet, la provincia detectada puede actualizar automáticamente los límites locales y el inventario DGT de fijos/tramo. También existe selección manual y una actualización correcta no se repite para esa provincia durante 24 horas.
 
 ### Herramientas, diagnóstico y actualizaciones
 
@@ -68,7 +70,7 @@ La llave inglesa inferior derecha abre tres herramientas separadas:
 
 1. **Debug / USB** — diagnóstico pasivo, pruebas guiadas de correlación, exportación USB y registros de ejecución.
 2. **Permisos** — ubicación, dispositivos Bluetooth cercanos y acceso multimedia Android.
-3. **Actualizaciones** — actualización de precios y de límites OSM por zona GPS o provincia.
+3. **Actualizaciones** — actualización de precios, de límites OSM y de radares fijos/tramo DGT por zona GPS o provincia.
 
 El panel principal muestra provincia, fecha y hora de la última actualización correcta de la base de límites. Antes de instalar una descarga identifica la base local incluida.
 
@@ -129,6 +131,7 @@ Estos datos describen una radio probada; no garantizan que otra radio aparenteme
 | `VehicleDataRepository` | Agregación prudente y prioridad de fuentes |
 | `GpsSpeedProvider` | Posición y velocidad GPS validada |
 | `SpeedLimitRepository` | Límites SQLite locales y actualizaciones OSM provinciales |
+| `RadarRepository` | Caché local DGT de radares fijos/tramo y actualizaciones provinciales cada 24 horas |
 | `FuelStationProvider` | Precios oficiales, caché local y selección por distancia |
 | `JancarCarProvider` | Getters de solo lectura verificados en APK OEM exportadas |
 | `MediaSessionProvider` | Metadatos y acciones multimedia estándar cuando se exponen |
@@ -141,14 +144,15 @@ El proyecto está escrito en Java con APIs del framework Android. No usa depende
 
 - Precios de carburantes: servicio oficial español de [Precios de carburantes](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/help).
 - Límites: datos `maxspeed` de OpenStreetMap mediante servicios Overpass públicos; consulta [NOTICE.md](NOTICE.md) para atribución y condiciones.
+- Radares fijos y de tramo: [publicación DATEX II oficial de la DGT](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), guardada localmente. Los controles móviles no forman parte de esta función.
 - Las coordenadas del coche no se envían al servicio de precios. El filtrado y las distancias se calculan en la radio. Una app de mapas recibe la coordenada destino solo después de pulsar una gasolinera.
 - La app usa exclusivamente la red IP que Android publique: Wi‑Fi, Ethernet o Bluetooth PAN si el firmware de la radio realmente la crea.
 
 ## Estado del proyecto
 
-Versión actual: **1.15.2**.
+Versión actual: **1.16.0**.
 
-La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo.
+La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo.
 
 Aspectos que siguen dependiendo del hardware y no se presentan como universales:
 

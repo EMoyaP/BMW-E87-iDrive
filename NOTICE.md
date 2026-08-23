@@ -51,6 +51,21 @@ La aplicación los obtiene, cuando el usuario lo solicita mediante Wi-Fi, usando
 API Overpass. OpenStreetMap y sus colaboradores no garantizan la exactitud, integridad o actualidad de los límites; el
 dato mostrado es orientativo y no sustituye la señalización vial.
 
+## Radares fijos y de tramo
+
+La aplicación incorpora una copia local del inventario DATEX II de **cinemómetros fijos y de
+velocidad media** publicado por la Dirección General de Tráfico (DGT), obtenida desde su
+[publicación oficial de localizaciones predefinidas](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml).
+La ficha de datos de la DGT identifica el conjunto como
+[Radares fijos DGT](https://nap.dgt.es/es/dataset/radares-fijos-dgt) y publica su licencia
+CC BY 4.0. Se mantiene la atribución a DGT y la URL de origen en la aplicación, los informes y
+esta documentación.
+
+Solo se importan los conjuntos `CabinasCinemometro` (fijos) y
+`CinemometrosVelocidadMedia` (tramo). No se importan, estiman ni muestran controles móviles.
+Las coordenadas y los límites mostrados son informativos: la señalización, las instrucciones de
+las autoridades y el cuadro del vehículo son siempre la referencia.
+
 ## Seguridad del vehículo
 
 Este software se entrega sin garantía. No sustituye sistemas de seguridad, instrumentación homologada ni avisos del

@@ -68,6 +68,7 @@ public class MainActivity extends Activity {
     private ImageView mediaArtwork;
     private SpeedGaugeView speedGauge;
     private SpeedLimitView speedLimitView;
+    private RadarNoticeView radarNoticeView;
     private TextView speedLimitState, speedLimitRefresh, speedLimitUpdateInfo, speedSource;
     private final java.util.Map<String, TextView> roleLabels = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, TextView> roleHints = new java.util.LinkedHashMap<>();
@@ -79,6 +80,7 @@ public class MainActivity extends Activity {
     private JancarRadioProvider oemRadio;
     private FuelStationProvider fuelStations;
     private SpeedLimitRepository speedLimits;
+    private RadarRepository radars;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
     private UsbDebugWizardDialog activeUsbWizard;
@@ -103,12 +105,15 @@ public class MainActivity extends Activity {
         usbDiagnostics = new UsbDiagnosticRecorder(this);
         fuelStations = new FuelStationProvider(this, this::refreshFuelWidget);
         speedLimits = new SpeedLimitRepository(this);
+        radars = new RadarRepository(this);
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
             refreshVehicle();
             fuelStations.onLocation(location);
             speedLimits.onLocation(location);
+            radars.onLocation(location);
             refreshSpeedLimitWidget();
+            refreshRadarWidget();
         }));
         vehicleData = new VehicleDataRepository(this, gps, diagnostics, () -> {
             refreshVehicle();
@@ -134,6 +139,7 @@ public class MainActivity extends Activity {
         oemRadio.start();
         fuelStations.start(gps.getLastLocation());
         speedLimits.start(gps.getLastLocation());
+        radars.start(gps.getLastLocation());
         vehicleData.start();
         diagnostics.startPassiveProbe();
     }
@@ -150,6 +156,7 @@ public class MainActivity extends Activity {
         oemRadio.stop();
         fuelStations.stop();
         speedLimits.stop();
+        radars.stop();
         if (!usbCaptureRunning) {
             diagnostics.stopPassiveProbe();
             vehicleData.stop();
@@ -164,6 +171,7 @@ public class MainActivity extends Activity {
         bluetoothState.stop();
         fuelStations.close();
         speedLimits.close();
+        radars.close();
         oemRadio.stop();
         vehicleData.stop();
         if (usbDiagnostics != null) usbDiagnostics.close();
@@ -620,12 +628,10 @@ public class MainActivity extends Activity {
         speedLimitState.setGravity(Gravity.CENTER);
         speedLimitState.setMaxLines(2);
         limitColumn.addView(speedLimitState, lp(-1, dp(32)));
-        speedLimitRefresh = txt("↻  ACTUALIZAR LÍMITES", 9, BLUE, true);
-        speedLimitRefresh.setGravity(Gravity.CENTER);
-        speedLimitRefresh.setBackground(slotBg());
-        speedLimitRefresh.setContentDescription("Actualizar límites de velocidad locales usando la conexión disponible");
-        speedLimitRefresh.setOnClickListener(v -> chooseSpeedLimitProvince());
-        limitColumn.addView(speedLimitRefresh, lp(-1, dp(30)));
+        radarNoticeView = new RadarNoticeView(this, TEXT, BLUE, MUTED);
+        radarNoticeView.setContentDescription("Aviso local de radar fijo o de tramo");
+        radarNoticeView.setVisibility(View.GONE);
+        limitColumn.addView(radarNoticeView, lp(-1, dp(72)));
         speedLimitUpdateInfo = txt("Base local incluida", 9, MUTED, false);
         speedLimitUpdateInfo.setGravity(Gravity.CENTER);
         speedLimitUpdateInfo.setMaxLines(2);
@@ -848,6 +854,7 @@ public class MainActivity extends Activity {
             // GPS supplies position and speed, not the legal limit of the current road.
             // Until a map source publishes maxspeed, keep the sign visibly unavailable.
             refreshSpeedLimitWidget();
+            refreshRadarWidget();
         }
     }
 
@@ -872,13 +879,6 @@ public class MainActivity extends Activity {
                 speedLimitState.setTextColor(BLUE);
             }
         }
-        if (speedLimitRefresh != null) {
-            boolean internet = speedLimits.isInternetAvailable();
-            speedLimitRefresh.setText(internet ? "↻  ACTUALIZAR" : "↻  SIN INTERNET");
-            speedLimitRefresh.setTextColor(internet ? BLUE : MUTED);
-            speedLimitRefresh.setEnabled(internet);
-            speedLimitRefresh.setAlpha(internet ? 1f : .65f);
-        }
         if (speedLimitUpdateInfo != null) {
             SpeedLimitRepository.UpdateStamp stamp = speedLimits.lastSuccessfulUpdateStamp();
             if (stamp == null) {
@@ -891,6 +891,21 @@ public class MainActivity extends Activity {
                 speedLimitUpdateInfo.setTextColor(BLUE);
             }
         }
+    }
+
+    private void refreshRadarWidget() {
+        if (radarNoticeView == null || radars == null || gps == null) return;
+        VehicleValue<?> speed = vehicleData == null ? null : vehicleData.get(VehicleField.SPEED);
+        Double speedValue = speed != null && speed.isAvailable() && speed.value() instanceof Number
+                ? ((Number) speed.value()).doubleValue() : null;
+        RadarRepository.Alert alert = radars.alert(gps.getLastLocation(), speedValue);
+        if (alert == null) {
+            radarNoticeView.setVisibility(View.GONE);
+            return;
+        }
+        SpeedLimitRepository.Match limit = speedLimits == null ? null : speedLimits.lookup(gps.getLastLocation());
+        radarNoticeView.setAlert(alert, limit == null ? null : limit.limitKmh);
+        radarNoticeView.setVisibility(View.VISIBLE);
     }
 
     private void chooseSpeedLimitProvince() {
@@ -1180,13 +1195,19 @@ public class MainActivity extends Activity {
         LinearLayout box = vertical();
         box.setBackgroundColor(PANEL);
         box.setPadding(dp(12), dp(8), dp(12), dp(8));
-        TextView description = txt("Las gasolineras se actualizan al detectar Internet. Los límites se guardan "
-                + "en local y se refrescan automáticamente por provincia GPS.", 12, TEXT, false);
+        TextView description = txt("Gasolineras, límites y radares se leen desde su base local mientras conduces. "
+                + "Al iniciar, la radio solo comprueba actualizaciones pendientes con Internet disponible.", 12, TEXT, false);
         description.setPadding(dp(8), dp(4), dp(8), dp(12));
         box.addView(description);
 
+        Button alicante = dialogButton("ACTUALIZAR ALICANTE · LÍMITES Y RADARES");
+        box.addView(alicante, lp(-1, dp(52)));
+
         Button speed = dialogButton("ACTUALIZAR LÍMITES DE VELOCIDAD");
         box.addView(speed, lp(-1, dp(52)));
+
+        Button radar = dialogButton("ACTUALIZAR RADARES FIJOS Y DE TRAMO");
+        box.addView(radar, lp(-1, dp(52)));
 
         Button fuel = dialogButton("ACTUALIZAR PRECIOS DE GASOLINERAS");
         box.addView(fuel, lp(-1, dp(52)));
@@ -1195,12 +1216,13 @@ public class MainActivity extends Activity {
         TextView network = txt("Red actual: " + fuelStations.networkLabel()
                 + "\nGasolineras: " + lastUpdateText(fuelSnapshot == null ? 0L : fuelSnapshot.updatedAt)
                 + "\nLímites OSM: " + lastUpdateText(speedLimits.lastSuccessfulUpdate())
+                + "\nRadares DGT: " + lastRadarUpdateText()
                 + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
                         speedLimits.automaticProvince(gps.getLastLocation()))
-                + "\nAutomático: precios cada 10 min; límites máx. una vez/24 h por provincia.",
+                + "\nAutomático: precios cada 10 min; límites y radares máx. una vez/24 h por provincia.",
                 10, MUTED, false);
         network.setPadding(dp(8), dp(12), dp(8), dp(10));
-        box.addView(network, lp(-1, dp(92)));
+        box.addView(network, lp(-1, dp(112)));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Actualizaciones y herramientas")
@@ -1214,12 +1236,64 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             chooseSpeedLimitProvince();
         });
+        radar.setOnClickListener(v -> {
+            dialog.dismiss();
+            chooseRadarProvince();
+        });
+        alicante.setOnClickListener(v -> {
+            dialog.dismiss();
+            updateAlicanteRoadData();
+        });
         fuel.setOnClickListener(v -> {
             dialog.dismiss();
             fuelStations.forceRefresh();
             toast("Actualizando precios con la red disponible");
         });
-        showSized(dialog, .58f, .64f);
+        showSized(dialog, .60f, .82f);
+    }
+
+    private String lastRadarUpdateText() {
+        RadarRepository.UpdateStamp stamp = radars == null ? null : radars.lastSuccessfulUpdateStamp();
+        return stamp == null ? "base local instalada" : "correcta el "
+                + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(new Date(stamp.timestamp))
+                + " · " + RadarRepository.label(stamp.province);
+    }
+
+    private void chooseRadarProvince() {
+        if (radars == null) return;
+        if (!radars.isInternetAvailable()) {
+            toast("La radio no tiene una conexión a Internet disponible");
+            return;
+        }
+        String[] labels = RadarRepository.supportedProvinceLabels();
+        String[] codes = RadarRepository.supportedProvinceCodes();
+        new AlertDialog.Builder(this).setTitle("Actualizar radares DGT")
+                .setItems(labels, (dialog, which) -> updateRadarsFromInternet(codes[which]))
+                .setNegativeButton("CANCELAR", null).show();
+    }
+
+    private void updateRadarsFromInternet(String province) {
+        if (radars == null) return;
+        radars.refreshFromInternet(province, result -> {
+            refreshRadarWidget();
+            toast(result.message);
+        });
+    }
+
+    private void updateAlicanteRoadData() {
+        if (speedLimits == null || radars == null) return;
+        if (!speedLimits.isInternetAvailable() || !radars.isInternetAvailable()) {
+            toast("La radio no tiene una conexión a Internet disponible");
+            return;
+        }
+        toast("Comprobando límites y radares de Alicante en segundo plano");
+        speedLimits.refreshFromInternet(gps.getLastLocation(), "ALICANTE", limits -> {
+            refreshSpeedLimitWidget();
+            radars.refreshFromInternet("ALICANTE", radar -> {
+                refreshRadarWidget();
+                toast("Alicante: " + limits.message + " · " + radar.message);
+            });
+        });
     }
 
     private String lastUpdateText(long timestamp) {
@@ -2578,6 +2652,106 @@ public class MainActivity extends Activity {
             canvas.drawText(limit == null ? "—" : String.valueOf(limit), cx,
                     cy - (paint.ascent() + paint.descent()) / 2f, paint);
             paint.setTypeface(Typeface.DEFAULT);
+        }
+    }
+
+    /** Compact local warning for an approaching DGT fixed/section camera. No mobile controls exist here. */
+    private static final class RadarNoticeView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private final int foreground, blue, muted;
+        private RadarRepository.Alert alert;
+        private Integer roadLimit;
+
+        RadarNoticeView(Context context, int foreground, int blue, int muted) {
+            super(context);
+            this.foreground = foreground;
+            this.blue = blue;
+            this.muted = muted;
+        }
+
+        void setAlert(RadarRepository.Alert alert, Integer roadLimit) {
+            this.alert = alert;
+            this.roadLimit = roadLimit;
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (alert == null) return;
+            float w = getWidth(), h = getHeight();
+            float s = Math.min(h, w * .28f);
+            rect.set(1f, 1f, w - 1f, h - 1f);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(5, 22, 39));
+            canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1.2f, h * .018f));
+            paint.setColor(Color.rgb(38, 93, 143));
+            canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+
+            float iconX = s * .62f, iconY = h * .57f;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(1.8f, s * .06f));
+            paint.setColor(blue);
+            RectF car = new RectF(iconX - s * .25f, iconY - s * .12f, iconX + s * .25f, iconY + s * .16f);
+            canvas.drawRoundRect(car, s * .05f, s * .05f, paint);
+            canvas.drawLine(iconX - s * .17f, iconY - s * .12f, iconX - s * .08f, iconY - s * .28f, paint);
+            canvas.drawLine(iconX - s * .08f, iconY - s * .28f, iconX + s * .13f, iconY - s * .28f, paint);
+            canvas.drawLine(iconX + s * .13f, iconY - s * .28f, iconX + s * .20f, iconY - s * .12f, paint);
+            canvas.drawCircle(iconX - s * .14f, iconY + s * .18f, s * .045f, paint);
+            canvas.drawCircle(iconX + s * .14f, iconY + s * .18f, s * .045f, paint);
+            RectF wave = new RectF(iconX - s * .62f, iconY - s * .32f, iconX - s * .13f, iconY + s * .30f);
+            canvas.drawArc(wave, -64, 128, false, paint);
+            wave.inset(-s * .09f, -s * .09f);
+            canvas.drawArc(wave, -56, 112, false, paint);
+
+            float textLeft = s * 1.22f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTextSize(Math.max(9f, h * .17f));
+            paint.setColor(Color.rgb(246, 163, 33));
+            canvas.drawText("TRAMO".equals(alert.type) ? "RADAR DE TRAMO" : "RADAR FIJO", textLeft, h * .30f, paint);
+            paint.setTypeface(Typeface.DEFAULT);
+            paint.setTextSize(Math.max(8f, h * .145f));
+            paint.setColor(foreground);
+            String road = alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road;
+            canvas.drawText(road, textLeft, h * .55f, paint);
+            paint.setTextSize(Math.max(8f, h * .13f));
+            paint.setColor(alert.approaching ? Color.rgb(91, 213, 144) : muted);
+            String direction = alert.approaching ? "↓ ACERCÁNDOSE" : "RADAR CERCANO";
+            canvas.drawText(formatDistance(alert.distanceMeters) + " · " + direction, textLeft, h * .80f, paint);
+
+            float sign = Math.min(h * .77f, w * .24f);
+            float cx = w - sign * .63f, cy = h * .50f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.WHITE);
+            canvas.drawCircle(cx, cy, sign * .47f, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(2.5f, sign * .095f));
+            paint.setColor(Color.rgb(218, 33, 35));
+            canvas.drawCircle(cx, cy, sign * .43f, paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextSize(sign * .16f);
+            paint.setColor(muted);
+            canvas.drawText("VÍA", cx, cy - sign * .56f, paint);
+            paint.setTextSize(sign * (roadLimit == null ? .36f : roadLimit >= 100 ? .31f : .36f));
+            paint.setColor(roadLimit == null ? Color.rgb(80, 88, 96) : Color.rgb(20, 22, 26));
+            canvas.drawText(roadLimit == null ? "—" : String.valueOf(roadLimit), cx,
+                    cy - (paint.ascent() + paint.descent()) / 2f, paint);
+            paint.setTypeface(Typeface.DEFAULT);
+        }
+
+        private static String formatDistance(double meters) {
+            return meters >= 1_000d ? String.format(Locale.getDefault(), "%.1f km", meters / 1_000d)
+                    : String.format(Locale.getDefault(), "%.0f m", meters);
+        }
+
+        private int dp(int value) {
+            return Math.round(value * getResources().getDisplayMetrics().density);
         }
     }
 
