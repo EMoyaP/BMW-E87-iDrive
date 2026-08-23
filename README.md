@@ -78,7 +78,7 @@ The dashboard shows the province, date and time of the latest successful speed-m
 
 ![Updates screen: provincial speed-map, DGT fixed/section-camera and fuel-price refresh](docs/screenshots/bmw-e87-ui-v1.16.0-updates.png)
 
-USB DEBUG supports guided checks for doors, lights, parking brake, belts, reverse/PDC, climate and custom observations. It records raw values, interpretation, source, timestamp and previous → new value for all available sources. It can also export a bounded OEM inventory and diagnostic log to a folder selected by the user. A green candidate is only a *strong candidate awaiting validation*; it is never a confirmed proprietary CAN code.
+USB DEBUG supports guided checks for doors, lights, parking brake, belts, reverse/PDC, climate and custom observations. It records raw values, interpretation, source, timestamp and previous → new value for all available sources. An optional privacy switch can add precise GPS coordinates to the runtime log for road-limit diagnostics; it is disabled by default, persists until switched off and is clearly recorded in every exported report. It can also export a bounded OEM inventory and diagnostic log to a folder selected by the user. A green candidate is only a *strong candidate awaiting validation*; it is never a confirmed proprietary CAN code.
 
 ![USB DEBUG candidate correlation view](docs/screenshots/bmw-e87-usb-wizard-live-strong-v1.11.0.png)
 
@@ -152,9 +152,9 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 ## Project status
 
-Current version: **1.16.0**.
+Current version: **1.16.2**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.16.2 fixes GPS startup/resume handling, improves local road matching against complete OSM geometries, validates provincial radar imports and adds opt-in coordinate logging for reproducible physical-head-unit QA.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

@@ -78,7 +78,7 @@ El panel principal muestra provincia, fecha y hora de la última actualización 
 
 ![Panel de actualizaciones: límites provinciales, radares fijos/tramo DGT y precios de gasolineras](docs/screenshots/bmw-e87-ui-v1.16.0-updates.png)
 
-USB DEBUG incluye asistentes para puertas, luces, freno de mano, cinturones, marcha atrás/PDC, climatización y pruebas personalizadas. El registro conserva valor bruto, interpretación, fuente, hora y transición anterior → nueva para todas las fuentes disponibles. También puede exportar un inventario OEM y diagnóstico limitado a una carpeta USB elegida por el usuario. Un candidato verde significa *candidato fuerte pendiente de validar*, no un código CAN propietario confirmado.
+USB DEBUG incluye asistentes para puertas, luces, freno de mano, cinturones, marcha atrás/PDC, climatización y pruebas personalizadas. El registro conserva valor bruto, interpretación, fuente, hora y transición anterior → nueva para todas las fuentes disponibles. Un selector opcional de privacidad permite añadir coordenadas GPS precisas al log para diagnosticar límites de vía; está desactivado por defecto, permanece activo hasta desmarcarlo y queda indicado en cada informe exportado. También puede exportar un inventario OEM y diagnóstico limitado a una carpeta USB elegida por el usuario. Un candidato verde significa *candidato fuerte pendiente de validar*, no un código CAN propietario confirmado.
 
 ![Vista de correlación de candidatos de USB DEBUG](docs/screenshots/bmw-e87-usb-wizard-live-strong-v1.11.0.png)
 
@@ -152,9 +152,9 @@ El proyecto está escrito en Java con APIs del framework Android. No usa depende
 
 ## Estado del proyecto
 
-Versión actual: **1.16.0**.
+Versión actual: **1.16.2**.
 
-La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo.
+La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo. La versión 1.16.2 corrige el arranque y la reanudación del GPS, mejora la coincidencia con la geometría completa de las vías OSM, valida la importación provincial de radares y añade el registro opcional de coordenadas para reproducir pruebas en la unidad física.
 
 Aspectos que siguen dependiendo del hardware y no se presentan como universales:
 
