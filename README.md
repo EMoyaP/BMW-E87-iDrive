@@ -17,7 +17,15 @@ La aplicación se ejecuta **dentro del sistema normal de la radio**. No reemplaz
 > licencian con este repositorio. Consulta [Avisos y atribuciones](NOTICE.md) y
 > [Licencia de recursos](LICENSE-ASSETS.md).
 
-![Interfaz BMW E87 iDrive](docs/screenshots/bmw-e87-ui-v1.9.0-radio.png)
+## Capturas actuales · v1.15.1
+
+| Panel principal | Herramientas | Actualizaciones locales |
+|---|---|---|
+| ![Panel principal v1.15.1: ordenador de a bordo, velocímetro GPS, límite local y tarjetas](docs/screenshots/bmw-e87-ui-v1.15.1-dashboard.png) | ![Herramientas v1.15.1: debug USB, permisos y actualizaciones](docs/screenshots/bmw-e87-ui-v1.15.1-tools.png) | ![Panel de actualizaciones v1.15.1: estado de red, fecha de gasolineras y límites por provincia](docs/screenshots/bmw-e87-ui-v1.15.1-updates.png) |
+
+La interfaz se ejecuta como una aplicación normal dentro del launcher OEM. El panel mantiene visibles únicamente datos
+validados: velocidad GPS, límites OSM locales cuando hay coincidencia, autonomía/consumo/temperatura si las fuentes OEM
+los publican y estados de vehículo solo tras confirmación física.
 
 ## Estado del proyecto
 
@@ -148,7 +156,7 @@ carcasa o nombre comercial similar.
 | `GpsSpeedProvider` | Posición y velocidad mediante `LocationManager` |
 | `AndroidAutomotiveProvider` | Sonda pública AAOS de solo lectura |
 | `FuelStationProvider` | MITECO, caché, distancias y actualización por provincia |
-| `SpeedLimitRepository` | Base SQLite local, consulta por GPS y actualización manual únicamente con Wi-Fi |
+| `SpeedLimitRepository` | Base SQLite local, consulta por GPS y actualización automática por provincia cuando Android publica Internet |
 | `MediaSessionProvider` | Metadatos y controles anunciados por sesiones multimedia Android estándar |
 | `BluetoothDeviceProvider` | Estado Bluetooth público, sin escaneo ni conexión |
 | `JancarBluetoothProvider` | Nombre/estado del terminal mediante getters Binder OEM verificados y de solo lectura |
@@ -172,8 +180,8 @@ Los precios proceden de los endpoints oficiales de
 - La descarga nacional inicial se filtra en streaming y conserva localmente solo 150 km alrededor del vehículo.
 - Las coordenadas del coche no se envían al servicio: el filtrado y las distancias se calculan en la radio.
 - Al tocar una estación, solo la coordenada del destino se entrega a la aplicación de mapas.
-- La app usa la red predeterminada que Android entregue a la radio. Estar emparejado por Bluetooth no garantiza acceso
-  a Internet; el tethering o hotspot debe estar configurado en el sistema.
+- La app usa la red IP que Android entregue a la radio, sea Wi-Fi, Ethernet o Bluetooth PAN. Estar emparejado por
+  Bluetooth no garantiza acceso a Internet; el tethering o hotspot debe estar configurado y publicado por el sistema OEM.
 - `INTERNET` es un permiso normal concedido durante la instalación: no existe un diálogo adicional que la app pueda
   solicitar. Para usar Bluetooth PAN, la radio debe crear y publicar esa interfaz de red a Android.
 
@@ -181,11 +189,13 @@ Los precios proceden de los endpoints oficiales de
 
 La base de límites de velocidad se crea en el almacenamiento privado de la aplicación como `e87_speed_limits.db` e incorpora
 semillas provinciales de Alicante, Murcia, Valencia y Albacete. No se consulta Internet durante la conducción: la UI busca el
-tramo más cercano en esa base local. Desde la llave inglesa > `ACTUALIZACIONES` se puede elegir `Zona GPS actual · 5 km` o
-una de las cuatro provincias; cada actualización descarga únicamente la selección elegida, con Wi-Fi y GPS, conserva los
-datos anteriores si falla y permite seguir consultándolos sin conexión. Los datos de `maxspeed` se obtienen de OpenStreetMap
-mediante un servicio Overpass público, por lo que su disponibilidad y cobertura dependen de esos servicios y de la cartografía
-local.
+tramo más cercano en esa base local. Mientras iDrive está visible, al recibir GPS e Internet Android identifica la provincia
+actual —prioriza la carretera OSM local y usa la zona GPS como respaldo— y puede refrescar solo esa provincia. Cada provincia
+tiene su propia marca de actualización correcta: Alicante actualizado hace menos de 24 h no bloquea una descarga pendiente de
+Murcia, Valencia o Albacete. Desde la llave inglesa > `ACTUALIZACIONES` se puede elegir manualmente una zona de 5 km o una
+provincia; el panel muestra red, provincia GPS y fecha/hora de la última actualización satisfactoria. Si falla una descarga,
+conserva los datos anteriores y sigue funcionando sin conexión. Los datos de `maxspeed` se obtienen de OpenStreetMap mediante
+un servicio Overpass público, por lo que su disponibilidad y cobertura dependen de esos servicios y de la cartografía local.
 
 La atribución de OpenStreetMap y sus condiciones de uso están documentadas en [Avisos y atribuciones](NOTICE.md).
 
@@ -241,6 +251,7 @@ Medido en emulador Android 15/API 35 a 1280×720 y, donde se indica, en la unida
 | APK debug v1.13.5 | 2.419.211 bytes; SHA-256 `0E0CFAB6684C14208C46E0611E5A27D388E89B1E7AECC5D7C0851BC8F43BB239` |
 | APK debug v1.14.0 | 2.446.214 bytes; SHA-256 `DA5DF33223FEF124AA6A3152487FFA29DAB395536A881985660F58ABBB4546EF` |
 | APK debug v1.14.1 | 2.656.036 bytes; SHA-256 `8CD5571A778E9712A3FA041B29BC33475BC6A3500B7996BFD3910312CAEBE6CA` |
+| APK debug v1.15.1 | 4.880.249 bytes; SHA-256 `0B3AE9F7D8B1A5DBAC7829A72D88236D3CBD6A5642B6067BC9C3AC9BFAE95DB1` |
 | PSS estabilizado | 45–51 MB |
 | PSS con asistente USB activo | 52,5 MB |
 | PSS observado en radio física | 42,4–45,0 MB |
