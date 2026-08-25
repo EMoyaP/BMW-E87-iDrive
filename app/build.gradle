@@ -2,6 +2,10 @@ plugins { id 'com.android.application' }
 
 def dgtRadarAssetDir = layout.buildDirectory.dir('generated/dgtRadarAssets')
 def dgtRadarAsset = dgtRadarAssetDir.map { it.file('e87_dgt_radars_spain.xml') }
+def dgtInviveAssetDir = layout.buildDirectory.dir('generated/dgtInviveAssets')
+def dgtInviveAsset = dgtInviveAssetDir.map { it.file('e87_dgt_invive_spain.xml') }
+def dgtSpeedAssetDir = layout.buildDirectory.dir('generated/dgtSpeedAssets')
+def dgtSpeedAsset = dgtSpeedAssetDir.map { it.file('e87_dgt_speed_limits_spain.xml') }
 
 // The DGT DATEX II feed is a compact (~2 MB) public national inventory. Bundling the current
 // response keeps fixed/tramo alerts entirely offline after installation. A build without network
@@ -26,6 +30,50 @@ tasks.register('prepareDgtRadarSeed') {
     }
 }
 
+// INVIVE is a complete static DGT inventory of intensified speed-surveillance sections.
+// It is deliberately kept separate from fixed radars and legal speed-limit data.
+tasks.register('prepareDgtInviveSeed') {
+    outputs.file(dgtInviveAsset)
+    doLast {
+        def output = dgtInviveAsset.get().asFile
+        if (output.exists() && output.length() > 1024) return
+        output.parentFile.mkdirs()
+        try {
+            def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml').openConnection()
+            connection.connectTimeout = 15000
+            connection.readTimeout = 70000
+            connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
+            connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
+            if (output.length() < 1024) throw new GradleException('Respuesta DGT INVIVE vacía')
+        } catch (Exception error) {
+            logger.warn("No se pudo preparar la semilla INVIVE nacional: ${error.class.simpleName}. Se empaquetará el respaldo de Alicante.")
+            output.delete()
+        }
+    }
+}
+
+// DGT speed limits are published as a national TN-ITS weekly delta. Keep the live XML in the
+// debug/release APK when the build has Internet; the checked-in TSV remains an offline fallback.
+tasks.register('prepareDgtSpeedSeed') {
+    outputs.file(dgtSpeedAsset)
+    doLast {
+        def output = dgtSpeedAsset.get().asFile
+        if (output.exists() && output.length() > 1024) return
+        output.parentFile.mkdirs()
+        try {
+            def connection = new URL('https://infocar.dgt.es/tnits/limitesVelocidad.xml').openConnection()
+            connection.connectTimeout = 15000
+            connection.readTimeout = 70000
+            connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
+            connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
+            if (output.length() < 1024) throw new GradleException('Respuesta DGT de límites vacía')
+        } catch (Exception error) {
+            logger.warn("No se pudo preparar la semilla nacional DGT de límites: ${error.class.simpleName}. Se usará el TSV semanal incluido.")
+            output.delete()
+        }
+    }
+}
+
 android {
     namespace 'com.ug.e87idrive'
     compileSdk 35
@@ -34,8 +82,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 47
-        versionName "1.18.1"
+        versionCode 54
+        versionName "1.24.2"
     }
 
     compileOptions {
@@ -44,10 +92,15 @@ android {
     }
     sourceSets {
         main.assets.srcDir(dgtRadarAssetDir)
+        main.assets.srcDir(dgtInviveAssetDir)
+        main.assets.srcDir(dgtSpeedAssetDir)
     }
 }
 
-tasks.named('preBuild').configure { dependsOn(tasks.named('prepareDgtRadarSeed')) }
+tasks.named('preBuild').configure {
+    dependsOn(tasks.named('prepareDgtRadarSeed'), tasks.named('prepareDgtInviveSeed'),
+            tasks.named('prepareDgtSpeedSeed'))
+}
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'

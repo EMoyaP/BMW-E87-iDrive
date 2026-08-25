@@ -66,6 +66,20 @@ Solo se importan los conjuntos `CabinasCinemometro` (fijos) y
 Las coordenadas y los límites mostrados son informativos: la señalización, las instrucciones de
 las autoridades y el cuadro del vehículo son siempre la referencia.
 
+## Límites oficiales y zonas INVIVE
+
+La capa nacional de límites oficiales se obtiene del feed TN-ITS semanal de la DGT:
+[limitesVelocidad.xml](https://infocar.dgt.es/tnits/limitesVelocidad.xml), referenciado también en el
+[NAP de la DGT](https://nap.dgt.es/en/dataset/limites_de_velocidad). La aplicación conserva la
+fotografía instalada y mezcla las altas, modificaciones y bajas posteriores en una base SQLite local.
+La geometría se utiliza solo cuando su sistema de coordenadas es identificable o ha sido marcada como
+inferencia técnica; un registro no coincidente por carretera, proximidad y sentido no se muestra.
+
+Las zonas de intensificación de vigilancia proceden del conjunto oficial
+[INVIVE](https://nap.dgt.es/en/dataset/tramos-invive) y de su publicación DATEX II nacional:
+[tramos_invive/content.xml](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml).
+Se presentan como `ZONA DE VIGILANCIA`, nunca como radar fijo y nunca como un límite de velocidad.
+
 ## Seguridad del vehículo
 
 Este software se entrega sin garantía. No sustituye sistemas de seguridad, instrumentación homologada ni avisos del

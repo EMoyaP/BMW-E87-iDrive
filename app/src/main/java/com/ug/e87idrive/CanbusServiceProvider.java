@@ -465,8 +465,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
                     Cabin cabin = data.readInt() == 0 ? null : readCabinParcel(data);
                     dispatchCabinCallback(cabin);
                 } else {
-                    AppSessionLog.event("CAN OEM CALLBACK", "tx=" + code + " · "
-                            + callbackName(code) + " · recibido sin decodificar");
+                    AppSessionLog.sampledEvent("can.callback.unknown." + code, "CAN OEM CALLBACK", "tx=" + code + " · "
+                            + callbackName(code) + " · recibido sin decodificar", 15_000L);
                     VehicleObservationTrace.observe("CAN OEM", "callback.tx" + code,
                             "recibido", "callback pasivo no interpretado");
                 }
@@ -491,8 +491,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             latestHvac = hvac;
             lastHvacCallbackAt = now;
             traceHvac("hvac.callback", hvac);
-            AppSessionLog.event("CAN OEM CALLBACK", hvac == null
-                    ? "tx=1 · HvacInfo=null" : "tx=1 · " + hvacRaw(hvac));
+            AppSessionLog.sampledEvent("can.callback.hvac", "CAN OEM CALLBACK", hvac == null
+                    ? "tx=1 · HvacInfo=null" : "tx=1 · " + hvacRaw(hvac), 15_000L);
             if (hvac == null) clearHvac(); else applyHvac(hvac, now);
             publishReport();
             notifyIfChanged();
@@ -516,8 +516,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             } else if (latestGetterDashboard != null) {
                 applyDashboard(latestGetterDashboard, now, false);
             } else clearDashboard();
-            AppSessionLog.event("CAN OEM CALLBACK", dashboard == null
-                    ? "dashboard=null" : dashboardRaw(dashboard));
+            AppSessionLog.sampledEvent("can.callback.dashboard", "CAN OEM CALLBACK", dashboard == null
+                    ? "dashboard=null" : dashboardRaw(dashboard), 15_000L);
             publishReport();
             notifyIfChanged();
         });
@@ -532,8 +532,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             latestLight = light;
             lastLightCallbackAt = now;
             traceLight("light.callback", light);
-            AppSessionLog.event("CAN OEM CALLBACK", light == null
-                    ? "tx=5 · LightInfo=null" : "tx=5 · " + lightRaw(light));
+            AppSessionLog.sampledEvent("can.callback.light", "CAN OEM CALLBACK", light == null
+                    ? "tx=5 · LightInfo=null" : "tx=5 · " + lightRaw(light), 15_000L);
             if (light == null) clear(VehicleField.LIGHTS); else applyLight(light, now);
             notifyIfChanged();
         });
@@ -548,8 +548,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             latestCabin = cabin;
             lastCabinCallbackAt = now;
             traceCabin("cabin.callback", cabin);
-            AppSessionLog.event("CAN OEM CALLBACK", cabin == null
-                    ? "tx=2 · CabinInfo=null" : "tx=2 · " + cabinRaw(cabin));
+            AppSessionLog.sampledEvent("can.callback.cabin", "CAN OEM CALLBACK", cabin == null
+                    ? "tx=2 · CabinInfo=null" : "tx=2 · " + cabinRaw(cabin), 15_000L);
             if (cabin == null) clearCabin(); else applyCabin(cabin, now);
             notifyIfChanged();
         });
@@ -564,8 +564,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             latestRadar = radar;
             lastRadarCallbackAt = now;
             traceRadar("radar.callback", radar);
-            AppSessionLog.event("CAN OEM CALLBACK", radar == null
-                    ? "tx=3 · RadarInfo=null" : "tx=3 · " + radarRaw(radar));
+            AppSessionLog.sampledEvent("can.callback.radar", "CAN OEM CALLBACK", radar == null
+                    ? "tx=3 · RadarInfo=null" : "tx=3 · " + radarRaw(radar), 15_000L);
             if (radar == null) clear(VehicleField.PDC); else applyRadar(radar, now);
             publishReport();
             notifyIfChanged();
@@ -580,9 +580,9 @@ final class CanbusServiceProvider implements VehicleDataProvider {
             latestSteerWheel = steerWheel;
             lastSteerWheelCallbackAt = System.currentTimeMillis();
             traceSteerWheel("steer.callback", steerWheel);
-            AppSessionLog.event("CAN OEM CALLBACK", steerWheel == null
+            AppSessionLog.sampledEvent("can.callback.steer", "CAN OEM CALLBACK", steerWheel == null
                     ? "tx=4 · SteerWheelInfo=null" : "tx=4 · eps=" + steerWheel.eps
-                    + " · omega=" + steerWheel.omega);
+                    + " · omega=" + steerWheel.omega, 15_000L);
             publishReport();
         });
     }
@@ -629,8 +629,8 @@ final class CanbusServiceProvider implements VehicleDataProvider {
                         if (hvac != null) applyHvac(hvac, now); else clearHvac();
                     }
                 } catch (Exception error) {
-                    AppSessionLog.event("CAN OEM HVAC", "getter no disponible: "
-                            + error.getClass().getSimpleName());
+                    AppSessionLog.sampledEvent("can.getter.hvac.error", "CAN OEM HVAC", "getter no disponible: "
+                            + error.getClass().getSimpleName(), 30_000L);
                 }
                 try {
                     radar = readRadar();
@@ -640,20 +640,21 @@ final class CanbusServiceProvider implements VehicleDataProvider {
                         if (radar != null) applyRadar(radar, now); else clear(VehicleField.PDC);
                     }
                 } catch (Exception error) {
-                    AppSessionLog.event("CAN OEM RADAR", "getter no disponible: "
-                            + error.getClass().getSimpleName());
+                    AppSessionLog.sampledEvent("can.getter.radar.error", "CAN OEM RADAR", "getter no disponible: "
+                            + error.getClass().getSimpleName(), 30_000L);
                 }
-                AppSessionLog.event("CAN OEM GETTERS", "dashboard="
+                AppSessionLog.sampledEvent("can.getters.raw", "CAN OEM GETTERS", "dashboard="
                         + (dashboard == null ? "null" : dashboardRaw(dashboard))
                         + " || cabin=" + (cabin == null ? "null" : cabinRaw(cabin))
                         + " || light=" + (light == null ? "null" : lightRaw(light))
                         + " || hvac=" + (hvac == null ? "null" : hvacRaw(hvac))
-                        + " || radar=" + (radar == null ? "null" : radarRaw(radar)));
+                        + " || radar=" + (radar == null ? "null" : radarRaw(radar)), 15_000L);
             }
         } catch (Exception error) {
             latestDashboard = latestCallbackDashboard;
             if (latestCallbackDashboard == null) clearValues();
-            AppSessionLog.event("CAN OEM", "lectura fallida: " + error.getClass().getSimpleName());
+            AppSessionLog.sampledEvent("can.read.error", "CAN OEM", "lectura fallida: "
+                    + error.getClass().getSimpleName(), 30_000L);
         }
         publishReport();
         notifyIfChanged();
@@ -1253,7 +1254,7 @@ final class CanbusServiceProvider implements VehicleDataProvider {
         long now = System.currentTimeMillis();
         if (lastLoggedAt == 0L || now - lastLoggedAt >= 5_000L) {
             lastLoggedAt = now;
-            AppSessionLog.event("CAN OEM", lastRaw);
+            AppSessionLog.sampledEvent("can.raw.current", "CAN OEM", lastRaw, 15_000L);
         }
     }
 

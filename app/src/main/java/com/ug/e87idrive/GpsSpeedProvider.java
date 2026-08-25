@@ -33,6 +33,10 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     public void start() {
+        // MainActivity and VehicleDataRepository both depend on this provider.
+        // Make start idempotent so Android does not receive duplicated GPS,
+        // network and passive listeners after a resume/permission change.
+        if (started) return;
         boolean fine = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
         boolean coarse = context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -58,7 +62,9 @@ public class GpsSpeedProvider implements LocationListener {
                 enabled.add(provider);
                 // GPS is preferred for driving speed; network/passive make the fuel card useful
                 // immediately while the receiver is acquiring a satellite fix.
-                lm.requestLocationUpdates(provider, provider.equals(LocationManager.GPS_PROVIDER) ? 1000 : 5000,
+                // Ask GNSS for up to 2 Hz. Hardware that only publishes 1 Hz keeps doing so;
+                // SpeedLimitRepository throttles local map matching aggressively while parked.
+                lm.requestLocationUpdates(provider, provider.equals(LocationManager.GPS_PROVIDER) ? 500 : 5000,
                         0, this);
                 Location last = lm.getLastKnownLocation(provider);
                 if (last != null && (newest == null || last.getTime() > newest.getTime())) newest = last;
@@ -81,6 +87,7 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     public void stop() {
+        if (!started) return;
         started = false;
         try { lm.removeUpdates(this); } catch(Exception ignored) {}
     }

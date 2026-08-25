@@ -26,6 +26,9 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 - **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A red circle is only an explicit OSM `maxspeed`; a blue square is conservative class-based guidance after a local GPS-area update, never a legal limit or orange speedometer trigger. Physical signs and the vehicle's instruments remain the legal reference.
 - **Dynamic trip computer.** Range, average consumption, exterior temperature, climate values and other data are shown only when the radio provides a plausible reading. Unavailable data is hidden.
 - **Fixed and section camera warning.** The APK carries the national DGT inventory locally. The panel appears only for a nearby fixed/section camera while distance decreases, then disappears when the vehicle moves away. Mobile controls are intentionally excluded. Optional speech is emitted once only for a DGT **fixed** camera and never requests audio focus. The circular value is the verified **road** limit from the local map, not an invented radar limit.
+- **INVIVE watch zones.** A separate `SPEED WATCH ZONE` card appears when approaching or driving through an official intensified-enforcement section. It is never rendered as a camera, never triggers fixed-camera speech and never supplies a legal speed limit; the speed sign remains sourced exclusively from the local road map.
+
+![INVIVE watch zone kept separate from cameras and the local speed limit](docs/screenshots/bmw-e87-ui-v1.21.0-invive.png)
 - **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app.
 - **OEM app cards.** Radio, Android Auto, phone and app cards open their assigned OEM applications. Metadata is displayed only when Android or an OEM service actually publishes it.
 
@@ -58,21 +61,31 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 - Diesel and a 7 km working radius by default; both are configurable.
 - Fuel prices come from the official Spanish service, are filtered locally and cached within 150 km of the vehicle.
 - Nearby prices refresh every ten minutes while the app is visible, when Android exposes an IP network.
-- The APK includes a complete drivable-road map for **Alicante**: explicit `maxspeed` values plus classes for **112,709** roads. Therefore, when OpenStreetMap does not tag a limit, it can show blue class-based guidance without a driving-time download. Murcia, Valencia and Albacete keep their compact explicit-limit seeds.
+- The APK includes a complete drivable-road map for **Alicante**: classes for **112,709** roads, generic `maxspeed` values and 89 geometries carrying `maxspeed:forward/backward`. Position, heading and continuity select the road first; only then is the best value for that same road and direction applied. Murcia, Valencia and Albacete keep their compact seeds.
+- The first run also works offline with the dated official Alicante diesel-price snapshot bundled in the APK. Once Internet becomes available, the normal Ministry endpoint replaces that seed cache.
 - The APK also includes the compact national DGT DATEX II inventory of fixed and section cameras (about 2 MB before compression). Camera matching remains entirely local while driving; it never queries a radar service on each GPS fix.
+- It also includes the national DGT DATEX II **INVIVE** inventory. INVIVE identifies intensified speed-enforcement sections, not cameras or speed limits. Detection combines the official road with the local OSM road reference and geometry to reduce matches against parallel roads.
 - The nearby-road lookup is local and runs with each driving GPS fix (normally about once per second); it does not make a network request when the limit changes.
-- Each province has an independent 24-hour refresh marker: a fresh Alicante update does not block a pending Murcia update.
-- With GPS and Internet exposed by Android, the detected province can update local limits and the DGT fixed/section inventory automatically. Manual provincial updates are also available, and a successful update is never repeated for that province for 24 hours.
+- OSM keeps the provincial Alicante scope and its anti-abuse window. Official DGT layers
+  (TN-ITS limits, cameras and INVIVE) are downloaded at national scope and queried locally
+  afterwards. Each successful source update has its own 24-hour guard; fuel prices keep their
+  ten-minute automatic refresh policy.
+- **Update all** opens a sequential modal with one progress row per source and a final local
+  consolidation step. OSM Alicante, fuel prices, DGT cameras, DGT limits and INVIVE can also be
+  updated individually. Each row shows the date and time of its latest successful download.
 
 ### Tools, diagnostics and updates
 
 ![Tools menu: separate Debug/USB, Permissions and Updates entries](docs/screenshots/bmw-e87-ui-v1.16.0-tools.png)
 
-The lower-right wrench opens three separate tools:
+The lower-right gear opens three separate tools:
 
 1. **Debug / USB** — passive diagnostics, guided correlation tests, USB export and runtime logs.
 2. **Permissions** — location, nearby Bluetooth devices and Android media access.
-3. **Updates** — one Alicante update button for the complete OSM road map, DGT fixed/section cameras and fuel prices. Map import is streamed and replaces only iDrive's own speed-limit cache.
+3. **Updates** — one button to update everything, plus individual buttons for OSM Alicante,
+   fuel prices, DGT cameras, DGT limits and INVIVE. OSM is the only partial download; official
+   layers are stored nationally. Import and consolidation run locally and replace only iDrive's
+   own caches.
 
 The dashboard shows the province, date and time of the latest successful speed-map update. Before an update is installed, it identifies the bundled local base.
 
@@ -100,11 +113,15 @@ The safe media fallback chain is: Android `MediaSession`, verified passive Speed
 
 The same rule applies to FM and phone information. Frequency, RDS station name and Bluetooth terminal name are presented only if an Android/OEM service publishes them; iDrive does not guess a station name or connection state.
 
+### INVIVE source
+
+INVIVE is integrated from the [official DGT NAP dataset](https://nap.dgt.es/en/dataset/tramos-invive), with attribution and update timestamp exposed in diagnostics. The app never converts these sections into fixed cameras or infers a speed limit from them.
+
 ## Installation and first use
 
 1. Download the APK attached to the latest [GitHub release](../../releases).
 2. Copy it to a USB drive, install it on the head unit and open **iDrive** from the normal OEM launcher.
-3. Open the wrench, choose **Permissions** and grant precise location. Nearby-device and media access are optional.
+3. Open the gear, choose **Permissions** and grant precise location. Nearby-device and media access are optional.
 4. Wait for GPS to acquire a position. Speed and station distances start using it; speed-limit data already has the bundled local base.
 5. Long-press a card to choose its OEM application. A short press opens the selected app.
 6. Before testing vehicle signals, select a USB folder in **Debug / USB** and export a baseline report.
@@ -133,7 +150,9 @@ These details describe one tested radio, not a guarantee that a similar-looking 
 | `VehicleDataRepository` | Conservative aggregation and source priority |
 | `GpsSpeedProvider` | GPS position and validated speed |
 | `SpeedLimitRepository` | Local SQLite limits and per-province OSM updates |
+| `DgtSpeedRepository` | National weekly DGT limit delta, history and local road/direction matching |
 | `RadarRepository` | Local DGT fixed/section camera cache and 24-hour provincial updates |
+| `InviveRepository` | National DGT INVIVE watch-zone cache, separate from cameras and limits |
 | `FuelStationProvider` | Official fuel prices, local cache and distance selection |
 | `JancarCarProvider` | Verified read-only getters from exported OEM packages |
 | `MediaSessionProvider` | Standard media metadata and actions when exposed |
@@ -147,14 +166,16 @@ The project is written in Java with Android framework APIs. It has no runtime th
 - Fuel prices: official Spanish [Fuel Prices service](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/help).
 - Speed limits: OpenStreetMap `maxspeed` data through public Overpass services; see [NOTICE.md](NOTICE.md) for attribution and terms.
 - Fixed and section cameras: official [DGT DATEX II publication](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), locally cached. Mobile controls are not part of the feature.
+- Official speed limits: the [DGT weekly TN-ITS speed-limit feed](https://infocar.dgt.es/tnits/limitesVelocidad.xml). The APK installs the national snapshot available at build time and merges later changes into SQLite without discarding history.
+- Watch zones: the [DGT/NAP INVIVE dataset](https://nap.dgt.es/en/dataset/tramos-invive), stored as watch zones and never as fixed cameras.
 - Vehicle coordinates are not sent to the fuel-price service. Filtering and distance calculations run on the head unit. A map app receives the destination coordinate only after the user presses a station.
 - The app uses only an IP network Android exposes: Wi-Fi, Ethernet or Bluetooth PAN if the radio firmware truly publishes it.
 
 ## Project status
 
-Current version: **1.17.1**.
+Current version: **1.24.2**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.17.1 shows a red circle only for an explicit OSM `maxspeed`; when it is absent, it uses a blue DGT generic-reference sign based on the road class, and the schema upgrade immediately corrects cached advisory values.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, INVIVE watch zones, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.24.2 adds a resilient offline radar-seed parser and a repeatable GeoJSON/OSRM route-replay QA tool. DGT data wins only after road, geometry and direction matching; OSM follows, and the blue class-based sign remains the final visual fallback. The emulator route QA validates GPS, local limit matching, radar panels and the bundled fuel seed; CAN, Android Auto, Bluetooth PAN and voice remain hardware-dependent validations.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

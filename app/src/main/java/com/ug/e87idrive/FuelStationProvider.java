@@ -23,13 +23,17 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -94,8 +98,13 @@ public final class FuelStationProvider {
     private static final long LOCAL_REFRESH_MS = 10L * 60L * 1000L;
     private static final long COVERAGE_REFRESH_MS = 24L * 60L * 60L * 1000L;
     private static final long MIN_RETRY_INTERVAL_MS = 10L * 60L * 1000L;
-    private static final int CACHE_VERSION = 2;
+    private static final int CACHE_VERSION = 3;
     private static final int MAX_LOCAL_PROVINCES = 4;
+    private static final String ALICANTE_DIESEL_ASSET =
+            "e87_fuel_stations_alicante_diesel.json";
+    private static final double ALICANTE_SEED_LATITUDE = 38.345d;
+    private static final double ALICANTE_SEED_LONGITUDE = -0.481d;
+    private static final int ALICANTE_SEED_COVERAGE_KM = 180;
 
     private enum RequestType { COVERAGE, LOCAL_PRICES }
 
@@ -117,6 +126,7 @@ public final class FuelStationProvider {
     private Cache cache;
     private Snapshot snapshot;
     private String lastLogSignature = "";
+    private Runnable pendingForceCallback;
 
     private final Runnable periodicRefresh = () -> {
         synchronized (FuelStationProvider.this) {
@@ -197,6 +207,8 @@ public final class FuelStationProvider {
     }
 
     public synchronized Snapshot getSnapshot() { return snapshot; }
+    /** True when Android exposes an IP-capable network, including a Bluetooth PAN. */
+    public boolean isInternetAvailable() { return hasActiveInternet(); }
     public int getProductId() { return preferences.getInt(PREF_PRODUCT, DEFAULT_PRODUCT_ID); }
     public int getRadiusKm() { return preferences.getInt(PREF_RADIUS, DEFAULT_RADIUS_KM); }
 
@@ -214,9 +226,20 @@ public final class FuelStationProvider {
 
     public synchronized void forceRefresh() { lastAttemptAt = 0L; refresh(true); }
 
+    /** Manual update entry point used by the update progress modal. */
+    public synchronized void forceRefresh(Runnable callback) {
+        pendingForceCallback = callback;
+        lastAttemptAt = 0L;
+        refresh(true);
+    }
+
     private void refresh(boolean forceNetwork) {
-        if (!active) return;
-        if (location == null) { publish(unavailable("Esperando ubicación GPS")); return; }
+        if (!active) { completeForceCallback(); return; }
+        if (location == null) {
+            publish(unavailable("Esperando ubicación GPS"));
+            completeForceCallback();
+            return;
+        }
 
         int productId = getProductId();
         int displayRadiusKm = getRadiusKm();
@@ -248,7 +271,8 @@ public final class FuelStationProvider {
         }
 
         if (!forceNetwork && now - lastAttemptAt < MIN_RETRY_INTERVAL_MS) needsNetwork = false;
-        if (!needsNetwork || taskRunning) return;
+        if (!needsNetwork) { completeForceCallback(); return; }
+        if (taskRunning) return;
         if (!hasActiveInternet()) {
             Snapshot selected = cache == null ? null : select(cache, location, fuel.label, true);
             publish(new Snapshot(fuel.label, displayRadiusKm,
@@ -257,6 +281,7 @@ public final class FuelStationProvider {
                     selected == null ? null : selected.cheapest,
                     selected == null ? null : selected.nearest,
                     false, selected != null, selected == null ? 0L : selected.updatedAt));
+            completeForceCallback();
             return;
         }
         taskRunning = true;
@@ -302,11 +327,24 @@ public final class FuelStationProvider {
             error = exception.getClass().getSimpleName();
         } finally { activeConnection = null; }
 
+        Runnable callback;
         synchronized (this) {
             taskRunning = false;
-            if (getProductId() != productId) { cache = null; refresh(false); return; }
+            if (getProductId() != productId) {
+                cache = null;
+                callback = pendingForceCallback;
+                pendingForceCallback = null;
+                refresh(false);
+                completeCallback(callback);
+                return;
+            }
             if (downloaded != null) cache = downloaded;
-            if (!active) return;
+            if (!active) {
+                callback = pendingForceCallback;
+                pendingForceCallback = null;
+                completeCallback(callback);
+                return;
+            }
             if (cache != null) {
                 Snapshot selected = select(cache, location, fuelLabel, downloaded == null);
                 if (downloaded == null) selected = new Snapshot(selected.fuelLabel,
@@ -320,7 +358,20 @@ public final class FuelStationProvider {
                         null, null, false, false, 0L));
             }
             scheduleNextRefresh();
+            callback = pendingForceCallback;
+            pendingForceCallback = null;
         }
+        completeCallback(callback);
+    }
+
+    private synchronized void completeForceCallback() {
+        Runnable callback = pendingForceCallback;
+        pendingForceCallback = null;
+        completeCallback(callback);
+    }
+
+    private void completeCallback(Runnable callback) {
+        if (callback != null) main.post(callback);
     }
 
     private Cache fetchCoverage(int productId, Location center) throws Exception {
@@ -626,24 +677,81 @@ public final class FuelStationProvider {
 
     private Cache readCache(int productId) {
         File file = cacheFile(productId);
-        if (!file.isFile()) return null;
-        try (DataInputStream in = new DataInputStream(
-                new BufferedInputStream(new FileInputStream(file)))) {
-            if (in.readInt() != CACHE_VERSION) return null;
-            int storedProduct = in.readInt(), coverageRadius = in.readInt();
-            double latitude = in.readDouble(), longitude = in.readDouble();
-            long coverageFetchedAt = in.readLong(), localUpdatedAt = in.readLong();
-            String provinceSignature = in.readUTF(), datasetDate = in.readUTF();
-            int count = Math.max(0, Math.min(10_000, in.readInt()));
-            List<Station> stations = new ArrayList<>(count);
-            for (int i = 0; i < count; i++) {
-                stations.add(new Station(in.readUTF(), in.readUTF(), in.readUTF(), in.readUTF(),
-                        in.readDouble(), in.readDouble(), in.readDouble(), in.readDouble()));
+        if (file.isFile()) {
+            try (DataInputStream in = new DataInputStream(
+                    new BufferedInputStream(new FileInputStream(file)))) {
+                if (in.readInt() == CACHE_VERSION) {
+                    int storedProduct = in.readInt(), coverageRadius = in.readInt();
+                    double latitude = in.readDouble(), longitude = in.readDouble();
+                    long coverageFetchedAt = in.readLong(), localUpdatedAt = in.readLong();
+                    String provinceSignature = in.readUTF(), datasetDate = in.readUTF();
+                    int count = Math.max(0, Math.min(10_000, in.readInt()));
+                    List<Station> stations = new ArrayList<>(count);
+                    for (int i = 0; i < count; i++) {
+                        stations.add(new Station(in.readUTF(), in.readUTF(), in.readUTF(), in.readUTF(),
+                                in.readDouble(), in.readDouble(), in.readDouble(), in.readDouble()));
+                    }
+                    if (storedProduct == productId) {
+                        return new Cache(storedProduct, coverageRadius, latitude, longitude,
+                                coverageFetchedAt, localUpdatedAt, provinceSignature,
+                                datasetDate, stations);
+                    }
+                }
+            } catch (Exception ignored) { }
+        }
+        // A new app version deliberately ignores older binary caches and starts from the
+        // dated official Alicante snapshot packaged in the APK. It is immediately usable
+        // offline and is replaced by the normal Ministry endpoint whenever Android has IP.
+        return readBundledAlicanteSeed(productId);
+    }
+
+    private Cache readBundledAlicanteSeed(int productId) {
+        if (productId != DEFAULT_PRODUCT_ID) return null;
+        Location center = new Location("alicante-fuel-seed");
+        center.setLatitude(ALICANTE_SEED_LATITUDE);
+        center.setLongitude(ALICANTE_SEED_LONGITUDE);
+        String datasetDate = "";
+        List<Station> stations = new ArrayList<>();
+        try (InputStream stream = new BufferedInputStream(
+                context.getAssets().open(ALICANTE_DIESEL_ASSET));
+             JsonReader reader = new JsonReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            reader.beginObject();
+            while (reader.hasNext()) {
+                String name = reader.nextName();
+                if ("Fecha".equals(name)) datasetDate = nextString(reader);
+                else if ("ListaEESSPrecio".equals(name)) {
+                    reader.beginArray();
+                    while (reader.hasNext()) {
+                        Station station = readStation(reader, center, ALICANTE_SEED_COVERAGE_KM);
+                        if (station != null) stations.add(station);
+                    }
+                    reader.endArray();
+                } else reader.skipValue();
             }
-            return storedProduct == productId
-                    ? new Cache(storedProduct, coverageRadius, latitude, longitude,
-                    coverageFetchedAt, localUpdatedAt, provinceSignature, datasetDate, stations) : null;
-        } catch (Exception ignored) { return null; }
+            reader.endObject();
+        } catch (Exception error) {
+            AppSessionLog.event("GASOLINERAS", "Semilla Alicante no disponible · "
+                    + error.getClass().getSimpleName());
+            return null;
+        }
+        if (stations.isEmpty()) return null;
+        long sourceTime = parseDatasetDate(datasetDate);
+        AppSessionLog.event("GASOLINERAS", "Semilla oficial Alicante cargada · "
+                + stations.size() + " estaciones · " + datasetDate);
+        return new Cache(productId, ALICANTE_SEED_COVERAGE_KM,
+                ALICANTE_SEED_LATITUDE, ALICANTE_SEED_LONGITUDE,
+                sourceTime, sourceTime, "03", datasetDate, stations);
+    }
+
+    private static long parseDatasetDate(String value) {
+        if (value == null || value.trim().isEmpty()) return 0L;
+        try {
+            SimpleDateFormat format = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.ROOT);
+            format.setLenient(false);
+            format.setTimeZone(TimeZone.getTimeZone("Europe/Madrid"));
+            Date parsed = format.parse(value.trim());
+            return parsed == null ? 0L : parsed.getTime();
+        } catch (Exception ignored) { return 0L; }
     }
 
     private void writeCache(Cache value) {

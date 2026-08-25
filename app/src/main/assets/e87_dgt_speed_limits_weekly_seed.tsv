@@ -1,0 +1,5 @@
+# DGT TN-ITS weekly delta fallback - official rows from the current national feed
+# This is only used when a build has no Internet. A connected build packages the full national XML.
+# id|provider|action|road|direction|character|fromPk|toPk|speedKmh|geometry(lat,lon;...)|crs|note
+1f852525-2eb8-45f6-be31-fef2faac13ca|ANTEA GROUP|ADD|N-332|Both|Tronco|||90|38.0755752,-0.6546048|EPSG:25830|current national feed fallback
+76f04dfb-cb71-4894-98a5-ab760a229f94|ANTEA GROUP|ADD|N-340|Decreasing|Tronco|||80|38.2535266,-0.7688359|EPSG:25830|current national feed fallback

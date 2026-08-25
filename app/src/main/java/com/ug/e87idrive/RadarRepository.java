@@ -32,8 +32,8 @@ import java.util.Locale;
  * Offline alert cache for DGT fixed and average-speed cameras.
  *
  * The app deliberately never imports, displays or infers mobile controls. The official DATEX II
- * publication is downloaded only on an explicit/once-per-day refresh, filtered on-device by
- * province, and all driving-time matching is against this small local SQLite cache.
+ * publication is downloaded only on an explicit/once-per-day refresh. The national feed is
+ * retained locally; province is a lookup/presentation concern, never a download restriction.
  */
 final class RadarRepository {
     interface ProvinceResolver { String resolve(); }
@@ -69,7 +69,7 @@ final class RadarRepository {
                 @Override public void onAvailable(Network network) { autoRefreshIfNeeded(); }
                 @Override public void onCapabilitiesChanged(Network network,
                                                             NetworkCapabilities capabilities) {
-                    if (hasInternetCapability(network)) autoRefreshIfNeeded();
+                    if (isValidated(network)) autoRefreshIfNeeded();
                 }
             };
 
@@ -147,12 +147,21 @@ final class RadarRepository {
     }
 
     void refreshFromInternet(String province, UpdateCallback callback) {
-        Network network = availableNetwork();
+        refreshFromInternet(province, callback, false);
+    }
+
+    void refreshNationalFromInternet(UpdateCallback callback) {
+        refreshFromInternet("TODAS", callback, false);
+    }
+
+    private void refreshFromInternet(String province, UpdateCallback callback, boolean automatic) {
+        Network network = automatic ? validatedNetwork() : availableNetwork();
         if (network == null) {
             finish(callback, false, "Android no publica una conexión a Internet utilizable");
             return;
         }
-        final String selected = normalizeProvince(province);
+        final boolean national = "TODAS".equalsIgnoreCase(province);
+        final String selected = national ? "TODAS" : normalizeProvince(province);
         long now = System.currentTimeMillis();
         if (updateRunning) {
             finish(callback, false, "Ya hay una actualización de radares en curso");
@@ -182,7 +191,9 @@ final class RadarRepository {
                     records = parseDgt(input, selected);
                 }
                 if (records.isEmpty()) throw new IOException("La DGT no publicó fijos/tramo para " + label(selected));
-                int imported = database.replaceProvince(selected, records, System.currentTimeMillis());
+                int imported = national
+                        ? database.replaceAll(records, System.currentTimeMillis())
+                        : database.replaceProvince(selected, records, System.currentTimeMillis());
                 preferences.edit().putLong(successKey(selected), System.currentTimeMillis()).apply();
                 lastResult = imported + " radares fijos/tramo guardados · " + label(selected) + " · DGT";
                 AppSessionLog.event(TAG, "Actualización correcta · " + lastResult);
@@ -203,11 +214,16 @@ final class RadarRepository {
     boolean isInternetAvailable() { return availableNetwork() != null; }
 
     long lastSuccessfulUpdate(String province) {
-        return preferences.getLong(successKey(normalizeProvince(province)), 0L);
+        return preferences.getLong(successKey("TODAS".equalsIgnoreCase(province)
+                ? "TODAS" : normalizeProvince(province)), 0L);
+    }
+
+    long lastNationalSuccessfulUpdate() {
+        return preferences.getLong(successKey("TODAS"), 0L);
     }
 
     UpdateStamp lastSuccessfulUpdateStamp() {
-        String[] provinces = {"ALICANTE", "MURCIA", "VALENCIA", "ALBACETE"};
+        String[] provinces = {"TODAS", "ALICANTE", "MURCIA", "VALENCIA", "ALBACETE"};
         String newestProvince = null;
         long newest = 0L;
         for (String province : provinces) {
@@ -227,19 +243,20 @@ final class RadarRepository {
                 + "última actualización=" + lastResult + "\n"
                 + "fuente=" + DGT_ENDPOINT + "\n"
                 + "solo=fijos y tramo; móviles excluidos\n"
-                + "lectura=en local durante la marcha; actualización máx. una vez/provincia/24 h\n";
+                + "lectura=en local durante la marcha; feed nacional; actualización máx. una vez/24 h\n";
     }
 
     static String[] supportedProvinceLabels() {
-        return new String[]{"Alicante · provincia completa", "Murcia · provincia completa",
+        return new String[]{"España · inventario nacional", "Alicante · provincia completa", "Murcia · provincia completa",
                 "Valencia · provincia completa", "Albacete · provincia completa"};
     }
 
     static String[] supportedProvinceCodes() {
-        return new String[]{"ALICANTE", "MURCIA", "VALENCIA", "ALBACETE"};
+        return new String[]{"TODAS", "ALICANTE", "MURCIA", "VALENCIA", "ALBACETE"};
     }
 
     static String label(String province) {
+        if ("TODAS".equalsIgnoreCase(province)) return "España · nacional";
         switch (normalizeProvince(province)) {
             case "MURCIA": return "Murcia";
             case "VALENCIA": return "Valencia";
@@ -249,22 +266,16 @@ final class RadarRepository {
     }
 
     private void autoRefreshIfNeeded() {
-        if (!active || updateRunning || availableNetwork() == null) return;
+        if (!active || updateRunning || validatedNetwork() == null) return;
         long now = System.currentTimeMillis();
         if (now - lastAutomaticAttempt < RETRY_INTERVAL_MS) return;
-        String province = provinceResolver == null ? null : provinceResolver.resolve();
-        if (province == null || "AUTO".equals(province)) {
-            lastAutomaticAttempt = now;
-            AppSessionLog.event(TAG, "Comprobación automática omitida · provincia GPS no confirmada por mapa local");
-            return;
-        }
-        if (lastSuccessfulUpdate(province) > 0L
-                && now - lastSuccessfulUpdate(province) < REFRESH_INTERVAL_MS) return;
+        if (lastNationalSuccessfulUpdate() > 0L
+                && now - lastNationalSuccessfulUpdate() < REFRESH_INTERVAL_MS) return;
         lastAutomaticAttempt = now;
-        AppSessionLog.event(TAG, "Comprobación automática al iniciar · " + label(province));
-        refreshFromInternet(province, result -> AppSessionLog.event(TAG,
+        AppSessionLog.event(TAG, "Comprobación automática al iniciar · inventario nacional");
+        refreshFromInternet("TODAS", result -> AppSessionLog.event(TAG,
                 "Actualización automática " + (result.success ? "correcta" : "omitida/fallida")
-                        + " · " + result.message));
+                        + " · " + result.message), true);
     }
 
     private void seedFromAssetsAsync() {
@@ -295,7 +306,13 @@ final class RadarRepository {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     if (line.isEmpty() || line.charAt(0) == '#') continue;
-                    String[] row = line.split("\\t", 5);
+                    // Older compact seeds wrote the separator as the two literal
+                    // characters "\\t" while generated TSV uses a real tab.
+                    // Accept both forms so the offline Alicante fallback remains
+                    // usable when the national DATEX seed is not packaged.
+                    String[] row = line.contains("\\t")
+                            ? line.split("\\\\t", 5)
+                            : line.split("\\t", 5);
                     if (row.length < 5) continue;
                     records.add(new RawRecord(row[0], row[1], row[2], row[3], row[4], "ALICANTE"));
                 }
@@ -404,7 +421,10 @@ final class RadarRepository {
         return upper.isEmpty() ? "DGT" : upper;
     }
 
-    private static String successKey(String province) { return "last_success_" + normalizeProvince(province); }
+    private static String successKey(String province) {
+        return "last_success_" + ("TODAS".equalsIgnoreCase(province)
+                ? "TODAS" : normalizeProvince(province));
+    }
 
     private Network availableNetwork() {
         if (connectivity == null) return null;
@@ -418,10 +438,29 @@ final class RadarRepository {
         return null;
     }
 
+    /** Background updates run only after Android confirms real Internet access. */
+    private Network validatedNetwork() {
+        if (connectivity == null) return null;
+        try {
+            Network activeNetwork = connectivity.getActiveNetwork();
+            if (isValidated(activeNetwork)) return activeNetwork;
+            for (Network candidate : connectivity.getAllNetworks()) {
+                if (isValidated(candidate)) return candidate;
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
     private boolean hasInternetCapability(Network network) {
         if (network == null || connectivity == null) return false;
         NetworkCapabilities caps = connectivity.getNetworkCapabilities(network);
         return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
+
+    private boolean isValidated(Network network) {
+        if (!hasInternetCapability(network)) return false;
+        NetworkCapabilities caps = connectivity.getNetworkCapabilities(network);
+        return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
     }
 
     private void registerNetworkCallback() {

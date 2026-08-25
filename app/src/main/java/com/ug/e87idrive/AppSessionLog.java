@@ -9,13 +9,22 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /** Bounded, privacy-conscious log for the current app process / vehicle session. */
 final class AppSessionLog {
     static final String FILE_NAME = "e87_runtime_session.log";
     private static final long MAX_BYTES = 512L * 1024L;
     private static final Object LOCK = new Object();
+    /**
+     * The CAN service can callback several times per second with identical
+     * parcels. Keep the session log useful on the head unit by allowing those
+     * high-volume raw samples at a controlled cadence. Semantic field changes
+     * are still recorded separately by {@link VehicleObservationTrace}.
+     */
+    private static final Map<String, Long> LAST_SAMPLED_AT = new HashMap<>();
     private static File file;
 
     private AppSessionLog() { }
@@ -23,6 +32,7 @@ final class AppSessionLog {
     static void initialize(Context context) {
         synchronized (LOCK) {
             VehicleObservationTrace.reset();
+            LAST_SAMPLED_AT.clear();
             file = new File(context.getFilesDir(), FILE_NAME);
             String header = "BMW E87 iDrive · REGISTRO DE SESIÓN\n"
                     + "Inicio=" + timestamp() + "\n"
@@ -44,6 +54,23 @@ final class AppSessionLog {
             }
             write(timestamp() + " [" + source + "] "
                     + message.replace('\n', ' ').replace('\r', ' ') + "\n", true);
+        }
+    }
+
+    /**
+     * Records a noisy raw diagnostic sample no more than once per interval.
+     * This intentionally does not compare the message: OEM dashboard parcels
+     * often contain a changing but untrusted counter/sentinel, which would
+     * otherwise fill the 512 KiB export during a short drive.
+     */
+    static void sampledEvent(String key, String source, String message, long intervalMs) {
+        if (key == null || key.trim().isEmpty() || message == null || message.trim().isEmpty()) return;
+        synchronized (LOCK) {
+            long now = System.currentTimeMillis();
+            long previous = LAST_SAMPLED_AT.containsKey(key) ? LAST_SAMPLED_AT.get(key) : 0L;
+            if (previous > 0L && now - previous < Math.max(1_000L, intervalMs)) return;
+            LAST_SAMPLED_AT.put(key, now);
+            event(source, message);
         }
     }
 

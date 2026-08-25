@@ -77,8 +77,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
         if (gpsFresh) {
             if (canValue.isAvailable() && numeric(canValue.value())
                     && Math.abs(number(canValue.value()) - number(gpsValue.value())) > 3d) {
-                AppSessionLog.event("VELOCIDAD", "CAN=" + canValue.value()
-                        + " · GPS=" + gpsValue.value() + " · se usa GPS por fuente validada");
+                AppSessionLog.sampledEvent("speed.can-gps-discrepancy", "VELOCIDAD", "CAN=" + canValue.value()
+                        + " · GPS=" + gpsValue.value() + " · se usa GPS por fuente validada", 5_000L);
             }
             return selected(VehicleField.SPEED, gpsValue);
         }
@@ -91,8 +91,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
                 && number(automotiveValue.value()) <= 300d) {
             return selected(VehicleField.SPEED, automotiveValue);
         }
-        if (canValue.isAvailable()) AppSessionLog.event("VELOCIDAD",
-                "CAN=" + canValue.value() + " · sin fuente validada actual · se oculta");
+        if (canValue.isAvailable()) AppSessionLog.sampledEvent("speed.can-unvalidated", "VELOCIDAD",
+                "CAN=" + canValue.value() + " · sin fuente validada actual · se oculta", 5_000L);
         return selected(VehicleField.SPEED, VehicleValue.unavailable());
     }
 

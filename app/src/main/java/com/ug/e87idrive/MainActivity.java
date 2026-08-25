@@ -19,6 +19,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -40,6 +41,7 @@ import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.ProgressBar;
 import android.widget.Switch;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -69,6 +71,7 @@ public class MainActivity extends Activity {
     private SpeedGaugeView speedGauge;
     private SpeedLimitView speedLimitView;
     private RadarNoticeView radarNoticeView;
+    private InviveNoticeView inviveNoticeView;
     private TextView speedLimitState, speedLimitRefresh, speedLimitUpdateInfo, speedSource;
     private final java.util.Map<String, TextView> roleLabels = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, TextView> roleHints = new java.util.LinkedHashMap<>();
@@ -80,7 +83,9 @@ public class MainActivity extends Activity {
     private JancarRadioProvider oemRadio;
     private FuelStationProvider fuelStations;
     private SpeedLimitRepository speedLimits;
+    private DgtSpeedRepository dgtSpeeds;
     private RadarRepository radars;
+    private InviveRepository invive;
     private RadarSpeechAnnouncer radarSpeech;
     private BluetoothDeviceProvider bluetoothState;
     private UsbDiagnosticRecorder usbDiagnostics;
@@ -94,6 +99,7 @@ public class MainActivity extends Activity {
     private boolean exportSnapshotAfterPicker;
     private int mediaRefreshTick;
     private String lastMediaLog = "";
+    private boolean vehicleRefreshQueued;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -107,20 +113,19 @@ public class MainActivity extends Activity {
         usbDiagnostics = new UsbDiagnosticRecorder(this);
         fuelStations = new FuelStationProvider(this, this::refreshFuelWidget);
         speedLimits = new SpeedLimitRepository(this);
+        dgtSpeeds = new DgtSpeedRepository(this);
         radars = new RadarRepository(this, () -> speedLimits == null
                 ? "AUTO" : speedLimits.automaticProvince(gps == null ? null : gps.getLastLocation()));
+        invive = new InviveRepository(this);
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
-            refreshVehicle();
             fuelStations.onLocation(location);
-            speedLimits.onLocation(location);
+            speedLimits.onLocation(location, kmh);
             radars.onLocation(location);
-            refreshSpeedLimitWidget();
-            refreshRadarWidget();
+            scheduleVehicleRefresh();
         }));
         vehicleData = new VehicleDataRepository(this, gps, diagnostics, () -> {
-            refreshVehicle();
-            refreshStatus();
+            scheduleVehicleRefresh();
         });
         media = new MediaSessionProvider(this);
         oemRadio = new JancarRadioProvider(this, this::refreshRadioWidget);
@@ -143,7 +148,9 @@ public class MainActivity extends Activity {
         oemRadio.start();
         fuelStations.start(gps.getLastLocation());
         speedLimits.start(gps.getLastLocation());
+        dgtSpeeds.start();
         radars.start(gps.getLastLocation());
+        invive.start(speedLimits.automaticProvince(gps.getLastLocation()));
         vehicleData.start();
         diagnostics.startPassiveProbe();
     }
@@ -161,7 +168,9 @@ public class MainActivity extends Activity {
         oemRadio.stop();
         fuelStations.stop();
         speedLimits.stop();
+        dgtSpeeds.stop();
         radars.stop();
+        invive.stop();
         if (radarSpeech != null) radarSpeech.stop();
         if (!usbCaptureRunning) {
             diagnostics.stopPassiveProbe();
@@ -177,7 +186,9 @@ public class MainActivity extends Activity {
         bluetoothState.stop();
         fuelStations.close();
         speedLimits.close();
+        dgtSpeeds.close();
         radars.close();
+        invive.close();
         if (radarSpeech != null) radarSpeech.close();
         oemRadio.stop();
         vehicleData.stop();
@@ -648,6 +659,10 @@ public class MainActivity extends Activity {
         radarNoticeView.setContentDescription("Aviso local de radar fijo o de tramo");
         radarNoticeView.setVisibility(View.GONE);
         box.addView(radarNoticeView, lp(-1, dp(112)));
+        inviveNoticeView = new InviveNoticeView(this, TEXT, BLUE, MUTED, ACCENT);
+        inviveNoticeView.setContentDescription("Aviso de zona INVIVE de vigilancia de velocidad");
+        inviveNoticeView.setVisibility(View.GONE);
+        box.addView(inviveNoticeView, lp(-1, dp(112)));
         speedLimitUpdateInfo = txt("Base local incluida", 9, MUTED, false);
         speedLimitUpdateInfo.setGravity(Gravity.CENTER);
         speedLimitUpdateInfo.setMaxLines(2);
@@ -872,9 +887,26 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Several passive OEM callbacks can arrive in one frame. Coalescing their
+     * presentation work protects the RK3326 UI thread without delaying a real
+     * status change by more than a fraction of a second.
+     */
+    private void scheduleVehicleRefresh() {
+        if (!foreground || vehicleRefreshQueued) return;
+        vehicleRefreshQueued = true;
+        handler.postDelayed(() -> {
+            vehicleRefreshQueued = false;
+            if (!foreground) return;
+            refreshVehicle();
+            refreshStatus();
+        }, 150L);
+    }
+
     private void refreshSpeedLimitWidget() {
         if (speedLimitView == null || speedLimits == null || gps == null) return;
-        SpeedLimitRepository.Match match = speedLimits.lookup(gps.getLastLocation());
+        ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
+        SpeedLimitRepository.Match match = resolved.match;
         if (match == null) {
             speedLimitView.setLimit(null);
             if (speedGauge != null) speedGauge.setRoadLimit(null);
@@ -887,12 +919,15 @@ public class MainActivity extends Activity {
             if (speedGauge != null) speedGauge.setRoadLimit(match.exact ? match.limitKmh : null);
             if (speedLimitState != null) {
                 if (match.exact) {
-                    speedLimitState.setText(String.format(Locale.getDefault(), "LÍMITE OSM · %.0f m",
-                            match.distanceMeters));
-                    speedLimitState.setTextColor(BLUE);
+                    String source = resolved.dgt ? "LÍMITE DGT" : "LÍMITE OSM";
+                    speedLimitState.setText(String.format(Locale.getDefault(), "%s · %.0f m",
+                            source, match.distanceMeters));
+                    speedLimitState.setTextColor(Color.rgb(245, 116, 96));
                 } else {
-                    speedLimitState.setText("DGT GENÉRICA · "
-                            + SpeedLimitRepository.roadClassLabel(match.roadClass));
+                    speedLimitState.setText("S-7 ACONSEJADA · "
+                            + SpeedLimitRepository.roadClassLabel(match.roadClass)
+                            + ("unclassified".equalsIgnoreCase(match.roadClass)
+                            && match.roadRef.isEmpty() ? " urbana" : ""));
                     speedLimitState.setTextColor(Color.rgb(91, 171, 246));
                 }
             }
@@ -911,8 +946,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    private ResolvedSpeed resolveSpeed(Location location) {
+        if (speedLimits == null) return new ResolvedSpeed(null, false);
+        SpeedLimitRepository.Match osm = speedLimits.lookup(location);
+        if (dgtSpeeds != null) {
+            DgtSpeedRepository.Match dgt = dgtSpeeds.lookup(location, osm);
+            if (dgt != null) return new ResolvedSpeed(dgt.asSpeedMatch(osm), true);
+        }
+        return new ResolvedSpeed(osm, false);
+    }
+
     private void refreshRadarWidget() {
-        if (radarNoticeView == null || radars == null || gps == null) return;
+        if (radarNoticeView == null || inviveNoticeView == null || radars == null
+                || invive == null || gps == null) return;
         VehicleValue<?> speed = vehicleData == null ? null : vehicleData.get(VehicleField.SPEED);
         Double speedValue = speed != null && speed.isAvailable() && speed.value() instanceof Number
                 ? ((Number) speed.value()).doubleValue() : null;
@@ -920,12 +966,32 @@ public class MainActivity extends Activity {
         if (alert == null) {
             radarNoticeView.setVisibility(View.GONE);
             if (radarSpeech != null) radarSpeech.onAlertCleared();
+            ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
+            SpeedLimitRepository.Match road = resolved.match;
+            InviveRepository.Alert surveillance = invive.alert(gps.getLastLocation(), road, speedValue);
+            if (surveillance == null) {
+                inviveNoticeView.setVisibility(View.GONE);
+            } else {
+                inviveNoticeView.setAlert(surveillance);
+                inviveNoticeView.setVisibility(View.VISIBLE);
+            }
             return;
         }
-        SpeedLimitRepository.Match limit = speedLimits == null ? null : speedLimits.lookup(gps.getLastLocation());
+        inviveNoticeView.setVisibility(View.GONE);
+        ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
+        SpeedLimitRepository.Match limit = resolved.match;
         radarNoticeView.setAlert(alert, limit != null && limit.exact ? limit.limitKmh : null);
         radarNoticeView.setVisibility(View.VISIBLE);
         if (radarSpeech != null) radarSpeech.onAlert(alert, limit);
+    }
+
+    private static final class ResolvedSpeed {
+        final SpeedLimitRepository.Match match;
+        final boolean dgt;
+        ResolvedSpeed(SpeedLimitRepository.Match match, boolean dgt) {
+            this.match = match;
+            this.dgt = dgt;
+        }
     }
 
     private void chooseSpeedLimitProvince() {
@@ -990,7 +1056,14 @@ public class MainActivity extends Activity {
         }
         speedLimits.refreshFromInternet(gps.getLastLocation(), province, result -> {
             refreshSpeedLimitWidget();
-            toast(result.message);
+            if (invive == null) {
+                toast(result.message);
+                return;
+            }
+            invive.refreshFromInternet(province, surveillance -> {
+                refreshRadarWidget();
+                toast(result.message + " · " + surveillance.message);
+            });
         });
     }
 
@@ -1189,8 +1262,12 @@ public class MainActivity extends Activity {
         button.setForegroundGravity(Gravity.CENTER);
         button.setBackground(slotBg());
         button.setContentDescription("Abrir debug, permisos y actualizaciones");
-        StatusIconView wrench = new StatusIconView(this, StatusIconKind.DIAGNOSTIC, BLUE);
-        button.addView(wrench, frameLp(dp(34), dp(34), Gravity.CENTER));
+        ImageView settings = new ImageView(this);
+        settings.setImageResource(R.drawable.ic_menu_settings);
+        settings.setColorFilter(BLUE);
+        settings.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        settings.setContentDescription("Herramientas y actualizaciones");
+        button.addView(settings, frameLp(dp(34), dp(34), Gravity.CENTER));
         button.setOnClickListener(v -> toolsModal());
         return button;
     }
@@ -1207,7 +1284,7 @@ public class MainActivity extends Activity {
 
         Button debug = dialogButton("DEBUG / USB · LOGS Y EXPORTACIÓN");
         Button permissions = dialogButton("PERMISOS · UBICACIÓN Y MULTIMEDIA");
-        Button updates = dialogButton("ACTUALIZACIONES · VELOCIDAD, RADARES Y GASOLINERAS");
+        Button updates = dialogButton("ACTUALIZACIONES · MAPA, RADARES, INVIVE Y GASOLINERAS");
         box.addView(debug, lp(-1, dp(56)));
         box.addView(permissions, lp(-1, dp(56)));
         box.addView(updates, lp(-1, dp(56)));
@@ -1236,13 +1313,30 @@ public class MainActivity extends Activity {
         LinearLayout box = vertical();
         box.setBackgroundColor(PANEL);
         box.setPadding(dp(12), dp(8), dp(12), dp(8));
-        TextView description = txt("Gasolineras, límites y radares se leen desde su base local mientras conduces. "
-                + "Al iniciar, la radio solo comprueba actualizaciones pendientes con Internet disponible.", 12, TEXT, false);
+        TextView description = txt("Con Internet disponible, actualiza los datos y después conduce sin conexión. "
+                + "OSM se limita a Alicante para cuidar el servidor; las capas oficiales son nacionales.", 12, TEXT, false);
         description.setPadding(dp(8), dp(4), dp(8), dp(12));
         box.addView(description);
 
-        Button updateAll = dialogButton("ACTUALIZAR TODO · ALICANTE");
+        Button updateAll = dialogButton("ACTUALIZAR TODO");
         box.addView(updateAll, lp(-1, dp(56)));
+
+        TextView unitTitle = txt("ACTUALIZACIONES UNITARIAS", 11, BLUE, true);
+        unitTitle.setPadding(dp(8), dp(10), dp(8), dp(2));
+        box.addView(unitTitle, lp(-1, dp(30)));
+        LinearLayout unitGrid = new LinearLayout(this);
+        unitGrid.setOrientation(LinearLayout.HORIZONTAL);
+        Button osm = dialogButton("OSM · ALICANTE");
+        Button fuel = dialogButton("GASOLINERAS");
+        Button radar = dialogButton("RADARES DGT");
+        Button dgt = dialogButton("LÍMITES DGT");
+        Button inviveButton = dialogButton("INVIVE");
+        unitGrid.addView(osm, lp(0, dp(48), 1));
+        unitGrid.addView(fuel, lp(0, dp(48), 1));
+        unitGrid.addView(radar, lp(0, dp(48), 1));
+        unitGrid.addView(dgt, lp(0, dp(48), 1));
+        unitGrid.addView(inviveButton, lp(0, dp(48), 1));
+        box.addView(unitGrid, lp(-1, dp(48)));
 
         Switch radarVoice = new Switch(this);
         radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS DGT");
@@ -1255,12 +1349,13 @@ public class MainActivity extends Activity {
         FuelStationProvider.Snapshot fuelSnapshot = fuelStations.getSnapshot();
         TextView network = txt("Red actual: " + fuelStations.networkLabel()
                 + "\nGasolineras: " + lastUpdateText(fuelSnapshot == null ? 0L : fuelSnapshot.updatedAt)
-                + "\nLímites OSM: " + lastUpdateText(speedLimits.lastSuccessfulUpdate())
+                + "\nOSM Alicante: " + lastUpdateText(speedLimits.lastSuccessfulUpdate("ALICANTE"))
+                + "\nLímites DGT nacionales: " + lastUpdateText(dgtSpeeds == null ? 0L : dgtSpeeds.lastSuccessfulUpdate())
                 + "\nRadares DGT: " + lastRadarUpdateText()
+                + "\nZonas INVIVE: " + lastInviveUpdateText()
                 + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
                         speedLimits.automaticProvince(gps.getLastLocation()))
-                + "\nAlicante: mapa local completo (maxspeed + tipo de vía), radares DGT y precios."
-                + "\nAutomático: precios cada 10 min; límites y radares máx. una vez/24 h por provincia.",
+                + "\nAutomático: gasolineras cada 10 min; cada fuente oficial máx. una vez/24 h.",
                 10, MUTED, false);
         network.setPadding(dp(8), dp(12), dp(8), dp(10));
         box.addView(network, lp(-1, dp(112)));
@@ -1270,18 +1365,23 @@ public class MainActivity extends Activity {
                 .setView(box)
                 .setPositiveButton("CERRAR", null)
                 .create();
-        // The wrench still exposes the original diagnostic/export flow. Close this
-        // lightweight chooser before opening another dialog so no legacy action is
+        // The gear exposes the original diagnostic/export flow. Close this
+        // lightweight chooser before opening another dialog so no action is
         // hidden behind a second modal.
         updateAll.setOnClickListener(v -> {
             dialog.dismiss();
-            updateAlicanteRoadData();
+            updateAllSources();
         });
+        osm.setOnClickListener(v -> { dialog.dismiss(); updateSingleOsm(); });
+        fuel.setOnClickListener(v -> { dialog.dismiss(); updateSingleFuel(); });
+        radar.setOnClickListener(v -> { dialog.dismiss(); updateSingleRadars(); });
+        dgt.setOnClickListener(v -> { dialog.dismiss(); updateSingleDgt(); });
+        inviveButton.setOnClickListener(v -> { dialog.dismiss(); updateSingleInvive(); });
         radarVoice.setOnCheckedChangeListener((button, enabled) -> {
             uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
             toast(enabled ? "Locución activada para radares fijos DGT" : "Locución de radares desactivada");
         });
-        showSized(dialog, .60f, .62f);
+        showSized(dialog, .88f, .78f);
     }
 
     private String lastRadarUpdateText() {
@@ -1289,6 +1389,13 @@ public class MainActivity extends Activity {
         return stamp == null ? "base local instalada" : "correcta el "
                 + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(new Date(stamp.timestamp))
                 + " · " + RadarRepository.label(stamp.province);
+    }
+
+    private String lastInviveUpdateText() {
+        long timestamp = invive == null ? 0L : invive.lastSuccessfulUpdate("TODAS");
+        return timestamp <= 0L ? "base local instalada" : "correcta el "
+                + new SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(new Date(timestamp))
+                + " · España";
     }
 
     private void chooseRadarProvince() {
@@ -1312,21 +1419,202 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void updateAlicanteRoadData() {
-        if (speedLimits == null || radars == null) return;
-        if (!speedLimits.isInternetAvailable() || !radars.isInternetAvailable()) {
-            toast("La radio no tiene una conexión a Internet disponible");
+    private void updateAllSources() {
+        if (speedLimits == null || dgtSpeeds == null || radars == null || invive == null
+                || fuelStations == null) return;
+        if (!speedLimits.isInternetAvailable() && !dgtSpeeds.isInternetAvailable()
+                && !radars.isInternetAvailable() && !fuelStations.isInternetAvailable()) {
+            toast("No hay una conexión a Internet validada");
             return;
         }
-        toast("Actualizando Alicante: mapa vial, radares y precios en segundo plano");
-        fuelStations.forceRefresh();
-        speedLimits.refreshFromInternet(gps.getLastLocation(), "ALICANTE", limits -> {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{
+                "OSM · Alicante", "Gasolineras", "Radares DGT", "Límites DGT nacionales",
+                "INVIVE nacional", "Consolidación local"});
+        progress.show();
+        progress.startStep(0, "Descargando y consolidando OSM de Alicante…");
+        speedLimits.refreshFromInternet(gps == null ? null : gps.getLastLocation(), "ALICANTE", osm -> {
+            progress.finishStep(0, osm.success, osm.message);
             refreshSpeedLimitWidget();
-            radars.refreshFromInternet("ALICANTE", radar -> {
-                refreshRadarWidget();
-                toast("Alicante: " + limits.message + " · " + radar.message + " · precios solicitados");
+            progress.startStep(1, "Descargando precios y cobertura de gasolineras…");
+            FuelStationProvider.Snapshot beforeFuel = fuelStations.getSnapshot();
+            long beforeFuelUpdate = beforeFuel == null ? 0L : beforeFuel.updatedAt;
+            fuelStations.forceRefresh(() -> {
+                FuelStationProvider.Snapshot snapshot = fuelStations.getSnapshot();
+                boolean ok = snapshot != null && snapshot.updatedAt > beforeFuelUpdate
+                        && !snapshot.loading && !safeLower(snapshot.message).contains("sin internet");
+                progress.finishStep(1, ok, ok ? "Precios descargados e instalados" :
+                        "Sin descarga nueva; se conserva la caché");
+                progress.startStep(2, "Descargando inventario nacional de radares DGT…");
+                radars.refreshNationalFromInternet(radar -> {
+                    progress.finishStep(2, radar.success, radar.message);
+                    refreshRadarWidget();
+                    progress.startStep(3, "Aplicando cambios nacionales de límites DGT…");
+                    dgtSpeeds.refreshFromInternet(dgt -> {
+                        progress.finishStep(3, dgt.success, dgt.message);
+                        refreshSpeedLimitWidget();
+                        progress.startStep(4, "Descargando zonas INVIVE nacionales…");
+                        invive.refreshNationalFromInternet(surveillance -> {
+                            progress.finishStep(4, surveillance.success, surveillance.message);
+                            refreshRadarWidget();
+                            progress.startStep(5, "Verificando índices y datos locales…");
+                            progress.finishStep(5, true, "Fuentes consolidadas y listas para usar sin conexión");
+                            progress.complete();
+                        });
+                    });
+                });
             });
         });
+    }
+
+    private void updateSingleOsm() {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{"OSM · Alicante"});
+        progress.show(); progress.startStep(0, "Descargando mapa vial parcial de Alicante…");
+        speedLimits.refreshFromInternet(gps == null ? null : gps.getLastLocation(), "ALICANTE", result -> {
+            progress.finishStep(0, result.success, result.message);
+            refreshSpeedLimitWidget(); progress.complete();
+        });
+    }
+
+    private void updateSingleFuel() {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{"Gasolineras"});
+        progress.show(); progress.startStep(0, "Descargando cobertura y precios…");
+        FuelStationProvider.Snapshot before = fuelStations.getSnapshot();
+        long beforeUpdate = before == null ? 0L : before.updatedAt;
+        fuelStations.forceRefresh(() -> {
+            FuelStationProvider.Snapshot snapshot = fuelStations.getSnapshot();
+            boolean ok = snapshot != null && snapshot.updatedAt > beforeUpdate
+                    && !snapshot.loading && !safeLower(snapshot.message).contains("sin internet");
+            progress.finishStep(0, ok, ok ? "Precios descargados e instalados" :
+                    "Sin descarga nueva; se conserva la caché");
+            progress.complete();
+        });
+    }
+
+    private void updateSingleRadars() {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{"Radares DGT nacionales"});
+        progress.show(); progress.startStep(0, "Descargando inventario nacional…");
+        radars.refreshNationalFromInternet(result -> { progress.finishStep(0, result.success, result.message); refreshRadarWidget(); progress.complete(); });
+    }
+
+    private void updateSingleDgt() {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{"Límites DGT nacionales"});
+        progress.show(); progress.startStep(0, "Descargando delta semanal nacional…");
+        dgtSpeeds.refreshFromInternet(result -> { progress.finishStep(0, result.success, result.message); refreshSpeedLimitWidget(); progress.complete(); });
+    }
+
+    private void updateSingleInvive() {
+        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{"INVIVE nacional"});
+        progress.show(); progress.startStep(0, "Descargando zonas de vigilancia…");
+        invive.refreshNationalFromInternet(result -> { progress.finishStep(0, result.success, result.message); refreshRadarWidget(); progress.complete(); });
+    }
+
+    /** Lightweight, readable progress modal suitable for the 1280x720 head unit. */
+    private final class UpdatesProgressDialog {
+        private final String[] labels;
+        private final ProgressBar[] bars;
+        private final TextView[] states;
+        private final AlertDialog dialog;
+        private final ProgressBar overall;
+        private final TextView overallLabel;
+        private int completed;
+        private boolean hasWarnings;
+
+        UpdatesProgressDialog(String[] labels) {
+            this.labels = labels;
+            bars = new ProgressBar[labels.length];
+            states = new TextView[labels.length];
+            LinearLayout box = vertical();
+            box.setBackgroundColor(PANEL);
+            box.setPadding(dp(14), dp(10), dp(14), dp(8));
+            overallLabel = txt("Preparando…", 12, TEXT, true);
+            overallLabel.setPadding(dp(4), 0, dp(4), dp(6));
+            box.addView(overallLabel, lp(-1, dp(30)));
+            overall = new ProgressBar(MainActivity.this, null,
+                    android.R.attr.progressBarStyleHorizontal);
+            overall.setMax(100); overall.setProgress(0);
+            box.addView(overall, lp(-1, dp(12)));
+            for (int i = 0; i < labels.length; i++) addRow(box, i, labels[i]);
+            TextView note = txt("La actualización no modifica CAN, MCU ni ajustes OEM.", 10, MUTED, false);
+            note.setPadding(dp(4), dp(8), dp(4), 0);
+            box.addView(note, lp(-1, dp(28)));
+            dialog = new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Actualizando datos")
+                    .setView(box)
+                    .setPositiveButton("OK", null)
+                    .create();
+        }
+
+        private void addRow(LinearLayout box, int index, String label) {
+            LinearLayout row = vertical();
+            row.setPadding(dp(4), dp(4), dp(4), dp(3));
+            TextView title = txt(label, 11, BLUE, true);
+            title.setSingleLine(true);
+            row.addView(title, lp(-1, dp(22)));
+            LinearLayout statusLine = horizontal();
+            bars[index] = new ProgressBar(MainActivity.this, null,
+                    android.R.attr.progressBarStyleHorizontal);
+            bars[index].setMax(100); bars[index].setProgress(0);
+            statusLine.addView(bars[index], lp(0, dp(9), 1));
+            states[index] = txt("Pendiente", 10, MUTED, false);
+            states[index].setSingleLine(true);
+            states[index].setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+            statusLine.addView(states[index], lp(dp(225), dp(22)));
+            row.addView(statusLine, lp(-1, dp(23)));
+            box.addView(row, lp(-1, dp(52)));
+        }
+
+        void show() {
+            dialog.show();
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+            showSized(dialog, .78f, Math.min(.88f, .24f + labels.length * .105f));
+        }
+
+        void startStep(int index, String message) {
+            if (index < 0 || index >= bars.length) return;
+            bars[index].setIndeterminate(true);
+            states[index].setText("En curso");
+            states[index].setTextColor(BLUE);
+            overallLabel.setText((index + 1) + "/" + labels.length + " · " + message);
+        }
+
+        void finishStep(int index, boolean success, String message) {
+            if (index < 0 || index >= bars.length) return;
+            bars[index].setIndeterminate(false);
+            bars[index].setProgress(100);
+            boolean expectedSkip = !success && isExpectedSkip(message);
+            boolean accepted = success || expectedSkip;
+            states[index].setText(accepted ? "OK · " + compactUpdateMessage(message) : "Aviso · "
+                    + compactUpdateMessage(message));
+            states[index].setTextColor(accepted ? Color.rgb(79, 205, 132) : ACCENT);
+            hasWarnings |= !accepted;
+            completed = Math.max(completed, index + 1);
+            overall.setProgress(Math.round(completed * 100f / labels.length));
+            overallLabel.setText(completed + "/" + labels.length + " completadas");
+        }
+
+        void complete() {
+            overall.setProgress(100);
+            overallLabel.setText(hasWarnings ? "Terminada con avisos · revisa las filas" : "Actualización terminada · OK");
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+        }
+
+        private boolean isExpectedSkip(String message) {
+            if (message == null) return false;
+            String lower = message.toLowerCase(Locale.ROOT);
+            return lower.contains("menos de 24 h") || lower.contains("sin cambios")
+                    || lower.contains("se conserva la caché") || lower.contains("ya está vigente");
+        }
+
+        private String compactUpdateMessage(String message) {
+            if (message == null || message.trim().isEmpty()) return "sin detalle";
+            String compact = message.replace("Android no publica una conexión a Internet utilizable", "sin Internet")
+                    .replace("correctamente hace menos de 24 h", "<24 h");
+            return compact.length() <= 54 ? compact : compact.substring(0, 51) + "…";
+        }
+    }
+
+    private static String safeLower(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     private String lastUpdateText(long timestamp) {
@@ -2391,6 +2679,8 @@ public class MainActivity extends Activity {
                 + "SpeedPlay exportado no publica un Intent o comando verificable para enviar destinos "
                 + "a la proyección Android Auto; no se transmite ningún protocolo supuesto.\n"
                 + "\n" + speedLimits.diagnostic()
+                + "\n" + dgtSpeeds.diagnostic()
+                + "\n" + invive.diagnostic()
                 + "\nREGISTRO DE LA SESIÓN ACTUAL\n\n" + AppSessionLog.read();
     }
 
@@ -2735,6 +3025,76 @@ public class MainActivity extends Activity {
             canvas.drawText(label, cx,
                     cy - (paint.ascent() + paint.descent()) / 2f, paint);
             paint.setTypeface(Typeface.DEFAULT);
+        }
+    }
+
+    /** INVIVE is intentionally rendered without a radar pictogram, speed sign or spoken warning. */
+    private static final class InviveNoticeView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final int foreground, blue, muted, accent;
+        private InviveRepository.Alert alert;
+
+        InviveNoticeView(Context context, int foreground, int blue, int muted, int accent) {
+            super(context);
+            this.foreground = foreground;
+            this.blue = blue;
+            this.muted = muted;
+            this.accent = accent;
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+
+        void setAlert(InviveRepository.Alert alert) {
+            this.alert = alert;
+            setContentDescription(alert == null ? "Sin zona INVIVE próxima"
+                    : (alert.inside ? "Dentro de zona de vigilancia INVIVE en "
+                    : "Aproximándose a zona de vigilancia INVIVE en ") + alert.road);
+            invalidate();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (alert == null) return;
+            float w = getWidth();
+            float h = getHeight();
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(4, 18, 32));
+            canvas.drawRoundRect(new RectF(3, 3, w - 3, h - 3), 14, 14, paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            paint.setColor(alert.inside ? accent : blue);
+            canvas.drawRoundRect(new RectF(3, 3, w - 3, h - 3), 14, 14, paint);
+
+            // Shield/road-control glyph: distinct from the fixed-camera sign.
+            float cx = 57f;
+            float cy = h * .52f;
+            paint.setStrokeWidth(5f);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(alert.inside ? accent : blue);
+            canvas.drawArc(new RectF(cx - 27, cy - 30, cx + 27, cy + 30), 205, 130, false, paint);
+            canvas.drawLine(cx - 22, cy + 18, cx, cy + 34, paint);
+            canvas.drawLine(cx + 22, cy + 18, cx, cy + 34, paint);
+            canvas.drawLine(cx - 9, cy - 8, cx - 9, cy + 11, paint);
+            canvas.drawLine(cx + 9, cy - 8, cx + 9, cy + 11, paint);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawCircle(cx - 9, cy - 17, 4, paint);
+            canvas.drawCircle(cx + 9, cy - 17, 4, paint);
+
+            float left = 105f;
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextSize(23f);
+            paint.setColor(alert.inside ? accent : blue);
+            canvas.drawText("ZONA DE VIGILANCIA", left, h * .31f, paint);
+            paint.setTextSize(19f);
+            paint.setColor(foreground);
+            canvas.drawText(alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road,
+                    left, h * .58f, paint);
+            paint.setTypeface(Typeface.DEFAULT);
+            paint.setTextSize(15f);
+            paint.setColor(muted);
+            String state = alert.inside ? "DENTRO DEL TRAMO · INVIVE DGT"
+                    : String.format(Locale.getDefault(), "A %.0f m · ACERCÁNDOSE · INVIVE DGT",
+                            alert.distanceMeters);
+            canvas.drawText(state, left, h * .81f, paint);
         }
     }
 

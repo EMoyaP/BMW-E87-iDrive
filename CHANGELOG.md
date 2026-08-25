@@ -1,5 +1,93 @@
 # CHANGELOG
 
+## 1.24.2 — 25/08/2026
+
+- Corrige el lector de la semilla local de respaldo de radares DGT: acepta tanto TSV
+  real como el separador literal de versiones antiguas. La base nacional incluida sigue
+  siendo prioritaria; el cambio garantiza que Alicante conserva radares fijos offline
+  incluso en compilaciones sin el recurso nacional generado.
+- El verificador de rutas de QA acepta rutas GeoJSON/OSRM y mantiene nombres Unicode
+  legibles en la consola de preparación de la APK.
+
+## 1.24.1 — 25/08/2026
+
+- Corrige la cadencia del algoritmo de límites cuando Android no publica `Location.speed`: reutiliza durante un máximo de 10 segundos la velocidad GPS que la app ya ha calculado entre posiciones, siempre que el nuevo punto esté a menos de 200 m. Así un desplazamiento real no se trata erróneamente como vehículo detenido; no altera ni inventa datos CAN.
+
+## 1.24.0 — 24/08/2026
+
+- Añadido matching local por trayectoria: con el vehículo detenido se conserva el tramo
+  confirmado; en movimiento un tramo alternativo debe ser claramente mejor o persistir en dos
+  lecturas antes de sustituirlo.
+- Las vías OSM `unclassified` sin referencia se muestran como recomendación urbana S-7 de
+  30 km/h, en azul y sin carácter de límite legal. Los límites DGT/OSM y los tramos físicos
+  verificados conservan siempre prioridad.
+- El replay de la ruta de Alicante refleja la recomendación contextual para QA offline.
+
+## 1.23.0 — 24/08/2026
+
+- El centro de Actualizaciones ahora ofrece **ACTUALIZAR TODO** con una fila de progreso para
+  OSM Alicante, gasolineras, radares DGT, límites DGT e INVIVE, más una fase explícita de
+  consolidación local y un resultado final `OK` o `Aviso`.
+- Se mantienen botones unitarios para cada fuente y se muestra la fecha/hora de la última descarga
+  correcta. OSM conserva el alcance provincial y su protección anti-bloqueo; las publicaciones
+  oficiales DGT se descargan completas a escala nacional y cada fuente respeta su ventana de 24 h.
+- La detección de red para gasolineras reconoce también una interfaz IP Bluetooth PAN si Android la
+  publica. La caché antigua ya no se cuenta como descarga correcta en el resultado del modal.
+- Se añade la capa DGT nacional de límites TN-ITS semanal, con historial de cambios, geometría
+  inferida UTM30 corregida y selección por carretera, proximidad y sentido antes de OSM.
+- El acceso de la esquina inferior derecha usa una rueda dentada y conserva Debug/USB, Permisos y
+  Actualizaciones sin cambiar el launcher, CANBUS, MCU, PDC, cámara, climatización ni funciones OEM.
+
+## 1.21.0 — 24/08/2026
+
+- Se incorpora el inventario oficial **INVIVE** de la DGT como base local de zonas donde se
+  intensifica la vigilancia de velocidad. Se muestra como `ZONA DE VIGILANCIA`, nunca como
+  radar fijo, y no activa la locución de radares ni inventa un límite de velocidad.
+- La APK incluye el inventario nacional DATEX II en la instalación y conserva una pequeña
+  semilla de Alicante como respaldo de compilación. Las actualizaciones son transaccionales,
+  provinciales y respetan el intervalo de 24 horas ya utilizado por las demás bases.
+- La detección combina los extremos oficiales del tramo INVIVE con la carretera local OSM y el
+  rumbo GPS. Los radares fijos o de tramo conservan prioridad visual sobre una zona INVIVE.
+- El mapa local de Alicante pasa al esquema v4 e incorpora la referencia de carretera (`ref`)
+  para evitar asociar una zona INVIVE a una vía paralela solo por proximidad.
+- El menú de Actualizaciones y el diagnóstico informan por separado del estado y la fecha de
+  INVIVE. La integración es de solo lectura y no modifica CANBUS, MCU ni servicios OEM.
+
+## 1.20.0 — 24/08/2026
+
+- Alicante se entrega completamente precargado para la primera ejecución: 112.709 geometrías
+  transitables OSM, límites genéricos y 89 vías con `maxspeed:forward/backward`, inventario
+  nacional de radares fijos/tramo DGT y una instantánea oficial de precios de diésel fechada.
+- La identificación de carretera y la calidad del dato son dos fases independientes. Primero se
+  elige el tramo por distancia al segmento, rumbo y continuidad; solo después se resuelve señal
+  verificada, `maxspeed` por sentido, `maxspeed` genérico o recomendación azul por clase.
+- Las señales físicas verificadas durante la ruta de pruebas se aplican por vía, sentido y zona;
+  nunca atraen la posición hacia una carretera paralela ni se muestran en sentido contrario.
+- El caché de gasolineras cambia de versión para que una actualización de APK descarte datos
+  binarios antiguos y arranque desde la semilla oficial incluida, incluso sin Internet.
+- `ACTUALIZAR TODO · ALICANTE` puede actualizar el mapa provincial sin esperar una posición GPS;
+  conserva el límite de una actualización correcta cada 24 h y encadena radares y precios.
+- Una descarga provincial antigua se rechaza antes de sustituir el mapa local si no contiene el
+  esquema direccional v3, evitando degradar silenciosamente la base incluida.
+
+## 1.19.0 — 24/08/2026
+
+- La selección local de vía combina distancia, rumbo de marcha y continuidad con el tramo
+  anterior. En vías paralelas y cruces, un `maxspeed` explícito solo prevalece si su trazado es
+  compatible con la dirección real del vehículo.
+- Parado se conserva el último tramo confirmado durante la marcha; al arrancar sin historial se
+  utiliza exclusivamente la cercanía. Un pequeño desplazamiento del GPS ya no cambia de calle.
+- La frecuencia de consulta se adapta a la velocidad: 5 s parado y progresivamente hasta 350 ms
+  a partir de 100 km/h, siempre limitada por la frecuencia física que publique el receptor GPS.
+- El GPS solicita hasta 2 Hz cuando el hardware lo permite. La consulta sigue siendo local y no
+  necesita Internet durante la conducción.
+- Se evita registrar dos veces los listeners GPS, se agrupan redibujos CAN/GPS y se muestrean las
+  trazas CAN repetitivas para reducir CPU, memoria y tamaño del log sin perder cambios reales.
+- Las actualizaciones automáticas de mapas y radares esperan una conexión Android validada; las
+  manuales conservan el intento sobre conexiones PAN publicadas por la unidad.
+- Nuevas pruebas cubren rumbo bidireccional, cruces, vías perpendiculares, continuidad al detenerse
+  y cadencia adaptativa por velocidad.
+
 ## 1.18.1 — 23/08/2026
 
 - El ordenador de a bordo muestra la unidad detrás de la cifra grande: `772 km`,
