@@ -386,14 +386,22 @@ public final class UsbDiagnosticRecorder {
     }
 
     private String writeRuntimeLog(Uri directory, String timestamp) {
-        String runtime = AppSessionLog.read();
-        if (runtime.isEmpty()) return "";
-        String filename = "e87_runtime_session_" + timestamp + ".log";
+        java.util.List<File> parts = AppSessionLog.sessionFiles();
+        if (parts.isEmpty()) return "";
+        int exported = 0;
         try {
-            Uri document = createDocument(directory, "text/plain", filename);
-            if (document == null) return "";
-            writeDocument(document, runtime);
-            return filename;
+            for (int index = 0; index < parts.size(); index++) {
+                String runtime = AppSessionLog.readFile(parts.get(index));
+                if (runtime.isEmpty()) continue;
+                String filename = "e87_runtime_session_" + timestamp + "_"
+                        + String.format(Locale.ROOT, "%02d", index + 1) + ".log";
+                Uri document = createDocument(directory, "text/plain", filename);
+                if (document == null) throw new IllegalStateException("No se creó " + filename);
+                writeDocument(document, runtime);
+                exported++;
+            }
+            return exported == 0 ? "" : exported == 1
+                    ? "registro de sesión" : exported + " registros de sesión";
         } catch (Exception error) {
             AppSessionLog.event("USB", "No se pudo exportar el registro de sesión: "
                     + shortError(error));

@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## 1.25.1 — 27/08/2026
+
+- La capa complementaria de 1.297 radares fijos españoles `TYPE=1` queda exclusivamente como
+  semilla local empaquetada. Se elimina de la radio toda descarga, release de GitHub, control de
+  actualización y credencial relacionada con Lufop/RadarDroid.
+- Al actualizar desde una versión anterior, la semilla estática sustituye una posible caché
+  complementaria descargada previamente. DGT sigue siendo prioritaria ante coincidencias.
+- Los radares fijos exclusivos de la semilla complementaria usan la misma locución opcional y los
+  mismos recordatorios que un fijo DGT. Los móviles, semáforos, zonas y extremos de tramo siguen
+  excluidos.
+- `Actualizar todo` conserva OSM Alicante, gasolineras, radares DGT, límites DGT e INVIVE; no añade
+  ninguna dependencia nueva de terceros.
+
+## 1.25.0 — 27/08/2026
+
+- Se añade una segunda capa local de **radares fijos españoles Lufop/RadarDroid**. La APK incluye
+  una semilla procesada de 1.297 puntos `TYPE=1` para funcionar recién instalada y puede renovarla
+  desde el release público `radar-data-current` del repositorio. Antes de reemplazar la caché se
+  valida país, esquema, recuento y SHA-256; si falla, se conserva la base ya instalada.
+- DGT sigue siendo la fuente prioritaria de radares fijos y de tramo. Lufop es un complemento
+  visual de fijos: excluye móviles, semáforos, zonas y extremos de tramo, y no activa la locución
+  reservada a radares fijos DGT.
+- Actualizaciones incorpora una fila y botón independiente **RADARES LUFOP**. `ACTUALIZAR TODO`
+  muestra su progreso, conserva las ventanas de 24 horas y no envía contraseñas, tokens ni APIs a
+  la radio.
+- Se incorpora `tools/radar-data-publisher`, una herramienta Windows portable con interfaz local,
+  secretos DPAPI, importación manual autorizada, comprobación diaria de fecha pública y tareas
+  opcionales al iniciar sesión y a las 00:00. Publica únicamente los dos assets verificados para
+  que la radio los descargue sin conocer ninguna credencial.
+
+## 1.24.4 — 27/08/2026
+
+- Los radares **fijos** DGT incorporan un margen global de paso de ±100 m: la detección puede
+  empezar 100 m antes y la tarjeta permanece como máximo 100 m después de cruzar el punto DGT
+  confirmado. La cifra de distancia se conserva sin desplazamientos artificiales; se evita así
+  convertir una coordenada DGT correcta en un error de 100 m.
+- La locución local de radar fijo mantiene el aviso inicial y añade un único recordatorio al
+  alcanzar 300 m. Ambos usan los OGG pre-renderizados ya incluidos y solicitan foco transitorio
+  Android `MAY_DUCK`; no intervienen CAN, UART, MCU, Bluetooth OEM ni Android Auto.
+- El registro de ejecución diferencia aviso inicial y recordatorio de 300 m para validar la
+  secuencia en la radio física.
+
 ## 1.24.2 — 25/08/2026
 
 - Corrige el lector de la semilla local de respaldo de radares DGT: acepta tanto TSV

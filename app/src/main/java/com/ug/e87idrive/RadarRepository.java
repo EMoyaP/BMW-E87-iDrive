@@ -27,6 +27,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Offline alert cache for DGT fixed and average-speed cameras.
@@ -40,11 +41,28 @@ final class RadarRepository {
     private static final String TAG = "RADARES DGT";
     private static final String DGT_ENDPOINT =
             "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml";
+    private static final String SOURCE_DGT = "DGT";
+    private static final String SOURCE_LUFOP = "LUFOP";
+    /** Versioned so an upgrade replaces any legacy downloaded supplemental cache with the APK seed. */
+    private static final String SUPPLEMENTAL_SEED_REVISION = "20260827-type1-1297";
     private static final long REFRESH_INTERVAL_MS = 24L * 60L * 60L * 1_000L;
     private static final long RETRY_INTERVAL_MS = 30L * 60L * 1_000L;
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-    private static final int MAX_LOOKUP_METERS = 1_250;
+    private static final int MAX_LOOKUP_METERS = 2_300;
     private static final float MAX_GPS_ACCURACY_METERS = 35f;
+    private static final long TRAJECTORY_WINDOW_MS = 25_000L;
+    private static final double HEADING_TOLERANCE_DEGREES = 55d;
+    /**
+     * The DGT point is a reference position, not a surveyed vehicle-facing cabinet location.
+     * Keep a small, symmetric driving margin for every fixed camera: lookup begins 100 m
+     * earlier and the dashboard remains visible for 100 m after crossing the published point.
+     * The displayed distance remains the DGT distance; a global coordinate shift would make
+     * accurately georeferenced cameras wrong. The margin is deliberately not used for section
+     * cameras, whose reference geometry has a different meaning.
+     */
+    private static final double FIXED_CAMERA_POSITION_TOLERANCE_METERS = 100d;
+    /** DGT wins over a supplemental record that likely describes the same installation. */
+    private static final double DGT_SUPPLEMENTAL_SAME_CAMERA_METERS = 120d;
 
     private final Context context;
     private final ConnectivityManager connectivity;
@@ -58,10 +76,17 @@ final class RadarRepository {
     private volatile Location lastLocation;
     private volatile String lastResult = "Base local de Alicante pendiente";
     private volatile String seedStatus = "Pendiente";
+    private volatile String supplementalSeedStatus = "Pendiente";
     private String trackedId;
     private double trackedDistance = Double.NaN;
     private String suppressedId;
     private double suppressedDistance = Double.NaN;
+    private String candidateId;
+    private double candidateDistance = Double.NaN;
+    private Location candidateLocation;
+    private long candidateAt;
+    /** Camera whose ±100 m passage window was entered while trajectory was confirmed. */
+    private String fixedCameraPassageId;
     private boolean networkCallbackRegistered;
 
     private final ConnectivityManager.NetworkCallback networkCallback =
@@ -105,7 +130,11 @@ final class RadarRepository {
         autoRefreshIfNeeded();
     }
 
-    /** Returns an alert only while the car is approaching/near a fixed or section camera. */
+    /**
+     * Returns a local warning only when proximity is corroborated by the current heading or a
+     * short sequence of GPS fixes getting closer. A DGT camera point alone does not identify a
+     * carriageway, so geographic proximity without trajectory evidence is deliberately omitted.
+     */
     Alert alert(Location location, Double speedKmh) {
         if (location == null || (location.hasAccuracy() && location.getAccuracy() > MAX_GPS_ACCURACY_METERS)) {
             clearTracking();
@@ -118,6 +147,34 @@ final class RadarRepository {
             return null;
         }
         double tolerance = Math.max(14d, location.hasAccuracy() ? location.getAccuracy() : 14d);
+        DirectionEvidence evidence = directionEvidence(location, record, speedKmh, tolerance);
+        rememberCandidate(location, record);
+        boolean fixedCameraPassage = isFixedCameraPassage(record, tolerance);
+        if (evidence.opening) {
+            if (fixedCameraPassage) {
+                // A fixed camera remains visible for the symmetric post-point margin after a
+                // confirmed approach. This prevents GPS/reference-point differences from
+                // hiding it just before the driver has actually passed the installation.
+                trackedId = record.id;
+                trackedDistance = record.distanceMeters;
+                return alertFor(record, false, true);
+            }
+            suppressedId = record.id;
+            suppressedDistance = record.distanceMeters;
+            trackedId = null;
+            trackedDistance = Double.NaN;
+            AppSessionLog.sampledEvent("radar-opening-" + record.id, TAG,
+                    "Candidato descartado al alejarse · " + record.road + " · "
+                            + Math.round(record.distanceMeters) + " m · " + evidence.detail, 5_000L);
+            return null;
+        }
+        if (!evidence.confirmed && !fixedCameraPassage) {
+            AppSessionLog.sampledEvent("radar-unconfirmed-" + record.id, TAG,
+                    "Candidato sin alerta: proximidad sin rumbo/trayectoria confirmados · "
+                            + record.road + " · " + Math.round(record.distanceMeters) + " m · "
+                            + evidence.detail, 5_000L);
+            return null;
+        }
         if (record.id.equals(suppressedId)) {
             // Once the distance is clearly increasing, do not re-show the same alert merely
             // because a later GPS fix jitters by a few metres. It can reappear after a genuine
@@ -132,6 +189,10 @@ final class RadarRepository {
         boolean approaching = false;
         if (record.id.equals(trackedId) && Double.isFinite(trackedDistance)) {
             if (record.distanceMeters > trackedDistance + tolerance) {
+                if (fixedCameraPassage) {
+                    trackedDistance = record.distanceMeters;
+                    return alertFor(record, false, true);
+                }
                 suppressedId = record.id;
                 suppressedDistance = record.distanceMeters;
                 trackedId = null;
@@ -142,8 +203,12 @@ final class RadarRepository {
         }
         trackedId = record.id;
         trackedDistance = record.distanceMeters;
-        return new Alert(record.id, record.type, record.road, record.direction,
-                record.distanceMeters, record.province, approaching, record.updatedAt);
+        if (isFixedCameraWithinTolerance(record) && !record.id.equals(fixedCameraPassageId)) {
+            fixedCameraPassageId = record.id;
+            AppSessionLog.event(TAG, "Margen global ±100 m activado · " + record.road
+                    + " · punto DGT conservado");
+        }
+        return alertFor(record, approaching, false);
     }
 
     void refreshFromInternet(String province, UpdateCallback callback) {
@@ -192,8 +257,8 @@ final class RadarRepository {
                 }
                 if (records.isEmpty()) throw new IOException("La DGT no publicó fijos/tramo para " + label(selected));
                 int imported = national
-                        ? database.replaceAll(records, System.currentTimeMillis())
-                        : database.replaceProvince(selected, records, System.currentTimeMillis());
+                        ? database.replaceDgtAll(records, System.currentTimeMillis())
+                        : database.replaceDgtProvince(selected, records, System.currentTimeMillis());
                 preferences.edit().putLong(successKey(selected), System.currentTimeMillis()).apply();
                 lastResult = imported + " radares fijos/tramo guardados · " + label(selected) + " · DGT";
                 AppSessionLog.event(TAG, "Actualización correcta · " + lastResult);
@@ -209,6 +274,59 @@ final class RadarRepository {
         }, "e87-dgt-radar-update");
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
+    }
+
+    private void seedLufopFromAssets() {
+        if (SUPPLEMENTAL_SEED_REVISION.equals(preferences.getString("supplemental_seed_revision", ""))
+                && database.countBySource(SOURCE_LUFOP) > 0) {
+            supplementalSeedStatus = "Base complementaria local existente";
+            return;
+        }
+        // AAPT strips a trailing .gz extension from an asset path. Keep the internal source name
+        // neutral while retaining gzip content so the checked package path is stable on Android.
+        try (InputStream raw = context.getAssets().open("e87_lufop_radars_es.dat");
+             GZIPInputStream gzip = new GZIPInputStream(raw)) {
+            ArrayList<RawRecord> records = parseLufop(gzip);
+            int imported = database.replaceSource(SOURCE_LUFOP, records, System.currentTimeMillis());
+            preferences.edit()
+                    .putString("supplemental_seed_revision", SUPPLEMENTAL_SEED_REVISION)
+                    .remove("last_lufop_success")
+                    .apply();
+            supplementalSeedStatus = imported + " fijos España · semilla complementaria estática";
+            AppSessionLog.event(TAG, "Semilla complementaria local lista · " + supplementalSeedStatus);
+        } catch (Exception error) {
+            supplementalSeedStatus = "No incluida: " + error.getClass().getSimpleName();
+            AppSessionLog.event(TAG, "Semilla complementaria no disponible · " + error.getMessage());
+        }
+    }
+
+    private static ArrayList<RawRecord> parseLufop(InputStream input) throws IOException {
+        ArrayList<RawRecord> result = new ArrayList<>();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty() || line.charAt(0) == '#') continue;
+                String[] row = line.split("\\t", 6);
+                if (row.length < 6 || !row[0].startsWith("LUFOP-") || !"FIJO".equals(row[1])) continue;
+                if (!validGeometry(row[4])) continue;
+                result.add(new RawRecord(row[0], row[1], row[2], row[3], row[4], "ESPANA", SOURCE_LUFOP));
+            }
+        }
+        return result;
+    }
+
+    private static boolean validGeometry(String points) {
+        if (points == null || points.isEmpty()) return false;
+        for (String point : points.split(";")) {
+            String[] pair = point.split(",", 2);
+            if (pair.length != 2) return false;
+            try {
+                double latitude = Double.parseDouble(pair[0]);
+                double longitude = Double.parseDouble(pair[1]);
+                if (Math.abs(latitude) > 90d || Math.abs(longitude) > 180d) return false;
+            } catch (Exception ignored) { return false; }
+        }
+        return true;
     }
 
     boolean isInternetAvailable() { return availableNetwork() != null; }
@@ -237,11 +355,13 @@ final class RadarRepository {
     }
 
     String diagnostic() {
-        return "RADARES DGT LOCALES\n"
-                + "registros=" + database.count() + "\n"
-                + "semilla=" + seedStatus + "\n"
+        return "RADARES LOCALES\n"
+                + "DGT=" + database.countBySource(SOURCE_DGT) + " · semilla=" + seedStatus + "\n"
+                + "Complemento estático=" + database.countBySource(SOURCE_LUFOP)
+                + " · semilla=" + supplementalSeedStatus + "\n"
                 + "última actualización=" + lastResult + "\n"
                 + "fuente=" + DGT_ENDPOINT + "\n"
+                + "complemento=Lufop/RadarDroid TYPE=1 · local, sin descarga\n"
                 + "solo=fijos y tramo; móviles excluidos\n"
                 + "lectura=en local durante la marcha; feed nacional; actualización máx. una vez/24 h\n";
     }
@@ -270,29 +390,32 @@ final class RadarRepository {
         long now = System.currentTimeMillis();
         if (now - lastAutomaticAttempt < RETRY_INTERVAL_MS) return;
         if (lastNationalSuccessfulUpdate() > 0L
-                && now - lastNationalSuccessfulUpdate() < REFRESH_INTERVAL_MS) return;
+                && now - lastNationalSuccessfulUpdate() < REFRESH_INTERVAL_MS) {
+            return;
+        }
         lastAutomaticAttempt = now;
         AppSessionLog.event(TAG, "Comprobación automática al iniciar · inventario nacional");
-        refreshFromInternet("TODAS", result -> AppSessionLog.event(TAG,
-                "Actualización automática " + (result.success ? "correcta" : "omitida/fallida")
-                        + " · " + result.message), true);
+        refreshFromInternet("TODAS", result -> {
+            AppSessionLog.event(TAG, "Actualización automática "
+                    + (result.success ? "correcta" : "omitida/fallida") + " · " + result.message);
+        }, true);
     }
 
     private void seedFromAssetsAsync() {
         Thread worker = new Thread(() -> {
-            if (database.count() > 0) {
-                seedStatus = "Base local existente";
-                return;
+            if (database.countBySource(SOURCE_DGT) > 0) seedStatus = "Base local existente";
+            else {
+                try (InputStream allSpain = context.getAssets().open("e87_dgt_radars_spain.xml")) {
+                    ArrayList<RawRecord> records = parseDgt(allSpain, "TODAS");
+                    int imported = database.replaceDgtAll(records, System.currentTimeMillis());
+                    seedStatus = imported + " fijos/tramo DGT nacionales";
+                    lastResult = "Base nacional inicial: " + seedStatus;
+                    AppSessionLog.event(TAG, "Semilla nacional local lista · " + lastResult);
+                } catch (Exception allSpainUnavailable) {
+                    seedAlicanteFallback(allSpainUnavailable);
+                }
             }
-            try (InputStream allSpain = context.getAssets().open("e87_dgt_radars_spain.xml")) {
-                ArrayList<RawRecord> records = parseDgt(allSpain, "TODAS");
-                int imported = database.replaceAll(records, System.currentTimeMillis());
-                seedStatus = imported + " fijos/tramo DGT nacionales";
-                lastResult = "Base nacional inicial: " + seedStatus;
-                AppSessionLog.event(TAG, "Semilla nacional local lista · " + lastResult);
-            } catch (Exception allSpainUnavailable) {
-                seedAlicanteFallback(allSpainUnavailable);
-            }
+            seedLufopFromAssets();
         }, "e87-dgt-radar-seed");
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
@@ -316,7 +439,7 @@ final class RadarRepository {
                     if (row.length < 5) continue;
                     records.add(new RawRecord(row[0], row[1], row[2], row[3], row[4], "ALICANTE"));
                 }
-                int imported = database.replaceProvince("ALICANTE", records, System.currentTimeMillis());
+                int imported = database.replaceDgtProvince("ALICANTE", records, System.currentTimeMillis());
                 seedStatus = imported + " fijos DGT de Alicante";
                 lastResult = "Base inicial: " + seedStatus;
                 AppSessionLog.event(TAG, "Semilla local lista · " + lastResult);
@@ -384,12 +507,124 @@ final class RadarRepository {
         trackedDistance = Double.NaN;
         suppressedId = null;
         suppressedDistance = Double.NaN;
+        candidateId = null;
+        candidateDistance = Double.NaN;
+        candidateLocation = null;
+        candidateAt = 0L;
+        fixedCameraPassageId = null;
     }
 
     private static int alertDistanceMeters(Double speedKmh) {
         double speed = speedKmh == null || !Double.isFinite(speedKmh) ? 0d : Math.max(0d, speedKmh);
-        // Around 30 seconds of warning, bounded for urban use and GPS precision.
-        return (int) Math.round(Math.max(400d, Math.min(MAX_LOOKUP_METERS, speed / 3.6d * 30d)));
+        // At least 900 m, or roughly one minute at the current speed, plus the fixed-camera
+        // ±100 m lookup margin. A cap keeps the local lookup bounded on the low-power unit.
+        return (int) Math.round(Math.max(900d,
+                Math.min(MAX_LOOKUP_METERS - FIXED_CAMERA_POSITION_TOLERANCE_METERS,
+                        speed / 3.6d * 60d)) + FIXED_CAMERA_POSITION_TOLERANCE_METERS);
+    }
+
+    static int alertDistanceForSpeed(Double speedKmh) { return alertDistanceMeters(speedKmh); }
+
+    static double displayedDistanceFor(String type, double rawDistanceMeters) {
+        // The ±100 m tolerance controls lookup and post-pass visibility, never the actual
+        // distance reported to the driver. DGT points can be accurate to a few metres.
+        return rawDistanceMeters;
+    }
+
+    static boolean fixedCameraPassageWithinTolerance(String type, boolean passageEntered,
+                                                      double rawDistanceMeters, double gpsToleranceMeters) {
+        return "FIJO".equalsIgnoreCase(type)
+                && passageEntered
+                && Double.isFinite(rawDistanceMeters)
+                && rawDistanceMeters <= FIXED_CAMERA_POSITION_TOLERANCE_METERS
+                + Math.max(0d, gpsToleranceMeters);
+    }
+
+    private boolean isFixedCameraWithinTolerance(Record record) {
+        return record != null && "FIJO".equalsIgnoreCase(record.type)
+                && record.distanceMeters <= FIXED_CAMERA_POSITION_TOLERANCE_METERS;
+    }
+
+    private boolean isFixedCameraPassage(Record record, double gpsToleranceMeters) {
+        return record != null && record.id.equals(fixedCameraPassageId)
+                && fixedCameraPassageWithinTolerance(record.type, true, record.distanceMeters,
+                gpsToleranceMeters);
+    }
+
+    private static Alert alertFor(Record record, boolean approaching, boolean passageMarginActive) {
+        return new Alert(record.id, record.type, record.road, record.direction,
+                displayedDistanceFor(record.type, record.distanceMeters), record.distanceMeters,
+                record.province, record.source, approaching, true, passageMarginActive, record.updatedAt);
+    }
+
+    private DirectionEvidence directionEvidence(Location location, Record record, Double speedKmh,
+                                                 double tolerance) {
+        double effectiveSpeed = speedKmh == null || !Double.isFinite(speedKmh) ? 0d
+                : Math.max(0d, speedKmh);
+        if (location.hasSpeed()) effectiveSpeed = Math.max(effectiveSpeed, location.getSpeed() * 3.6d);
+        boolean moving = effectiveSpeed >= 9d;
+        boolean heading = false;
+        double headingDifference = Double.NaN;
+        Location target = nearestPoint(location, record.points);
+        if (moving && location.hasBearing() && target != null) {
+            headingDifference = angularDifference(location.getBearing(), location.bearingTo(target));
+            heading = headingDifference <= HEADING_TOLERANCE_DEGREES;
+        }
+        boolean closing = false;
+        boolean opening = false;
+        long now = System.currentTimeMillis();
+        if (moving && record.id.equals(candidateId) && Double.isFinite(candidateDistance)
+                && candidateLocation != null && now - candidateAt <= TRAJECTORY_WINDOW_MS) {
+            float travelled = candidateLocation.distanceTo(location);
+            if (travelled >= 5f) {
+                double change = record.distanceMeters - candidateDistance;
+                double threshold = Math.max(7d, tolerance * .45d);
+                closing = change <= -threshold;
+                opening = change >= threshold;
+            }
+        }
+        String detail;
+        if (heading) detail = "rumbo=" + Math.round(headingDifference) + "°";
+        else if (closing) detail = "trayectoria=acercándose";
+        else if (opening) detail = "trayectoria=alejándose";
+        else if (!moving) detail = "vehículo sin movimiento suficiente";
+        else if (Double.isFinite(headingDifference)) detail = "rumbo no coincide ("
+                + Math.round(headingDifference) + "°)";
+        else detail = "sin rumbo GPS";
+        return new DirectionEvidence(heading || closing, opening, detail);
+    }
+
+    private void rememberCandidate(Location location, Record record) {
+        candidateId = record.id;
+        candidateDistance = record.distanceMeters;
+        candidateLocation = new Location(location);
+        candidateAt = System.currentTimeMillis();
+    }
+
+    private static Location nearestPoint(Location location, String points) {
+        if (location == null || points == null) return null;
+        Location nearest = null;
+        float best = Float.MAX_VALUE;
+        for (String point : points.split(";")) {
+            String[] pair = point.split(",");
+            if (pair.length != 2) continue;
+            try {
+                Location candidate = new Location("dgt-radar");
+                candidate.setLatitude(Double.parseDouble(pair[0]));
+                candidate.setLongitude(Double.parseDouble(pair[1]));
+                float distance = location.distanceTo(candidate);
+                if (distance < best) {
+                    best = distance;
+                    nearest = candidate;
+                }
+            } catch (Exception ignored) { }
+        }
+        return nearest;
+    }
+
+    private static double angularDifference(double first, double second) {
+        double difference = Math.abs(first - second) % 360d;
+        return difference > 180d ? 360d - difference : difference;
     }
 
     private static String normalizeProvince(String province) {
@@ -497,23 +732,62 @@ final class RadarRepository {
     }
 
     static final class Alert {
-        final String id, type, road, direction, province;
+        final String id, type, road, direction, province, source;
         final double distanceMeters;
-        final boolean approaching;
+        /** Raw DGT-reference distance retained for diagnostics; UI uses distanceMeters. */
+        final double rawDistanceMeters;
+        final boolean approaching, trajectoryConfirmed;
+        final boolean passageMarginActive;
         final long updatedAt;
         Alert(String id, String type, String road, String direction, double distanceMeters,
               String province, boolean approaching, long updatedAt) {
+            this(id, type, road, direction, distanceMeters, distanceMeters, province, SOURCE_DGT, approaching, true,
+                    false, updatedAt);
+        }
+        Alert(String id, String type, String road, String direction, double distanceMeters,
+              String province, boolean approaching, boolean trajectoryConfirmed, long updatedAt) {
+            this(id, type, road, direction, distanceMeters, distanceMeters, province, SOURCE_DGT, approaching,
+                    trajectoryConfirmed, false, updatedAt);
+        }
+        /** Compatibility constructor retained for offline alert/voice regression tests. */
+        Alert(String id, String type, String road, String direction, double distanceMeters,
+              double rawDistanceMeters, String province, boolean approaching,
+              boolean trajectoryConfirmed, boolean passageMarginActive, long updatedAt) {
+            this(id, type, road, direction, distanceMeters, rawDistanceMeters, province, SOURCE_DGT,
+                    approaching, trajectoryConfirmed, passageMarginActive, updatedAt);
+        }
+        Alert(String id, String type, String road, String direction, double distanceMeters,
+              double rawDistanceMeters, String province, String source, boolean approaching,
+              boolean trajectoryConfirmed, boolean passageMarginActive, long updatedAt) {
             this.id = id; this.type = type; this.road = road; this.direction = direction;
-            this.distanceMeters = distanceMeters; this.province = province;
-            this.approaching = approaching; this.updatedAt = updatedAt;
+            this.distanceMeters = distanceMeters; this.rawDistanceMeters = rawDistanceMeters;
+            this.province = province; this.source = source;
+            this.approaching = approaching; this.trajectoryConfirmed = trajectoryConfirmed;
+            this.passageMarginActive = passageMarginActive;
+            this.updatedAt = updatedAt;
+        }
+    }
+
+    private static final class DirectionEvidence {
+        final boolean confirmed;
+        final boolean opening;
+        final String detail;
+        DirectionEvidence(boolean confirmed, boolean opening, String detail) {
+            this.confirmed = confirmed;
+            this.opening = opening;
+            this.detail = detail;
         }
     }
 
     private static final class RawRecord {
-        final String id, type, road, direction, points, province;
+        final String id, type, road, direction, points, province, source;
         RawRecord(String id, String type, String road, String direction, String points, String province) {
+            this(id, type, road, direction, points, province, SOURCE_DGT);
+        }
+        RawRecord(String id, String type, String road, String direction, String points, String province,
+                  String source) {
             this.id = id; this.type = type; this.road = road; this.direction = direction;
-            this.points = points; this.province = province;
+            this.points = points; this.province = province; this.source = source;
         }
     }
 
@@ -554,46 +828,63 @@ final class RadarRepository {
     }
 
     private static final class Record {
-        final String id, type, road, direction, province, points;
+        final String id, type, road, direction, province, points, source;
         final double distanceMeters;
         final long updatedAt;
         Record(String id, String type, String road, String direction, String province, String points,
-               double distanceMeters, long updatedAt) {
+               String source, double distanceMeters, long updatedAt) {
             this.id = id; this.type = type; this.road = road; this.direction = direction;
-            this.province = province; this.points = points; this.distanceMeters = distanceMeters;
+            this.province = province; this.points = points; this.source = source; this.distanceMeters = distanceMeters;
             this.updatedAt = updatedAt;
         }
     }
 
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_dgt_radars.db";
-        Database(Context context) { super(context, NAME, null, 1); }
+        Database(Context context) { super(context, NAME, null, 2); }
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE radars (id TEXT PRIMARY KEY, type TEXT NOT NULL, road TEXT NOT NULL, "
-                    + "direction TEXT NOT NULL, points TEXT NOT NULL, province TEXT NOT NULL, updated_at INTEGER NOT NULL, "
+                    + "direction TEXT NOT NULL, points TEXT NOT NULL, province TEXT NOT NULL, source TEXT NOT NULL, updated_at INTEGER NOT NULL, "
                     + "min_lat REAL NOT NULL, max_lat REAL NOT NULL, min_lon REAL NOT NULL, max_lon REAL NOT NULL)");
             db.execSQL("CREATE INDEX radar_bounds ON radars(min_lat, max_lat, min_lon, max_lon)");
             db.execSQL("CREATE INDEX radar_province ON radars(province)");
+            db.execSQL("CREATE INDEX radar_source ON radars(source)");
         }
-        @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { }
+        @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            if (oldVersion < 2) {
+                db.execSQL("ALTER TABLE radars ADD COLUMN source TEXT NOT NULL DEFAULT 'DGT'");
+                db.execSQL("CREATE INDEX IF NOT EXISTS radar_source ON radars(source)");
+            }
+        }
 
-        synchronized int replaceProvince(String province, ArrayList<RawRecord> records, long now) {
+        synchronized int replaceDgtProvince(String province, ArrayList<RawRecord> records, long now) {
             SQLiteDatabase db = getWritableDatabase();
             db.beginTransaction();
             int imported = 0;
             try {
-                db.delete("radars", "province = ?", new String[]{province});
+                db.delete("radars", "source = ? AND province = ?", new String[]{SOURCE_DGT, province});
                 imported = insertRecords(db, records, now);
                 db.setTransactionSuccessful();
             } finally { db.endTransaction(); }
             return imported;
         }
 
-        synchronized int replaceAll(ArrayList<RawRecord> records, long now) {
+        synchronized int replaceDgtAll(ArrayList<RawRecord> records, long now) {
             SQLiteDatabase db = getWritableDatabase();
             db.beginTransaction();
             try {
-                db.delete("radars", null, null);
+                db.delete("radars", "source = ?", new String[]{SOURCE_DGT});
+                int imported = insertRecords(db, records, now);
+                db.setTransactionSuccessful();
+                return imported;
+            } finally { db.endTransaction(); }
+        }
+
+        synchronized int replaceSource(String source, ArrayList<RawRecord> records, long now) {
+            SQLiteDatabase db = getWritableDatabase();
+            db.beginTransaction();
+            try {
+                db.delete("radars", "source = ?", new String[]{source});
                 int imported = insertRecords(db, records, now);
                 db.setTransactionSuccessful();
                 return imported;
@@ -612,6 +903,7 @@ final class RadarRepository {
                 values.put("direction", record.direction == null ? "" : record.direction);
                 values.put("points", record.points);
                 values.put("province", record.province);
+                values.put("source", record.source);
                 values.put("updated_at", now);
                 values.put("min_lat", bounds[0]); values.put("max_lat", bounds[1]);
                 values.put("min_lon", bounds[2]); values.put("max_lon", bounds[3]);
@@ -628,21 +920,40 @@ final class RadarRepository {
                     String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
             Record result = null;
             try (Cursor cursor = getReadableDatabase().query("radars",
-                    new String[]{"id", "type", "road", "direction", "province", "points", "updated_at"},
+                    new String[]{"id", "type", "road", "direction", "province", "points", "source", "updated_at"},
                     selection, args, null, null, null)) {
                 while (cursor.moveToNext()) {
                     String points = cursor.getString(5);
                     double distance = nearestDistance(latitude, longitude, points);
-                    if (distance > maxDistanceMeters || (result != null && distance >= result.distanceMeters)) continue;
-                    result = new Record(cursor.getString(0), cursor.getString(1), cursor.getString(2),
-                            cursor.getString(3), cursor.getString(4), points, distance, cursor.getLong(6));
+                    if (distance > maxDistanceMeters) continue;
+                    Record candidate = new Record(cursor.getString(0), cursor.getString(1), cursor.getString(2),
+                            cursor.getString(3), cursor.getString(4), points, cursor.getString(6), distance,
+                            cursor.getLong(7));
+                    // DGT remains authoritative when both sources describe the same installation.
+                    // Do not require the DGT point to be the closer coordinate: the official
+                    // reference and a supplemental POI can legitimately differ by about the
+                    // ±100 m fixed-camera positioning margin. Outside this small overlap,
+                    // regular nearest-point selection still applies.
+                    boolean dgtOverridesSupplemental = result != null
+                            && SOURCE_DGT.equals(candidate.source)
+                            && !SOURCE_DGT.equals(result.source)
+                            && Math.abs(distance - result.distanceMeters) <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS;
+                    boolean supplementalCannotOverrideDgt = result != null
+                            && !SOURCE_DGT.equals(candidate.source)
+                            && SOURCE_DGT.equals(result.source)
+                            && Math.abs(distance - result.distanceMeters) <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS;
+                    if (result == null || dgtOverridesSupplemental
+                            || (!supplementalCannotOverrideDgt && distance < result.distanceMeters)) {
+                        result = candidate;
+                    }
                 }
             }
             return result;
         }
 
-        synchronized int count() {
-            try (Cursor cursor = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM radars", null)) {
+        synchronized int countBySource(String source) {
+            try (Cursor cursor = getReadableDatabase().rawQuery(
+                    "SELECT COUNT(*) FROM radars WHERE source = ?", new String[]{source})) {
                 return cursor.moveToFirst() ? cursor.getInt(0) : 0;
             }
         }

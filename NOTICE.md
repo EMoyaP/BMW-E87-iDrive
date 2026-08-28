@@ -66,6 +66,19 @@ Solo se importan los conjuntos `CabinasCinemometro` (fijos) y
 Las coordenadas y los límites mostrados son informativos: la señalización, las instrucciones de
 las autoridades y el cuadro del vehículo son siempre la referencia.
 
+## Complemento Lufop / RadarDroid
+
+Además del inventario DGT, la APK integra una fotografía local complementaria de **radares fijos**
+españoles procesada una vez del paquete RadarDroid de
+[Lufop.net](https://lufop.net/en/radardroid-updated-speed-camera-database/). La radio no contiene
+credenciales, no automatiza el acceso al proveedor y no descarga esa fuente. Solo se convierte la
+categoría que el fichero identifica como fija (`TYPE=1`); semáforos, controles de tramo, zonas y
+controles móviles se mantienen fuera de la alerta fija.
+
+La base se conserva separada de la DGT y respeta su atribución: **Datos: Lufop.net y colaboradores
+de OpenStreetMap — ODbL 1.0**. Si los dos inventarios coinciden en el entorno de un punto, la DGT
+conserva prioridad. Los fijos exclusivos de la semilla local pueden activar la locución de aviso.
+
 ## Límites oficiales y zonas INVIVE
 
 La capa nacional de límites oficiales se obtiene del feed TN-ITS semanal de la DGT:

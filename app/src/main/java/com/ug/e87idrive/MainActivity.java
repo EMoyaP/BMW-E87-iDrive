@@ -982,6 +982,9 @@ public class MainActivity extends Activity {
         SpeedLimitRepository.Match limit = resolved.match;
         radarNoticeView.setAlert(alert, limit != null && limit.exact ? limit.limitKmh : null);
         radarNoticeView.setVisibility(View.VISIBLE);
+        // Both the official inventory and the fixed-only local complementary seed may warn.
+        // RadarSpeechAnnouncer itself rejects non-fixed records, so sections and any excluded
+        // categories never acquire a spoken warning.
         if (radarSpeech != null) radarSpeech.onAlert(alert, limit);
     }
 
@@ -1099,11 +1102,14 @@ public class MainActivity extends Activity {
         label.setSingleLine(true);
         label.setPadding(dp(6), 0, 0, 0);
         row.addView(label, lp(0, -1, 1));
-        TextView reading = txt(value, 22, TEXT, true);
+        // The unit remains beside the number so the vehicle value is readable at a glance.
+        // Consumption can be two digits before the decimal; the former 120 dp column clipped
+        // the leading digit on the physical radio although the CAN value was correct.
+        TextView reading = txt(value, field == VehicleField.CONSUMPTION ? 20 : 22, TEXT, true);
         reading.setSingleLine(true);
         reading.setIncludeFontPadding(false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        row.addView(reading, lp(dp(120), -1));
+        row.addView(reading, lp(dp(158), -1));
         return row;
     }
 
@@ -1314,7 +1320,9 @@ public class MainActivity extends Activity {
         box.setBackgroundColor(PANEL);
         box.setPadding(dp(12), dp(8), dp(12), dp(8));
         TextView description = txt("Con Internet disponible, actualiza los datos y después conduce sin conexión. "
-                + "OSM se limita a Alicante para cuidar el servidor; las capas oficiales son nacionales.", 12, TEXT, false);
+                + "OSM se limita a Alicante; las capas DGT son nacionales.\n"
+                + "Complemento fijo local: Datos Lufop.net y colaboradores de OpenStreetMap · ODbL 1.0. "
+                + "No se descarga ni se actualiza desde esta radio.", 12, TEXT, false);
         description.setPadding(dp(8), dp(4), dp(8), dp(12));
         box.addView(description);
 
@@ -1324,22 +1332,25 @@ public class MainActivity extends Activity {
         TextView unitTitle = txt("ACTUALIZACIONES UNITARIAS", 11, BLUE, true);
         unitTitle.setPadding(dp(8), dp(10), dp(8), dp(2));
         box.addView(unitTitle, lp(-1, dp(30)));
-        LinearLayout unitGrid = new LinearLayout(this);
-        unitGrid.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout firstUnitRow = new LinearLayout(this);
+        firstUnitRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout secondUnitRow = new LinearLayout(this);
+        secondUnitRow.setOrientation(LinearLayout.HORIZONTAL);
         Button osm = dialogButton("OSM · ALICANTE");
         Button fuel = dialogButton("GASOLINERAS");
         Button radar = dialogButton("RADARES DGT");
         Button dgt = dialogButton("LÍMITES DGT");
         Button inviveButton = dialogButton("INVIVE");
-        unitGrid.addView(osm, lp(0, dp(48), 1));
-        unitGrid.addView(fuel, lp(0, dp(48), 1));
-        unitGrid.addView(radar, lp(0, dp(48), 1));
-        unitGrid.addView(dgt, lp(0, dp(48), 1));
-        unitGrid.addView(inviveButton, lp(0, dp(48), 1));
-        box.addView(unitGrid, lp(-1, dp(48)));
+        firstUnitRow.addView(osm, lp(0, dp(48), 1));
+        firstUnitRow.addView(fuel, lp(0, dp(48), 1));
+        secondUnitRow.addView(radar, lp(0, dp(48), 1));
+        secondUnitRow.addView(dgt, lp(0, dp(48), 1));
+        secondUnitRow.addView(inviveButton, lp(0, dp(48), 1));
+        box.addView(firstUnitRow, lp(-1, dp(48)));
+        box.addView(secondUnitRow, lp(-1, dp(48)));
 
         Switch radarVoice = new Switch(this);
-        radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS DGT");
+        radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS");
         radarVoice.setTextColor(TEXT);
         radarVoice.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(10));
         radarVoice.setChecked(uiPreferences.getBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, true));
@@ -1352,13 +1363,14 @@ public class MainActivity extends Activity {
                 + "\nOSM Alicante: " + lastUpdateText(speedLimits.lastSuccessfulUpdate("ALICANTE"))
                 + "\nLímites DGT nacionales: " + lastUpdateText(dgtSpeeds == null ? 0L : dgtSpeeds.lastSuccessfulUpdate())
                 + "\nRadares DGT: " + lastRadarUpdateText()
+                + "\nComplemento fijo local: incluido en la APK (sin actualización)"
                 + "\nZonas INVIVE: " + lastInviveUpdateText()
                 + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
                         speedLimits.automaticProvince(gps.getLastLocation()))
                 + "\nAutomático: gasolineras cada 10 min; cada fuente oficial máx. una vez/24 h.",
                 10, MUTED, false);
         network.setPadding(dp(8), dp(12), dp(8), dp(10));
-        box.addView(network, lp(-1, dp(112)));
+        box.addView(network, lp(-1, dp(132)));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Actualizaciones y herramientas")
@@ -1379,9 +1391,9 @@ public class MainActivity extends Activity {
         inviveButton.setOnClickListener(v -> { dialog.dismiss(); updateSingleInvive(); });
         radarVoice.setOnCheckedChangeListener((button, enabled) -> {
             uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
-            toast(enabled ? "Locución activada para radares fijos DGT" : "Locución de radares desactivada");
+            toast(enabled ? "Locución activada para radares fijos" : "Locución de radares desactivada");
         });
-        showSized(dialog, .88f, .78f);
+        showSized(dialog, .88f, .86f);
     }
 
     private String lastRadarUpdateText() {
@@ -2958,6 +2970,7 @@ public class MainActivity extends Activity {
     /** Local-map speed sign. A blank sign means no verified nearby maxspeed is cached. */
     private static final class SpeedLimitView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF advisory = new RectF();
         private final int foreground, red, muted;
         private Integer limit;
         private boolean exact = true;
@@ -2989,7 +3002,7 @@ public class MainActivity extends Activity {
             float textWidthLimit;
             if (limit != null && !exact) {
                 float side = size * .90f;
-                RectF advisory = new RectF(cx - side / 2f, cy - side / 2f,
+                advisory.set(cx - side / 2f, cy - side / 2f,
                         cx + side / 2f, cy + side / 2f);
                 paint.setStyle(Paint.Style.FILL);
                 paint.setColor(Color.rgb(21, 94, 220));
@@ -3028,18 +3041,26 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** INVIVE is intentionally rendered without a radar pictogram, speed sign or spoken warning. */
+    /**
+     * INVIVE is a DGT surveillance-zone inventory, never a radar or a statutory speed sign.
+     * Orange means the trajectory reaches the entry; red means the current fix is inside.
+     */
     private static final class InviveNoticeView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final int foreground, blue, muted, accent;
+        private final RectF rect = new RectF();
+        private final RectF iconBounds = new RectF();
+        private final RectF eyeBounds = new RectF();
+        private final Bitmap watchEye;
+        private final int foreground, muted;
+        private static final int APPROACH_ORANGE = Color.rgb(247, 147, 31);
+        private static final int ACTIVE_RED = Color.rgb(222, 48, 48);
         private InviveRepository.Alert alert;
 
         InviveNoticeView(Context context, int foreground, int blue, int muted, int accent) {
             super(context);
             this.foreground = foreground;
-            this.blue = blue;
             this.muted = muted;
-            this.accent = accent;
+            this.watchEye = BitmapFactory.decodeResource(getResources(), R.drawable.invive_watch_eye_horizontal);
             setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
 
@@ -3056,45 +3077,59 @@ public class MainActivity extends Activity {
             if (alert == null) return;
             float w = getWidth();
             float h = getHeight();
+            int stateColor = alert.inside ? ACTIVE_RED : APPROACH_ORANGE;
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.rgb(4, 18, 32));
-            canvas.drawRoundRect(new RectF(3, 3, w - 3, h - 3), 14, 14, paint);
+            rect.set(3, 3, w - 3, h - 3);
+            canvas.drawRoundRect(rect, dp(10), dp(10), paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(2f);
-            paint.setColor(alert.inside ? accent : blue);
-            canvas.drawRoundRect(new RectF(3, 3, w - 3, h - 3), 14, 14, paint);
+            paint.setColor(stateColor);
+            canvas.drawRoundRect(rect, dp(10), dp(10), paint);
 
-            // Shield/road-control glyph: distinct from the fixed-camera sign.
-            float cx = 57f;
-            float cy = h * .52f;
-            paint.setStrokeWidth(5f);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setColor(alert.inside ? accent : blue);
-            canvas.drawArc(new RectF(cx - 27, cy - 30, cx + 27, cy + 30), 205, 130, false, paint);
-            canvas.drawLine(cx - 22, cy + 18, cx, cy + 34, paint);
-            canvas.drawLine(cx + 22, cy + 18, cx, cy + 34, paint);
-            canvas.drawLine(cx - 9, cy - 8, cx - 9, cy + 11, paint);
-            canvas.drawLine(cx + 9, cy - 8, cx + 9, cy + 11, paint);
+            float iconSize = Math.min(h * .75f, w * .20f);
+            iconBounds.set(dp(10), (h - iconSize) / 2f,
+                    dp(10) + iconSize, (h + iconSize) / 2f);
+            // The eye itself stays neutral and horizontal. The coloured tile is the state cue:
+            // orange before the entry and red only once the confirmed trajectory is inside.
             paint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(cx - 9, cy - 17, 4, paint);
-            canvas.drawCircle(cx + 9, cy - 17, 4, paint);
+            paint.setColor(stateColor);
+            canvas.drawRoundRect(iconBounds, dp(10), dp(10), paint);
+            float iconInset = Math.max(dp(7), iconSize * .12f);
+            eyeBounds.set(iconBounds.left + iconInset, iconBounds.top + iconInset,
+                    iconBounds.right - iconInset, iconBounds.bottom - iconInset);
+            paint.setFilterBitmap(true);
+            canvas.drawBitmap(watchEye, null, eyeBounds, paint);
 
-            float left = 105f;
+            float left = iconBounds.right + dp(12);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-            paint.setTextSize(23f);
-            paint.setColor(alert.inside ? accent : blue);
-            canvas.drawText("ZONA DE VIGILANCIA", left, h * .31f, paint);
-            paint.setTextSize(19f);
+            paint.setTextSize(Math.max(12f, h * .16f));
+            paint.setColor(stateColor);
+            canvas.drawText("ZONA DE VIGILANCIA", left, h * .25f, paint);
+            paint.setTextSize(Math.max(10f, h * .13f));
             paint.setColor(foreground);
             canvas.drawText(alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road,
-                    left, h * .58f, paint);
+                    left, h * .43f, paint);
+            paint.setTextSize(Math.max(19f, h * .27f));
+            paint.setColor(foreground);
+            String distance = Double.isFinite(alert.distanceMeters)
+                    ? (alert.inside ? "Salida a " : "Entrada a ") + formatDistance(alert.distanceMeters)
+                    : (alert.inside ? "TRAMO ACTIVO" : "ENTRADA PRÓXIMA");
+            canvas.drawText(distance, left, h * .72f, paint);
             paint.setTypeface(Typeface.DEFAULT);
-            paint.setTextSize(15f);
+            paint.setTextSize(Math.max(9f, h * .105f));
             paint.setColor(muted);
-            String state = alert.inside ? "DENTRO DEL TRAMO · INVIVE DGT"
-                    : String.format(Locale.getDefault(), "A %.0f m · ACERCÁNDOSE · INVIVE DGT",
-                            alert.distanceMeters);
-            canvas.drawText(state, left, h * .81f, paint);
+            canvas.drawText(alert.inside ? "INVIVE DGT · EN TRAMO · NO ES RADAR"
+                    : "INVIVE DGT · APROXIMACIÓN · NO ES RADAR", left, h * .91f, paint);
+        }
+
+        private static String formatDistance(double meters) {
+            return meters >= 1_000d ? String.format(Locale.getDefault(), "%.1f km", meters / 1_000d)
+                    : String.format(Locale.getDefault(), "%.0f m", meters);
+        }
+
+        private int dp(int value) {
+            return Math.round(value * getResources().getDisplayMetrics().density);
         }
     }
 
@@ -3148,18 +3183,27 @@ public class MainActivity extends Activity {
             paint.setStyle(Paint.Style.FILL);
             paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             paint.setTextAlign(Paint.Align.LEFT);
-            paint.setTextSize(Math.max(9f, h * .17f));
+            paint.setTextSize(Math.max(10f, h * .15f));
             paint.setColor(Color.rgb(246, 163, 33));
-            canvas.drawText("TRAMO".equals(alert.type) ? "RADAR DE TRAMO" : "RADAR FIJO", textLeft, h * .30f, paint);
+            canvas.drawText("TRAMO".equals(alert.type) ? "RADAR DE TRAMO" : "RADAR FIJO", textLeft, h * .20f, paint);
             paint.setTypeface(Typeface.DEFAULT);
-            paint.setTextSize(Math.max(8f, h * .145f));
+            paint.setTextSize(Math.max(8f, h * .12f));
             paint.setColor(foreground);
             String road = alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road;
-            canvas.drawText(road, textLeft, h * .55f, paint);
-            paint.setTextSize(Math.max(8f, h * .13f));
+            canvas.drawText(road, textLeft, h * .37f, paint);
+            String distance = formatDistance(alert.distanceMeters);
+            float distanceSize = Math.max(21f, h * .29f);
+            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            paint.setTextSize(distanceSize);
+            float available = Math.max(40f, w * .61f - textLeft);
+            if (paint.measureText(distance) > available) paint.setTextSize(distanceSize * available / paint.measureText(distance));
+            paint.setColor(foreground);
+            canvas.drawText(distance, textLeft, h * .67f, paint);
+            paint.setTypeface(Typeface.DEFAULT);
+            paint.setTextSize(Math.max(8f, h * .115f));
             paint.setColor(alert.approaching ? Color.rgb(91, 213, 144) : muted);
-            String direction = alert.approaching ? "↓ ACERCÁNDOSE" : "RADAR CERCANO";
-            canvas.drawText(formatDistance(alert.distanceMeters) + " · " + direction, textLeft, h * .80f, paint);
+            String direction = alert.trajectoryConfirmed ? "↓ TRAYECTORIA CONFIRMADA" : "RADAR CERCANO";
+            canvas.drawText(direction, textLeft, h * .90f, paint);
 
             float sign = Math.min(h * .77f, w * .24f);
             float cx = w - sign * .63f, signCy = h * .50f;

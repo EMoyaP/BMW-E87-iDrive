@@ -78,7 +78,8 @@ final class InviveRepository {
         Record best = null;
         double bestScore = Double.MAX_VALUE;
         boolean bestInside = false;
-        double bestDistance = Double.MAX_VALUE;
+        double bestDistance = Double.NaN;
+        boolean bestTrajectoryConfirmed = false;
         for (Record record : candidates) {
             boolean sameRoad = !currentRoad.isEmpty() && currentRoad.equals(canonicalRoad(record.road));
             if (!currentRoad.isEmpty() && !sameRoad) continue;
@@ -95,10 +96,13 @@ final class InviveRepository {
             boolean inside = projection.fraction >= 0d && projection.fraction <= 1d
                     && (sameRoad ? ellipseExcess <= curvedRoadTolerance
                     : projection.distanceMeters <= STRICT_CORRIDOR_METERS && ellipseExcess <= 500d);
+            TravelEvidence travel = travelEvidence(location, record, speedKmh);
+            double entryDistance = travel.aToB
+                    ? distance(location.getLatitude(), location.getLongitude(), record.latA, record.lonA)
+                    : distance(location.getLatitude(), location.getLongitude(), record.latB, record.lonB);
             double approachRange = speedKmh == null ? 500d : Math.max(500d, Math.min(1_200d, speedKmh * 8d));
-            boolean approaching = !inside && endpointDistance <= approachRange
-                    && isApproaching(location, record, endpointDistance)
-                    && (sameRoad || endpointDistance <= STRICT_CORRIDOR_METERS);
+            boolean approaching = !inside && travel.confirmed && entryDistance <= approachRange
+                    && (sameRoad || entryDistance <= STRICT_CORRIDOR_METERS);
             if (!inside && !approaching) continue;
             double score = (inside ? 0d : 10_000d) + (sameRoad ? 0d : 2_000d)
                     + Math.min(projection.distanceMeters, endpointDistance);
@@ -106,7 +110,11 @@ final class InviveRepository {
                 best = record;
                 bestScore = score;
                 bestInside = inside;
-                bestDistance = inside ? 0d : endpointDistance;
+                bestTrajectoryConfirmed = travel.confirmed;
+                bestDistance = inside
+                        ? (travel.confirmed ? remainingDistance(sectionLength, projection.fraction, travel.aToB)
+                        : Double.NaN)
+                        : entryDistance;
             }
         }
         long now = System.currentTimeMillis();
@@ -114,23 +122,35 @@ final class InviveRepository {
             if (activeId != null && now - activeSeenAt <= ACTIVE_HYSTERESIS_MS) {
                 Record retained = database.byId(activeId);
                 if (retained != null) return new Alert(retained.id, retained.road, retained.province,
-                        0d, true, false);
+                        Double.NaN, true, false, false);
             }
             activeId = null;
             return null;
         }
         activeId = best.id;
         activeSeenAt = now;
-        return new Alert(best.id, best.road, best.province, bestDistance, bestInside, !bestInside);
+        return new Alert(best.id, best.road, best.province, bestDistance, bestInside, !bestInside,
+                bestTrajectoryConfirmed);
     }
 
-    private static boolean isApproaching(Location location, Record record, double nearestDistance) {
-        if (!location.hasBearing() || !location.hasSpeed() || location.getSpeed() < 2.5f) return false;
+    private static TravelEvidence travelEvidence(Location location, Record record, Double speedKmh) {
+        double speed = speedKmh == null || !Double.isFinite(speedKmh) ? 0d : speedKmh;
+        if (location.hasSpeed()) speed = Math.max(speed, location.getSpeed() * 3.6d);
+        if (!location.hasBearing() || speed < 9d) return new TravelEvidence(false, false);
         Location a = point(record.latA, record.lonA);
         Location b = point(record.latB, record.lonB);
-        Location target = location.distanceTo(a) <= location.distanceTo(b) ? a : b;
-        double difference = angularDifference(location.getBearing(), location.bearingTo(target));
-        return nearestDistance < 80d || difference <= 50d;
+        double towardB = angularDifference(location.getBearing(), a.bearingTo(b));
+        double towardA = angularDifference(location.getBearing(), b.bearingTo(a));
+        if (towardB <= 55d && towardB < towardA) return new TravelEvidence(true, true);
+        if (towardA <= 55d && towardA < towardB) return new TravelEvidence(true, false);
+        return new TravelEvidence(false, false);
+    }
+
+    private static double remainingDistance(double sectionLength, double fraction, boolean aToB) {
+        if (!Double.isFinite(sectionLength) || sectionLength <= 0d || fraction < 0d || fraction > 1d) {
+            return Double.NaN;
+        }
+        return Math.max(0d, sectionLength * (aToB ? 1d - fraction : fraction));
     }
 
     void refreshFromInternet(String requestedProvince, UpdateCallback callback) {
@@ -427,14 +447,16 @@ final class InviveRepository {
         final double distanceMeters;
         final boolean inside;
         final boolean approaching;
+        final boolean trajectoryConfirmed;
         Alert(String id, String road, String province, double distanceMeters,
-              boolean inside, boolean approaching) {
+              boolean inside, boolean approaching, boolean trajectoryConfirmed) {
             this.id = id;
             this.road = road;
             this.province = province;
             this.distanceMeters = distanceMeters;
             this.inside = inside;
             this.approaching = approaching;
+            this.trajectoryConfirmed = trajectoryConfirmed;
         }
     }
 
@@ -444,6 +466,15 @@ final class InviveRepository {
         Projection(double distanceMeters, double fraction) {
             this.distanceMeters = distanceMeters;
             this.fraction = fraction;
+        }
+    }
+
+    private static final class TravelEvidence {
+        final boolean confirmed;
+        final boolean aToB;
+        TravelEvidence(boolean confirmed, boolean aToB) {
+            this.confirmed = confirmed;
+            this.aToB = aToB;
         }
     }
 

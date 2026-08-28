@@ -8,15 +8,20 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 /** Bounded, privacy-conscious log for the current app process / vehicle session. */
 final class AppSessionLog {
-    static final String FILE_NAME = "e87_runtime_session.log";
-    private static final long MAX_BYTES = 512L * 1024L;
+    static final String FILE_NAME = "e87_runtime_session_000.log";
+    private static final String FILE_PREFIX = "e87_runtime_session_";
+    private static final long CHUNK_BYTES = 1L * 1024L * 1024L;
+    private static final int MAX_CHUNKS_PER_SESSION = 8;
     private static final Object LOCK = new Object();
     /**
      * The CAN service can callback several times per second with identical
@@ -26,6 +31,8 @@ final class AppSessionLog {
      */
     private static final Map<String, Long> LAST_SAMPLED_AT = new HashMap<>();
     private static File file;
+    private static int chunkIndex;
+    private static boolean sessionCapacityReached;
 
     private AppSessionLog() { }
 
@@ -33,7 +40,10 @@ final class AppSessionLog {
         synchronized (LOCK) {
             VehicleObservationTrace.reset();
             LAST_SAMPLED_AT.clear();
-            file = new File(context.getFilesDir(), FILE_NAME);
+            clearPreviousSession(context.getFilesDir());
+            chunkIndex = 0;
+            sessionCapacityReached = false;
+            file = chunkFile(context.getFilesDir(), chunkIndex);
             String header = "BMW E87 iDrive · REGISTRO DE SESIÓN\n"
                     + "Inicio=" + timestamp() + "\n"
                     + "Android SDK=" + Build.VERSION.SDK_INT + " · dispositivo="
@@ -48,12 +58,12 @@ final class AppSessionLog {
     static void event(String source, String message) {
         if (message == null || message.trim().isEmpty()) return;
         synchronized (LOCK) {
-            if (file == null) return;
-            if (file.length() >= MAX_BYTES) {
-                write("REGISTRO REINICIADO POR LÍMITE DE 512 KiB · " + timestamp() + "\n", false);
-            }
-            write(timestamp() + " [" + source + "] "
-                    + message.replace('\n', ' ').replace('\r', ' ') + "\n", true);
+            if (file == null || sessionCapacityReached) return;
+            String line = timestamp() + " [" + source + "] "
+                    + message.replace('\n', ' ').replace('\r', ' ') + "\n";
+            byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
+            if (file.length() + bytes.length > CHUNK_BYTES) rotateChunk();
+            if (!sessionCapacityReached) write(line, true);
         }
     }
 
@@ -61,7 +71,7 @@ final class AppSessionLog {
      * Records a noisy raw diagnostic sample no more than once per interval.
      * This intentionally does not compare the message: OEM dashboard parcels
      * often contain a changing but untrusted counter/sentinel, which would
-     * otherwise fill the 512 KiB export during a short drive.
+     * otherwise fill the diagnostic export during a short drive.
      */
     static void sampledEvent(String key, String source, String message, long intervalMs) {
         if (key == null || key.trim().isEmpty() || message == null || message.trim().isEmpty()) return;
@@ -76,18 +86,67 @@ final class AppSessionLog {
 
     static String read() {
         synchronized (LOCK) {
-            if (file == null || !file.isFile()) return "";
-            try (FileInputStream input = new FileInputStream(file)) {
-                byte[] data = new byte[(int) Math.min(MAX_BYTES, file.length())];
-                int offset = 0, count;
-                while (offset < data.length
-                        && (count = input.read(data, offset, data.length - offset)) > 0) offset += count;
-                return new String(data, 0, offset, StandardCharsets.UTF_8);
-            } catch (Exception ignored) { return ""; }
+            StringBuilder joined = new StringBuilder();
+            for (File part : sessionFilesLocked()) joined.append(readFile(part));
+            return joined.toString();
         }
     }
 
+    /** All chunks from the current app/vehicle session, in chronological order. */
+    static List<File> sessionFiles() {
+        synchronized (LOCK) { return new ArrayList<>(sessionFilesLocked()); }
+    }
+
+    static String readFile(File source) {
+        if (source == null || !source.isFile()) return "";
+        try (FileInputStream input = new FileInputStream(source)) {
+            byte[] data = new byte[(int) Math.min(CHUNK_BYTES + 512L, source.length())];
+            int offset = 0, count;
+            while (offset < data.length
+                    && (count = input.read(data, offset, data.length - offset)) > 0) offset += count;
+            return new String(data, 0, offset, StandardCharsets.UTF_8);
+        } catch (Exception ignored) { return ""; }
+    }
+
     static File file() { synchronized (LOCK) { return file; } }
+
+    private static void rotateChunk() {
+        if (file == null) return;
+        if (chunkIndex + 1 >= MAX_CHUNKS_PER_SESSION) {
+            write("LÍMITE DE SESIÓN: se conservaron " + MAX_CHUNKS_PER_SESSION
+                    + " archivos de 1 MiB; se detiene el registro para no sobrescribir datos.\n", true);
+            sessionCapacityReached = true;
+            return;
+        }
+        chunkIndex++;
+        file = chunkFile(file.getParentFile(), chunkIndex);
+        write("BMW E87 iDrive · CONTINUACIÓN DE REGISTRO · parte " + (chunkIndex + 1)
+                + " de " + MAX_CHUNKS_PER_SESSION + "\nInicio=" + timestamp() + "\n\n", false);
+    }
+
+    private static File chunkFile(File directory, int index) {
+        return new File(directory, String.format(Locale.ROOT, "%s%03d.log", FILE_PREFIX, index));
+    }
+
+    private static void clearPreviousSession(File directory) {
+        File[] previous = directory.listFiles(candidate -> candidate != null
+                && (candidate.getName().equals("e87_runtime_session.log")
+                || (candidate.getName().startsWith(FILE_PREFIX)
+                && candidate.getName().endsWith(".log"))));
+        if (previous == null) return;
+        for (File candidate : previous) {
+            try { candidate.delete(); } catch (Exception ignored) { }
+        }
+    }
+
+    private static List<File> sessionFilesLocked() {
+        if (file == null || file.getParentFile() == null) return new ArrayList<>();
+        File[] parts = file.getParentFile().listFiles(candidate -> candidate != null
+                && candidate.getName().startsWith(FILE_PREFIX) && candidate.getName().endsWith(".log"));
+        if (parts == null || parts.length == 0) return new ArrayList<>();
+        Arrays.sort(parts, (left, right) -> left.getName().compareTo(right.getName()));
+        return new ArrayList<>(Arrays.asList(parts));
+    }
 
     private static void write(String text, boolean append) {
         if (file == null) return;
