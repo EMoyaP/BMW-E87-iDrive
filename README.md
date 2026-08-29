@@ -14,9 +14,9 @@ It combines GPS-backed driving information, nearby Spanish fuel prices, locally 
 
 ## Main dashboard
 
-![Version 1.25.1 main iDrive dashboard: trip computer, GPS speedometer, local road limit, nearby fixed camera, fuel stations and OEM shortcuts](docs/screenshots/bmw-e87-ui-v1.25.1-static-radar-seed.png)
+![Version 1.25.2 main iDrive dashboard: trip computer, GPS speedometer, local road limit, fixed camera at 581 m, fuel stations and OEM shortcuts](docs/screenshots/bmw-e87-ui-v1.25.2-dashboard-radar-581m.png)
 
-*Version 1.25.1 UI documentation simulation: 772 km range, 10.8 l/100 km average consumption, 30.0 °C exterior temperature, a local limit and a nearby fixed camera. The radio only shows values its real sources publish.*
+*Version 1.25.2 emulator capture with a replayed GPS route: 700 km range, 6.2 l/100 km consumption, 28.0 °C exterior temperature, a local limit and a fixed camera at 581 m. Those three trip-computer values are a debug-only presentation scenario; the radio only shows real readings from its passive sources.*
 
 The dashboard targets 1280×720 / 16:9 automotive displays. It has a central vehicle image, a dynamic trip-computer panel, configurable OEM app cards and a contextual vehicle-status strip.
 
@@ -25,10 +25,14 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 - **GPS speedometer.** GPS is the validated speed source on the physical radio. The E87-style 0–260 km/h dial progressively fills its outer ring. A verified local road limit is marked in orange and the speed value/progress ring turn orange only once it is exceeded; without a verified local limit, both remain green.
 - **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A red circle is only an explicit OSM `maxspeed`; a blue square is conservative class-based guidance after a local GPS-area update, never a legal limit or orange speedometer trigger. Physical signs and the vehicle's instruments remain the legal reference.
 - **Dynamic trip computer.** Range, average consumption, exterior temperature, climate values and other data are shown only when the radio provides a plausible reading. Unavailable data is hidden.
-- **Fixed and section camera warning.** The APK carries the national DGT inventory locally plus a Spanish Lufop/RadarDroid complementary seed of `TYPE=1` fixed cameras. DGT remains authoritative whenever both sources match. For fixed cameras, lookup begins 100 m early and the card remains for 100 m after the published point, while the displayed distance always stays tied to the original coordinate; no camera is artificially shifted. Mobile controls are intentionally excluded. Optional speech applies to every included **fixed** camera and is emitted at alert entry and once more at 300 m. It requests Android transient `MAY_DUCK` audio focus without sending OEM commands. The circular value is the verified **road** limit from the local map, not an invented radar limit.
-- **INVIVE watch zones.** A separate `SPEED WATCH ZONE` card appears when approaching or driving through an official intensified-enforcement section. It is never rendered as a camera, never triggers fixed-camera speech and never supplies a legal speed limit; the speed sign remains sourced exclusively from the local road map.
+- **Fixed and section camera warning.** The APK carries the national DGT inventory locally plus a Spanish Lufop/RadarDroid complementary seed of `TYPE=1` fixed cameras. DGT remains authoritative whenever both sources match. For a fixed camera with confirmed trajectory, the card and first speech warning start at **600 m**; one reminder follows at **300 m**. After confirmed passage, the card keeps a 100 m margin. The displayed distance always stays tied to the original coordinate; no camera is artificially shifted. Mobile controls are intentionally excluded. Speech requests Android transient `MAY_DUCK` audio focus without sending OEM commands. The circular value is the verified **road** limit from the local map, not an invented radar limit.
+- **INVIVE watch zones.** A dedicated `SPEED WATCH ZONE` card appears when approaching or driving through an official intensified-enforcement section. Orange means distance to the entry and red means distance to the exit. It is never rendered as a camera, never triggers fixed-camera speech and never supplies a legal speed limit. When a camera and INVIVE overlap, the **camera card always takes priority** and the INVIVE card remains hidden until the camera no longer applies.
 
-![INVIVE watch zone kept separate from cameras and the local speed limit](docs/screenshots/bmw-e87-ui-v1.21.0-invive.png)
+![Approaching an INVIVE watch zone: orange card, entry in 141 m](docs/screenshots/bmw-e87-ui-v1.25.2-invive-approach.png)
+
+![Inside an INVIVE watch zone: red card and remaining distance to its exit](docs/screenshots/bmw-e87-ui-v1.25.2-invive-inside.png)
+
+![Fixed-camera reminder with 293 m remaining distance](docs/screenshots/bmw-e87-ui-v1.25.2-radar-300m.png)
 - **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app.
 - **OEM app cards.** Radio, Android Auto, phone and app cards open their assigned OEM applications. Metadata is displayed only when Android or an OEM service actually publishes it.
 
@@ -76,7 +80,7 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 
 ### Tools, diagnostics and updates
 
-![Tools menu: separate Debug/USB, Permissions and Updates entries](docs/screenshots/bmw-e87-ui-v1.16.0-tools.png)
+![Version 1.25.2 tools menu: separate Debug/USB, Permissions and Updates entries](docs/screenshots/bmw-e87-ui-v1.25.2-tools.png)
 
 The lower-right gear opens three separate tools:
 
@@ -89,17 +93,15 @@ The lower-right gear opens three separate tools:
 
 The dashboard shows the province, date and time of the latest successful speed-map update. Before an update is installed, it identifies the bundled local base.
 
-![Version 1.25.1 updates screen: Update all, official individual sources and local fixed-camera seed without download](docs/screenshots/bmw-e87-ui-v1.25.1-updates.png)
+![Version 1.25.2 updates screen: Update all, official individual sources and local fixed-camera seed without download](docs/screenshots/bmw-e87-ui-v1.25.2-updates.png)
 
 USB DEBUG supports guided checks for doors, lights, parking brake, belts, reverse/PDC, climate and custom observations. It records raw values, interpretation, source, timestamp and previous → new value for all available sources. An optional privacy switch can add precise GPS coordinates to the runtime log for road-limit diagnostics; it is disabled by default, persists until switched off and is clearly recorded in every exported report. It can also export a bounded OEM inventory and diagnostic log to a folder selected by the user. A green candidate is only a *strong candidate awaiting validation*; it is never a confirmed proprietary CAN code.
-
-![USB DEBUG candidate correlation view](docs/screenshots/bmw-e87-usb-wizard-live-strong-v1.11.0.png)
 
 No diagnostic feature sends CAN traffic, writes UART, changes OEM settings or starts an OEM vehicle service solely to interrogate it.
 
 ### Permissions and connectivity
 
-![Permissions screen: current permission state and Android network explanation](docs/screenshots/bmw-e87-ui-v1.15.2-permissions.png)
+![Version 1.25.2 permissions screen: current permission state and Android network explanation](docs/screenshots/bmw-e87-ui-v1.25.2-permissions.png)
 
 - **Location** enables GPS speed, local road limits and fuel-station distances.
 - **Nearby devices / Bluetooth** is requested only when Android requires it to identify a connected Bluetooth device through public APIs.
@@ -181,9 +183,9 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 ## Project status
 
-Current version: **1.25.1**.
+Current version: **1.25.2**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, INVIVE watch zones, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.25.1 keeps official OSM, fuel, DGT-camera, DGT-limit and INVIVE updates, while converting the RadarDroid `TYPE=1` complement into a static seed of 1,297 fixed cameras with no accounts, tokens or third-party downloads. DGT data wins only after road, geometry and direction matching; OSM follows, and the blue class-based sign remains the final visual fallback. The emulator route QA validates GPS, local limit matching, radar panels and the bundled fuel seed; CAN, Android Auto, Bluetooth PAN and voice remain hardware-dependent validations.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, INVIVE watch zones, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.25.2 keeps official OSM, fuel, DGT-camera, DGT-limit and INVIVE updates, while converting the RadarDroid `TYPE=1` complement into a static seed of 1,297 fixed cameras with no accounts, tokens or third-party downloads. With a confirmed trajectory, the camera card and first warning start at 600 m, there is one reminder at 300 m, and a camera takes visual priority over INVIVE. DGT data wins only after road, geometry and direction matching; OSM follows, and the blue class-based sign remains the final visual fallback. The emulator route QA validates the GPS replay, the 581/293 m camera panels and both INVIVE phases; CAN, Android Auto, Bluetooth PAN and the physical radio's audio output remain hardware-dependent validations.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

@@ -14,9 +14,9 @@ Reúne información de conducción obtenida por GPS, precios españoles de gasol
 
 ## Panel principal
 
-![Panel principal v1.25.1: ordenador de a bordo, velocímetro GPS, límite local, radar fijo cercano, gasolineras y accesos OEM](docs/screenshots/bmw-e87-ui-v1.25.1-static-radar-seed.png)
+![Panel principal v1.25.2: ordenador de a bordo, velocímetro GPS, límite local, radar fijo a 581 m, gasolineras y accesos OEM](docs/screenshots/bmw-e87-ui-v1.25.2-dashboard-radar-581m.png)
 
-*Simulación documental de la interfaz v1.25.1: autonomía 772 km, consumo medio 10,8 l/100 km, exterior 30,0 °C, límite local y radar fijo cercano. La radio solo mostrará los valores que publiquen sus fuentes reales.*
+*Captura de la interfaz v1.25.2 en emulador con un recorrido GPS reproducido: autonomía 700 km, consumo 6,2 l/100 km, exterior 28,0 °C, límite local y radar fijo a 581 m. Esos tres valores del ordenador son una escena visual exclusiva de depuración; en la radio solo se mostrarán lecturas reales que publiquen sus fuentes pasivas.*
 
 El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehículo central, ordenador de a bordo dinámico, tarjetas de aplicaciones OEM configurables y una fila contextual de estado del vehículo.
 
@@ -25,10 +25,14 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 - **Velocímetro GPS.** GPS es la fuente de velocidad validada en la radio física. La esfera E87 de 0–260 km/h rellena progresivamente solo su aro exterior. Un límite local verificado se marca en naranja y, al superarlo, la cifra y el aro pasan a naranja; sin límite local verificado, ambos se mantienen en verde.
 - **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Un círculo rojo solo representa un `maxspeed` explícito; el cuadrado azul es una velocidad aconsejada conservadora por tipo de vía cuando la zona GPS se ha actualizado, nunca un límite legal ni un disparador naranja del velocímetro. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
 - **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. Si un dato no está disponible se oculta.
-- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT y una semilla complementaria española Lufop/RadarDroid de fijos `TYPE=1`. DGT conserva prioridad cuando ambas fuentes coinciden. Para radares fijos, la búsqueda se inicia 100 m antes y el panel permanece hasta 100 m después del punto publicado, pero la distancia visible conserva siempre la coordenada original; no se desplaza artificialmente ningún radar. Los controles móviles se excluyen expresamente. La locución opcional se activa para cualquier radar **fijo incluido** y se emite al entrar en el radio de aviso y una sola vez más al alcanzar 300 m. Solicita a Android un foco transitorio `MAY_DUCK`, sin enviar órdenes OEM. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
-- **Zonas de vigilancia INVIVE.** Una tarjeta propia muestra `ZONA DE VIGILANCIA` al aproximarse o circular por un tramo oficial de intensificación. Nunca se representa como radar, no activa la locución de radar fijo y no aporta un límite legal; la señal de velocidad continúa procediendo exclusivamente del mapa local.
+- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT y una semilla complementaria española Lufop/RadarDroid de fijos `TYPE=1`. DGT conserva prioridad cuando ambas fuentes coinciden. Para un radar fijo con trayectoria confirmada, la tarjeta y el primer aviso de voz se activan a **600 m**; hay un único recordatorio a **300 m**. Tras el paso confirmado, la tarjeta conserva 100 m de margen. La distancia visible siempre usa la coordenada original: no se desplaza artificialmente ningún radar. Los controles móviles se excluyen expresamente. La locución solicita a Android un foco transitorio `MAY_DUCK`, sin enviar órdenes OEM. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
+- **Zonas de vigilancia INVIVE.** Una tarjeta propia muestra `ZONA DE VIGILANCIA` al aproximarse o circular por un tramo oficial de intensificación. Naranja indica distancia hasta la entrada y rojo la distancia hasta la salida. Nunca se representa como radar, no activa la locución de radar fijo y no aporta un límite legal. Si radar e INVIVE coinciden, **prevalece siempre la tarjeta de radar** y la zona queda oculta hasta que el radar deje de aplicar.
 
-![Zona INVIVE independiente de radares y del límite local](docs/screenshots/bmw-e87-ui-v1.21.0-invive.png)
+![Aproximación a una zona INVIVE: tarjeta naranja, entrada a 141 m](docs/screenshots/bmw-e87-ui-v1.25.2-invive-approach.png)
+
+![Dentro de una zona INVIVE: tarjeta roja y distancia restante de salida](docs/screenshots/bmw-e87-ui-v1.25.2-invive-inside.png)
+
+![Recordatorio de radar fijo con la distancia restante a 293 m](docs/screenshots/bmw-e87-ui-v1.25.2-radar-300m.png)
 - **Gasolineras.** La más barata y la más cercana se calculan respecto al GPS de la radio para el combustible seleccionado. Al pulsar un resultado se navega mediante una aplicación de mapas compatible.
 - **Tarjetas OEM.** Radio, Android Auto, teléfono y aplicaciones abren la aplicación OEM asignada. Los metadatos solo aparecen si Android o un servicio OEM los publica realmente.
 
@@ -76,7 +80,7 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 
 ### Herramientas, diagnóstico y actualizaciones
 
-![Menú de herramientas: Debug/USB, Permisos y Actualizaciones independientes](docs/screenshots/bmw-e87-ui-v1.16.0-tools.png)
+![Menú de herramientas v1.25.2: Debug/USB, Permisos y Actualizaciones independientes](docs/screenshots/bmw-e87-ui-v1.25.2-tools.png)
 
 La rueda dentada inferior derecha abre tres herramientas separadas:
 
@@ -89,17 +93,15 @@ La rueda dentada inferior derecha abre tres herramientas separadas:
 
 El panel principal muestra provincia, fecha y hora de la última actualización correcta de la base de límites. Antes de instalar una descarga identifica la base local incluida.
 
-![Panel de actualizaciones v1.25.1: Actualizar todo, fuentes oficiales individuales y semilla fija local sin descarga](docs/screenshots/bmw-e87-ui-v1.25.1-updates.png)
+![Panel de actualizaciones v1.25.2: Actualizar todo, fuentes oficiales individuales y semilla fija local sin descarga](docs/screenshots/bmw-e87-ui-v1.25.2-updates.png)
 
 USB DEBUG incluye asistentes para puertas, luces, freno de mano, cinturones, marcha atrás/PDC, climatización y pruebas personalizadas. El registro conserva valor bruto, interpretación, fuente, hora y transición anterior → nueva para todas las fuentes disponibles. Un selector opcional de privacidad permite añadir coordenadas GPS precisas al log para diagnosticar límites de vía; está desactivado por defecto, permanece activo hasta desmarcarlo y queda indicado en cada informe exportado. También puede exportar un inventario OEM y diagnóstico limitado a una carpeta USB elegida por el usuario. Un candidato verde significa *candidato fuerte pendiente de validar*, no un código CAN propietario confirmado.
-
-![Vista de correlación de candidatos de USB DEBUG](docs/screenshots/bmw-e87-usb-wizard-live-strong-v1.11.0.png)
 
 Ninguna función de diagnóstico transmite tráfico CAN, escribe UART, modifica ajustes OEM ni inicia un servicio de vehículo únicamente para interrogarlo.
 
 ### Permisos y conectividad
 
-![Panel de permisos: estado actual y explicación de red Android](docs/screenshots/bmw-e87-ui-v1.15.2-permissions.png)
+![Panel de permisos v1.25.2: estado actual y explicación de red Android](docs/screenshots/bmw-e87-ui-v1.25.2-permissions.png)
 
 - **Ubicación** habilita velocidad GPS, límites locales y distancias a gasolineras.
 - **Dispositivos cercanos / Bluetooth** se solicita solo cuando Android lo exige para identificar un terminal Bluetooth mediante APIs públicas.
@@ -181,9 +183,9 @@ El proyecto está escrito en Java con APIs del framework Android. No usa depende
 
 ## Estado del proyecto
 
-Versión actual: **1.25.1**.
+Versión actual: **1.25.2**.
 
-La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, zonas INVIVE, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo. La versión 1.25.1 mantiene las actualizaciones oficiales de OSM, gasolineras, radares DGT, límites DGT e INVIVE, y convierte el complemento RadarDroid `TYPE=1` en una semilla estática de 1.297 radares fijos sin cuentas, tokens ni descargas de terceros. DGT tiene prioridad solo cuando coincide por vía, geometría y sentido; después se usa OSM y, como último respaldo visual, la recomendación azul por clase. El QA en emulador valida GPS, matching local, panel de radar y semilla de gasolineras; CAN, Android Auto, Bluetooth PAN y voz siguen requiriendo validación en la radio.
+La APK se ha instalado y probado como aplicación normal en la radio de referencia. Funcionan dentro de su límite verificado la velocidad GPS, gasolineras, límites locales, coincidencia local de radares fijos/tramo DGT, zonas INVIVE, accesos OEM estáticos, diagnóstico USB y valores concretos del ordenador de a bordo. La versión 1.25.2 mantiene las actualizaciones oficiales de OSM, gasolineras, radares DGT, límites DGT e INVIVE, y convierte el complemento RadarDroid `TYPE=1` en una semilla estática de 1.297 radares fijos sin cuentas, tokens ni descargas de terceros. Para una trayectoria confirmada, el radar abre la tarjeta y el primer aviso a 600 m, emite un único recordatorio a 300 m y prevalece visualmente sobre INVIVE. DGT tiene prioridad solo cuando coincide por vía, geometría y sentido; después se usa OSM y, como último respaldo visual, la recomendación azul por clase. El QA en emulador valida el recorrido GPS, los paneles a 581/293 m y las dos fases INVIVE; CAN, Android Auto, Bluetooth PAN y la salida de voz de una radio concreta siguen requiriendo validación en hardware.
 
 Aspectos que siguen dependiendo del hardware y no se presentan como universales:
 

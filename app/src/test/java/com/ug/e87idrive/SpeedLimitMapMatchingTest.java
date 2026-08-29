@@ -38,6 +38,12 @@ public class SpeedLimitMapMatchingTest {
         assertEquals(350L, SpeedLimitRepository.lookupIntervalForSpeedKmh(120d));
     }
 
+    @Test public void departureForcesImmediateLookupWithoutPredictingTheTurn() {
+        assertTrue(!SpeedLimitRepository.shouldReevaluateAfterDeparture(true, 2.9d));
+        assertTrue(SpeedLimitRepository.shouldReevaluateAfterDeparture(true, 3d));
+        assertTrue(!SpeedLimitRepository.shouldReevaluateAfterDeparture(false, 20d));
+    }
+
     @Test public void verifiedSignsAreAppliedOnlyAfterWayAndDirectionMatch() {
         SpeedLimitRepository.Match northbound = new SpeedLimitRepository.Match(30, 2d, 1L,
                 "ALICANTE", false, "residential", "33908151", 2d, 180d, 1_500d);

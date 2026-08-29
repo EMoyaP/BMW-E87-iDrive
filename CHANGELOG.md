@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## 1.25.2 — 29/08/2026
+
+- El primer aviso de radar fijo con trayectoria confirmada pasa a una distancia fija de **600 m**.
+  Se mantiene un único recordatorio de voz a **300 m** y el margen visual de 100 m tras el paso
+  confirmado. La distancia que ve el conductor sigue siendo la distancia real a la coordenada
+  publicada por DGT, sin desplazar puntos del inventario.
+- Una tarjeta de radar tiene prioridad visual sobre una zona INVIVE coincidente. INVIVE solo se
+  muestra cuando no existe un aviso de radar aplicable; esto evita que ambos mensajes compitan en
+  la misma zona de la pantalla.
+- La primera lectura GPS en movimiento tras estar detenido fuerza una reevaluación local de la vía.
+  Así no arrastra durante varios segundos el límite de un cruce a la carretera a la que se acaba de
+  incorporar, sin relajar el filtrado por geometría, rumbo y continuidad.
+- La fila superior se compacta solo mientras hay radar o INVIVE para que el aviso, su distancia y
+  el límite asociado no queden recortados en la resolución 1280×720 de la radio.
+- El ordenador de a bordo ya no trunca las etiquetas `Autonomía`, `Consumo` y `Exterior`.
+- Se añaden pruebas de la cadencia de 600/300 m y de salida desde parado, junto con una utilidad
+  estrictamente `debug` para reproducir GPS y documentar la interfaz. No forma parte de la APK
+  release ni modifica CANBUS, MCU, PDC, cámara, climatización o servicios OEM.
+
 ## 1.25.1 — 27/08/2026
 
 - La capa complementaria de 1.297 radares fijos españoles `TYPE=1` queda exclusivamente como

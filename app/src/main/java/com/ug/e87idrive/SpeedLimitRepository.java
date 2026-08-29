@@ -105,6 +105,11 @@ final class SpeedLimitRepository {
     private volatile long cachedLookupAt;
     private volatile double cachedLat;
     private volatile double cachedLon;
+    /**
+     * A stationary match intentionally survives ordinary GNSS drift.  It must not, however,
+     * delay the first real lookup after the vehicle starts moving away from an intersection.
+     */
+    private volatile boolean cachedLookupWasParked;
     private volatile Double latestDerivedSpeedKmh;
     private volatile long latestDerivedSpeedAt;
     private volatile Location latestDerivedSpeedLocation;
@@ -195,12 +200,17 @@ final class SpeedLimitRepository {
         Float bearing = reliableBearing(location, now);
         double speedKmh = effectiveSpeedKmh(location, now);
         long lookupInterval = lookupIntervalForSpeedKmh(speedKmh);
+        boolean leavingParkedMatch = shouldReevaluateAfterDeparture(cachedLookupWasParked,
+                speedKmh);
         double stationaryTolerance = speedKmh < 3d
                 ? Math.max(10d, location.hasAccuracy() ? location.getAccuracy() : 0d) : 15d;
-        if (now - cachedLookupAt < lookupInterval
+        if (!leavingParkedMatch && now - cachedLookupAt < lookupInterval
                 && distanceMeters(cachedLat, cachedLon, location.getLatitude(), location.getLongitude())
                 < stationaryTolerance) {
             return cachedMatch;
+        }
+        if (leavingParkedMatch) {
+            AppSessionLog.event(TAG, "Salida desde parado · reevaluando vía con GPS/ruta");
         }
         int matchRadius = matchRadiusFor(location);
         // First obtain the best geometrical candidate without letting source quality influence
@@ -216,6 +226,7 @@ final class SpeedLimitRepository {
         cachedLon = location.getLongitude();
         cachedLookupAt = now;
         cachedMatch = result;
+        cachedLookupWasParked = speedKmh < 3d;
         if (result != null) {
             lastMatchedOsmId = result.osmId;
         }
@@ -315,6 +326,17 @@ final class SpeedLimitRepository {
         if (speedKmh < 70d) return 750L;
         if (speedKmh < 100d) return 500L;
         return 350L;
+    }
+
+    /**
+     * The five-second parked cadence protects against position jitter while stationary.  As soon
+     * as a credible moving fix arrives, query the local map immediately rather than carrying a
+     * 30 km/h junction match into the road being joined.  Road selection still goes through
+     * {@link #stabilizeTrajectory(Match, Location, int, Float, double)} so nearby parallel
+     * carriageways are not promoted merely because the car has started moving.
+     */
+    static boolean shouldReevaluateAfterDeparture(boolean cachedWasParked, double speedKmh) {
+        return cachedWasParked && speedKmh >= 3d;
     }
 
     /** Uses Android's GNSS course when available, otherwise derives it from sufficiently

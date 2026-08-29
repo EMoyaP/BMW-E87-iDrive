@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private LinearLayout root, vehicleRows, statusBar;
     private LinearLayout boardSummaryRows;
     private LinearLayout fuelRows;
+    private LinearLayout vehicleNoticeContent;
     private GridLayout quickGrid;
     private TextView clock, date, mediaTitle, mediaArtist, mediaAlbum, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
     private TextView mediaPrevious, mediaPlayPause, mediaNext;
@@ -515,6 +516,7 @@ public class MainActivity extends Activity {
         LinearLayout box = card();
         box.addView(txt("MULTIMEDIA", 13, BLUE, true));
         LinearLayout content = horizontal();
+        vehicleNoticeContent = content;
         content.setGravity(Gravity.CENTER_VERTICAL);
         mediaArtwork = new ImageView(this);
         mediaArtwork.setImageResource(R.drawable.ic_menu_media);
@@ -971,9 +973,11 @@ public class MainActivity extends Activity {
             InviveRepository.Alert surveillance = invive.alert(gps.getLastLocation(), road, speedValue);
             if (surveillance == null) {
                 inviveNoticeView.setVisibility(View.GONE);
+                updateVehicleNoticeLayout(false);
             } else {
                 inviveNoticeView.setAlert(surveillance);
                 inviveNoticeView.setVisibility(View.VISIBLE);
+                updateVehicleNoticeLayout(true);
             }
             return;
         }
@@ -982,10 +986,27 @@ public class MainActivity extends Activity {
         SpeedLimitRepository.Match limit = resolved.match;
         radarNoticeView.setAlert(alert, limit != null && limit.exact ? limit.limitKmh : null);
         radarNoticeView.setVisibility(View.VISIBLE);
+        updateVehicleNoticeLayout(true);
         // Both the official inventory and the fixed-only local complementary seed may warn.
         // RadarSpeechAnnouncer itself rejects non-fixed records, so sections and any excluded
         // categories never acquire a spoken warning.
         if (radarSpeech != null) radarSpeech.onAlert(alert, limit);
+    }
+
+    /**
+     * The upper dashboard row has a fixed height on the radio. When a local radar or INVIVE
+     * notice is visible, reserve space for it by slightly compacting only the gauge row. This
+     * keeps the full-width notice and its distance readable instead of clipping it below the card.
+     */
+    private void updateVehicleNoticeLayout(boolean noticeVisible) {
+        if (vehicleNoticeContent == null) return;
+        android.view.ViewGroup.LayoutParams raw = vehicleNoticeContent.getLayoutParams();
+        if (!(raw instanceof LinearLayout.LayoutParams)) return;
+        LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) raw;
+        int target = dp(noticeVisible ? 164 : 174);
+        if (params.height == target) return;
+        params.height = target;
+        vehicleNoticeContent.setLayoutParams(params);
     }
 
     private static final class ResolvedSpeed {
@@ -1109,7 +1130,9 @@ public class MainActivity extends Activity {
         reading.setSingleLine(true);
         reading.setIncludeFontPadding(false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        row.addView(reading, lp(dp(158), -1));
+        // Let the reading consume only the width it actually needs. A fixed wide column made
+        // the short labels (Autonomía, Consumo, Exterior) truncate on the 1280x720 radio.
+        row.addView(reading, lp(-2, -1));
         return row;
     }
 
@@ -1122,6 +1145,16 @@ public class MainActivity extends Activity {
     }
 
     private String boardSummaryValue(VehicleField field) {
+        // Documentation captures can inject a clearly debug-only presentation scenario through
+        // src/debug. Release builds always take this branch as false and therefore remain tied to
+        // confirmed, passive vehicle sources only.
+        boolean debuggable = (getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        if (debuggable && uiPreferences.getBoolean("debug_presentation_active", false)) {
+            if (field == VehicleField.RANGE) return "700 km";
+            if (field == VehicleField.CONSUMPTION) return "6,2 l/100km";
+            if (field == VehicleField.EXTERIOR_TEMPERATURE) return "28,0 °C";
+        }
         VehicleValue<?> value = vehicleData.get(field);
         if (!value.isAvailable() || !(value.value() instanceof Double)) return null;
         double number = (Double) value.value();

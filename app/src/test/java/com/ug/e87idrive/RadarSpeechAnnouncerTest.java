@@ -19,11 +19,10 @@ public class RadarSpeechAnnouncerTest {
         assertEquals("Atención. Radar fijo.", RadarSpeechAnnouncer.messageFor(fixed, advisory));
     }
 
-    @Test public void warningDistanceIsAtLeastNineHundredMetersOrOneMinuteOfTravel() {
-        assertEquals(1_000, RadarRepository.alertDistanceForSpeed(0d));
-        assertEquals(1_000, RadarRepository.alertDistanceForSpeed(50d));
-        assertEquals(1_100, RadarRepository.alertDistanceForSpeed(60d));
-        assertEquals(2_100, RadarRepository.alertDistanceForSpeed(120d));
+    @Test public void firstWarningIsAtSixHundredMetersRegardlessOfSpeed() {
+        assertEquals(600, RadarRepository.alertDistanceForSpeed(0d));
+        assertEquals(600, RadarRepository.alertDistanceForSpeed(50d));
+        assertEquals(600, RadarRepository.alertDistanceForSpeed(120d));
     }
 
     @Test public void fixedCameraUsesGlobalOneHundredMeterPassageMargin() {

@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Emulator/documentation helper. This component is packaged only in debug builds. -->
+        <receiver
+            android:name=".DebugPresentationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.ug.e87idrive.DEBUG_PRESENTATION" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

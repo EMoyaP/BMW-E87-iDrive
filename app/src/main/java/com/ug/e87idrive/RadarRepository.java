@@ -52,10 +52,13 @@ final class RadarRepository {
     private static final float MAX_GPS_ACCURACY_METERS = 35f;
     private static final long TRAJECTORY_WINDOW_MS = 25_000L;
     private static final double HEADING_TOLERANCE_DEGREES = 55d;
+    /** First fixed/section-camera dashboard and voice warning. The reminder is owned by
+     * {@link RadarSpeechAnnouncer} at 300 m. */
+    private static final int FIRST_WARNING_DISTANCE_METERS = 600;
     /**
      * The DGT point is a reference position, not a surveyed vehicle-facing cabinet location.
-     * Keep a small, symmetric driving margin for every fixed camera: lookup begins 100 m
-     * earlier and the dashboard remains visible for 100 m after crossing the published point.
+     * Keep a small post-passage driving margin for every fixed camera: after a confirmed
+     * approach, the dashboard remains visible for 100 m after crossing the published point.
      * The displayed distance remains the DGT distance; a global coordinate shift would make
      * accurately georeferenced cameras wrong. The margin is deliberately not used for section
      * cameras, whose reference geometry has a different meaning.
@@ -515,12 +518,10 @@ final class RadarRepository {
     }
 
     private static int alertDistanceMeters(Double speedKmh) {
-        double speed = speedKmh == null || !Double.isFinite(speedKmh) ? 0d : Math.max(0d, speedKmh);
-        // At least 900 m, or roughly one minute at the current speed, plus the fixed-camera
-        // ±100 m lookup margin. A cap keeps the local lookup bounded on the low-power unit.
-        return (int) Math.round(Math.max(900d,
-                Math.min(MAX_LOOKUP_METERS - FIXED_CAMERA_POSITION_TOLERANCE_METERS,
-                        speed / 3.6d * 60d)) + FIXED_CAMERA_POSITION_TOLERANCE_METERS);
+        // A fixed 600 m opening is predictable to the driver and avoids the former one-minute
+        // rule becoming excessive at road speed. The local ±100 m passage margin remains active
+        // around the DGT reference point; it does not alter the distance shown on screen.
+        return FIRST_WARNING_DISTANCE_METERS;
     }
 
     static int alertDistanceForSpeed(Double speedKmh) { return alertDistanceMeters(speedKmh); }
