@@ -63,6 +63,13 @@ public class MainActivity extends Activity {
     private LinearLayout boardSummaryRows;
     private LinearLayout fuelRows;
     private LinearLayout vehicleNoticeContent;
+    private final DrivingViewPolicy drivingViewPolicy = new DrivingViewPolicy();
+    private DrivingDashboardView drivingOverlay;
+    private SpeedLimitView drivingSign;
+    private RadarNoticeView drivingRadar;
+    private InviveNoticeView drivingInvive;
+    private LinearLayout gaugeHome;
+    private boolean drivingViewActive;
     private GridLayout quickGrid;
     private TextView clock, date, mediaTitle, mediaArtist, mediaAlbum, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
     private TextView mediaPrevious, mediaPlayPause, mediaNext;
@@ -120,6 +127,11 @@ public class MainActivity extends Activity {
         invive = new InviveRepository(this);
         bluetoothState = new BluetoothDeviceProvider(this, this::refreshPhoneWidget);
         gps = new GpsSpeedProvider(this, (location, kmh) -> runOnUiThread(() -> {
+            long fixMs = location.getElapsedRealtimeNanos() / 1_000_000L;
+            boolean reliable = location.hasSpeed() && location.hasAccuracy()
+                    && location.getAccuracy() <= 25f
+                    && android.os.SystemClock.elapsedRealtime() - fixMs <= 5_000L;
+            setDrivingView(drivingViewPolicy.accept(fixMs, location.getSpeed() * 3.6d, reliable));
             fuelStations.onLocation(location);
             speedLimits.onLocation(location, kmh);
             radars.onLocation(location);
@@ -198,12 +210,15 @@ public class MainActivity extends Activity {
     }
 
     private void buildUi() {
+        drivingViewActive = false;
         roleLabels.clear();
         roleHints.clear();
         root = vertical();
         root.setBackgroundColor(BG);
         root.setPadding(0, 0, 0, 0);
-        setContentView(root);
+        FrameLayout screen = new FrameLayout(this);
+        screen.addView(root, frameLp(-1, -1, Gravity.CENTER));
+        setContentView(screen);
         root.addView(header(), lp(-1, dp(74)));
         LinearLayout content = vertical();
         content.setPadding(dp(10), dp(10), dp(10), 0);
@@ -223,6 +238,20 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams statusParams = lp(-1, dp(60));
         statusParams.setMargins(dp(10), dp(3), dp(10), dp(7));
         root.addView(statusBar, statusParams);
+        drivingOverlay = new DrivingDashboardView(this);
+        drivingSign = new SpeedLimitView(this, TEXT, Color.rgb(225, 38, 38), MUTED);
+        drivingSign.aura = true;
+        drivingRadar = new RadarNoticeView(this, TEXT, BLUE, MUTED);
+        drivingInvive = new InviveNoticeView(this, TEXT, BLUE, MUTED, ACCENT);
+        drivingRadar.setVisibility(View.GONE);
+        drivingInvive.setVisibility(View.GONE);
+        TextView drivingMenu = txt("☰", 26, TEXT, true);
+        drivingMenu.setGravity(Gravity.CENTER);
+        drivingMenu.setContentDescription("Abrir menú iDrive");
+        drivingMenu.setOnClickListener(v -> mainMenuModal());
+        drivingOverlay.attach(drivingSign, drivingRadar, drivingInvive, drivingMenu);
+        drivingOverlay.setVisibility(View.GONE);
+        screen.addView(drivingOverlay, frameLp(-1, -1, Gravity.CENTER));
     }
 
     private View header() {
@@ -516,7 +545,6 @@ public class MainActivity extends Activity {
         LinearLayout box = card();
         box.addView(txt("MULTIMEDIA", 13, BLUE, true));
         LinearLayout content = horizontal();
-        vehicleNoticeContent = content;
         content.setGravity(Gravity.CENTER_VERTICAL);
         mediaArtwork = new ImageView(this);
         mediaArtwork.setImageResource(R.drawable.ic_menu_media);
@@ -627,18 +655,17 @@ public class MainActivity extends Activity {
         LinearLayout box = card();
         LinearLayout title = horizontal();
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.addView(txt("VELOCÍMETRO", 13, BLUE, true), lp(0, -1, 1));
+        title.addView(txt("VÍA Y AVISOS", 13, BLUE, true), lp(0, -1, 1));
         speedSource = txt("GPS · esperando señal", 9, MUTED, false);
         speedSource.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
         title.addView(speedSource, lp(dp(155), -1));
         title.setOnClickListener(v -> vehicleModal());
         box.addView(title, lp(-1, dp(34)));
         LinearLayout content = horizontal();
-        LinearLayout gaugeColumn = vertical();
-        gaugeColumn.setGravity(Gravity.CENTER);
-        speedGauge = new SpeedGaugeView(this);
-        gaugeColumn.addView(speedGauge, lp(-1, 0, 1));
-        content.addView(gaugeColumn, lp(0, -1, 1.32f));
+        vehicleNoticeContent = content;
+        gaugeHome = box;
+        // The home screen is the resting view. Speed belongs in the driving cluster.
+        speedGauge = null;
 
         LinearLayout limitColumn = vertical();
         limitColumn.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -648,15 +675,15 @@ public class MainActivity extends Activity {
         limitColumn.addView(limitHeading, lp(-1, dp(25)));
         speedLimitView = new SpeedLimitView(this, TEXT, Color.rgb(225, 38, 38), MUTED);
         speedLimitView.setContentDescription("Límite de velocidad obtenido de una fuente de mapa");
-        limitColumn.addView(speedLimitView, lp(dp(105), dp(105)));
+        limitColumn.addView(speedLimitView, lp(dp(130), dp(130)));
         speedLimitState = txt("Sin fuente de mapa", 9, MUTED, false);
         speedLimitState.setGravity(Gravity.CENTER);
         speedLimitState.setMaxLines(2);
         limitColumn.addView(speedLimitState, lp(-1, dp(32)));
-        content.addView(limitColumn, lp(0, -1, .68f));
+        content.addView(limitColumn, lp(0, -1, 1));
         // Keep the dial and road sign in the upper row. A radar notice needs a full-width
         // row below them; the former narrow column made its distance and approach state unreadable.
-        box.addView(content, lp(-1, dp(174)));
+        box.addView(content, lp(-1, dp(190)));
         radarNoticeView = new RadarNoticeView(this, TEXT, BLUE, MUTED);
         radarNoticeView.setContentDescription("Aviso local de radar fijo o de tramo");
         radarNoticeView.setVisibility(View.GONE);
@@ -867,13 +894,16 @@ public class MainActivity extends Activity {
 
     private void refreshVehicle() {
         VehicleValue<?> speed = vehicleData.get(VehicleField.SPEED);
-        if (speedGauge != null) {
+        {
             Double speedValue = speed.isAvailable() && speed.value() instanceof Number
                     ? ((Number) speed.value()).doubleValue() : null;
-            speedGauge.setSpeed(speedValue);
+            if (speedGauge != null) speedGauge.setSpeed(speedValue);
+            if (drivingOverlay != null) drivingOverlay.readings(speedValue,
+                    boardSummaryValue(VehicleField.RANGE), boardSummaryValue(VehicleField.CONSUMPTION),
+                    boardSummaryValue(VehicleField.EXTERIOR_TEMPERATURE));
             // Gear is still an historical/stale CAN observation on this unit. Do not paint
             // P/R/N as current until a live source is validated in a guided test.
-            speedGauge.setGear(null);
+            if (speedGauge != null) speedGauge.setGear(null);
             if (speedSource != null) {
                 speedSource.setText(speedValue == null
                         ? "GPS · sin señal" : "Fuente " + shortSource(speed.source()));
@@ -909,6 +939,10 @@ public class MainActivity extends Activity {
         if (speedLimitView == null || speedLimits == null || gps == null) return;
         ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
         SpeedLimitRepository.Match match = resolved.match;
+        if (drivingOverlay != null) {
+            drivingSign.setLimit(match == null ? null : match.limitKmh, match != null && match.exact);
+            drivingOverlay.road(match == null ? null : match.limitKmh, match != null && match.exact);
+        }
         if (match == null) {
             speedLimitView.setLimit(null);
             if (speedGauge != null) speedGauge.setRoadLimit(null);
@@ -965,26 +999,40 @@ public class MainActivity extends Activity {
         Double speedValue = speed != null && speed.isAvailable() && speed.value() instanceof Number
                 ? ((Number) speed.value()).doubleValue() : null;
         RadarRepository.Alert alert = radars.alert(gps.getLastLocation(), speedValue);
+        if (drivingOverlay != null) drivingOverlay.radarLimit(alert == null ? null : alert.cameraLimitKmh);
         if (alert == null) {
             radarNoticeView.setVisibility(View.GONE);
+            if (drivingRadar != null) drivingRadar.setVisibility(View.GONE);
             if (radarSpeech != null) radarSpeech.onAlertCleared();
             ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
             SpeedLimitRepository.Match road = resolved.match;
             InviveRepository.Alert surveillance = invive.alert(gps.getLastLocation(), road, speedValue);
             if (surveillance == null) {
                 inviveNoticeView.setVisibility(View.GONE);
+                if (drivingInvive != null) drivingInvive.setVisibility(View.GONE);
                 updateVehicleNoticeLayout(false);
             } else {
                 inviveNoticeView.setAlert(surveillance);
                 inviveNoticeView.setVisibility(View.VISIBLE);
+                if (drivingInvive != null) {
+                    drivingInvive.setAlert(surveillance);
+                    drivingInvive.setVisibility(View.VISIBLE);
+                }
                 updateVehicleNoticeLayout(true);
             }
             return;
         }
         inviveNoticeView.setVisibility(View.GONE);
+        if (drivingInvive != null) drivingInvive.setVisibility(View.GONE);
         ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
         SpeedLimitRepository.Match limit = resolved.match;
-        radarNoticeView.setAlert(alert, limit != null && limit.exact ? limit.limitKmh : null);
+        Integer cameraLimit = alert.cameraLimitKmh != null ? alert.cameraLimitKmh
+                : limit != null && limit.exact ? limit.limitKmh : null;
+        radarNoticeView.setAlert(alert, cameraLimit);
+        if (drivingRadar != null) {
+            drivingRadar.setAlert(alert, cameraLimit);
+            drivingRadar.setVisibility(View.VISIBLE);
+        }
         radarNoticeView.setVisibility(View.VISIBLE);
         updateVehicleNoticeLayout(true);
         // Both the official inventory and the fixed-only local complementary seed may warn.
@@ -999,14 +1047,53 @@ public class MainActivity extends Activity {
      * keeps the full-width notice and its distance readable instead of clipping it below the card.
      */
     private void updateVehicleNoticeLayout(boolean noticeVisible) {
+        if (drivingViewActive) return;
         if (vehicleNoticeContent == null) return;
         android.view.ViewGroup.LayoutParams raw = vehicleNoticeContent.getLayoutParams();
         if (!(raw instanceof LinearLayout.LayoutParams)) return;
         LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) raw;
-        int target = dp(noticeVisible ? 164 : 174);
+        int target = dp(noticeVisible ? 164 : 190);
+        if(speedLimitView != null) {
+            android.view.ViewGroup.LayoutParams signParams=speedLimitView.getLayoutParams();
+            int side=dp(noticeVisible?105:130);
+            if(signParams.height!=side) {
+                signParams.height=side; signParams.width=side;
+                speedLimitView.setLayoutParams(signParams);
+            }
+        }
         if (params.height == target) return;
         params.height = target;
         vehicleNoticeContent.setLayoutParams(params);
+    }
+
+    private void setDrivingView(boolean enabled) {
+        enabled = enabled && uiPreferences.getBoolean("automatic_driving_view", true);
+        if (drivingOverlay == null || vehicleNoticeContent == null || gaugeHome == null
+                || drivingViewActive == enabled) return;
+        drivingViewActive = enabled;
+        drivingOverlay.animate().cancel();
+        root.animate().cancel();
+        if (enabled) {
+            refreshVehicle();
+            drivingOverlay.setVisibility(View.VISIBLE);
+            drivingOverlay.setAlpha(0f);
+            drivingOverlay.setScaleX(1.06f);
+            drivingOverlay.setScaleY(1.06f);
+            drivingOverlay.setTranslationY(dp(18));
+            drivingOverlay.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f).setDuration(720)
+                    .setInterpolator(new android.view.animation.PathInterpolator(.16f,1f,.3f,1f)).start();
+            drivingOverlay.animateInstruments(true);
+            root.animate().alpha(0f).scaleX(.94f).scaleY(.94f).translationY(-dp(12)).setDuration(500)
+                    .setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator()).start();
+        } else {
+            drivingOverlay.animateInstruments(false);
+            root.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f).setDuration(620)
+                    .setInterpolator(new android.view.animation.PathInterpolator(.16f,1f,.3f,1f)).start();
+            drivingOverlay.animate().alpha(0f).scaleX(1.035f).scaleY(1.035f).translationY(dp(10)).setDuration(450)
+                    .withEndAction(() -> { if (!drivingViewActive) drivingOverlay.setVisibility(View.GONE); }).start();
+        }
+        AppSessionLog.event("UI CONDUCCIÓN", enabled ? "Vista ampliada · movimiento GPS confirmado"
+                : "Vista habitual · 60 segundos detenido con GPS válido");
     }
 
     private static final class ResolvedSpeed {
@@ -1327,6 +1414,15 @@ public class MainActivity extends Activity {
         box.addView(debug, lp(-1, dp(56)));
         box.addView(permissions, lp(-1, dp(56)));
         box.addView(updates, lp(-1, dp(56)));
+        Switch drivingView = new Switch(this);
+        drivingView.setText("Vista de conducción automática");
+        drivingView.setTextColor(TEXT);
+        drivingView.setChecked(uiPreferences.getBoolean("automatic_driving_view", true));
+        drivingView.setOnCheckedChangeListener((button, enabled) -> {
+            uiPreferences.edit().putBoolean("automatic_driving_view", enabled).apply();
+            if (!enabled) setDrivingView(false);
+        });
+        box.addView(drivingView, lp(-1, dp(48)));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Herramientas")
@@ -1345,7 +1441,7 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             updatesModal();
         });
-        showSized(dialog, .54f, .47f);
+        showSized(dialog, .54f, .58f);
     }
 
     private void updatesModal() {
@@ -3002,6 +3098,7 @@ public class MainActivity extends Activity {
 
     /** Local-map speed sign. A blank sign means no verified nearby maxspeed is cached. */
     private static final class SpeedLimitView extends View {
+        private boolean aura;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF advisory = new RectF();
         private final int foreground, red, muted;
@@ -3028,9 +3125,27 @@ public class MainActivity extends Activity {
             // The number is the information drivers need first. Let both Spanish sign
             // variants use almost all their allotted area, while measuring the label so
             // 100/120 never clips on the fixed 1280x720 head unit.
-            float size = Math.min(getWidth(), getHeight()) * .96f;
+            float size = Math.min(getWidth(), getHeight()) * (aura ? .80f : .96f);
             float cx = getWidth() / 2f;
             float cy = getHeight() / 2f;
+            // Layered contour glow stays within the view; no blur/software rendering needed.
+            if(aura && limit!=null) {
+                int halo=exact?red:Color.rgb(25,126,235);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(Math.max(1f,size*.008f));
+                for(int i=24;i>=0;i--) {
+                    float spread=size*.004f*i;
+                    float strength=1-i/25f;
+                    paint.setColor(Color.argb(Math.round(100*strength*strength),
+                            Color.red(halo),Color.green(halo),Color.blue(halo)));
+                    if(exact) canvas.drawCircle(cx,cy,size*.495f+spread,paint);
+                    else {
+                        float half=size*.4625f+spread;
+                        advisory.set(cx-half,cy-half,cx+half,cy+half);
+                        canvas.drawRoundRect(advisory,size*.065f+spread,size*.065f+spread,paint);
+                    }
+                }
+            }
             String label = limit == null ? "—" : String.valueOf(limit);
             float textWidthLimit;
             if (limit != null && !exact) {
@@ -3194,9 +3309,27 @@ public class MainActivity extends Activity {
             super.onDraw(canvas);
             if (alert == null) return;
             float w = getWidth(), h = getHeight();
-            rect.set(1f, 1f, w - 1f, h - 1f);
+            // Slow 0.5 Hz breathing glow: it never flashes to black or changes the card content,
+            // and therefore avoids a high-frequency/stroboscopic warning while remaining visible.
+            double phase = (android.os.SystemClock.uptimeMillis() % 2_000L) / 2_000d;
+            float pulse = (float) ((1d - Math.cos(phase * Math.PI * 2d)) * .5d);
+            rect.set(dp(5), dp(5), w - dp(5), h - dp(5));
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(9));
+            paint.setColor(Color.argb(Math.round(28 + 56 * pulse), 238, 32, 36));
+            canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+            paint.setStrokeWidth(dp(4));
+            paint.setColor(Color.argb(Math.round(60 + 85 * pulse), 255, 55, 45));
+            canvas.drawRoundRect(rect, dp(9), dp(9), paint);
+            rect.set(dp(3), dp(3), w - dp(3), h - dp(3));
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.rgb(5, 22, 39));
+            canvas.drawRoundRect(rect, dp(8), dp(8), paint);
+            // Overlay a translucent red halo on the card edge; the crisp blue frame below stays
+            // readable while the red intensity breathes slowly around it.
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(7));
+            paint.setColor(Color.argb(Math.round(52 + 96 * pulse), 255, 35, 40));
             canvas.drawRoundRect(rect, dp(8), dp(8), paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(Math.max(1.2f, h * .018f));
@@ -3258,6 +3391,7 @@ public class MainActivity extends Activity {
             canvas.drawText(roadLimit == null ? "—" : String.valueOf(roadLimit), cx,
                     signCy - (paint.ascent() + paint.descent()) / 2f, paint);
             paint.setTypeface(Typeface.DEFAULT);
+            if (getWindowVisibility() == VISIBLE && isShown()) postInvalidateDelayed(33L);
         }
 
         private static String formatDistance(double meters) {

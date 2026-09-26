@@ -43,8 +43,20 @@ final class RadarRepository {
             "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml";
     private static final String SOURCE_DGT = "DGT";
     private static final String SOURCE_LUFOP = "LUFOP";
+    private static final String SOURCE_OSM = "OSM";
+
+    static void replaceOsm(Context context, String province, ArrayList<OsmRadarData.Camera> cameras, long now) {
+        ArrayList<RawRecord> rows = new ArrayList<>();
+        for (OsmRadarData.Camera camera : cameras) {
+            RawRecord row = new RawRecord(camera.id, "FIJO", camera.road, camera.direction,
+                    camera.point, province, SOURCE_OSM);
+            row.osmMetadata = camera.metadata;
+            rows.add(row);
+        }
+        try (Database db = new Database(context)) { db.replaceOsmProvince(province, rows, now); }
+    }
     /** Versioned so an upgrade replaces any legacy downloaded supplemental cache with the APK seed. */
-    private static final String SUPPLEMENTAL_SEED_REVISION = "20260827-type1-1297";
+    private static final String SUPPLEMENTAL_SEED_REVISION = "20260920-asc-fixed-1219-bb1e34bf";
     private static final long REFRESH_INTERVAL_MS = 24L * 60L * 60L * 1_000L;
     private static final long RETRY_INTERVAL_MS = 30L * 60L * 1_000L;
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -107,6 +119,16 @@ final class RadarRepository {
         connectivity = (ConnectivityManager) this.context.getSystemService(Context.CONNECTIVITY_SERVICE);
         preferences = this.context.getSharedPreferences("dgt_radar_updates", Context.MODE_PRIVATE);
         database = new Database(this.context);
+        new Thread(() -> {
+            if (database.countBySource(SOURCE_OSM) > 0) return;
+            try (InputStream input = this.context.getAssets().open("e87_osm_radars_alicante.json")) {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[8192]; int n;
+                while ((n = input.read(buffer)) != -1) out.write(buffer, 0, n);
+                replaceOsm(this.context, "ALICANTE", OsmRadarData.parse(new org.json.JSONObject(
+                        out.toString("UTF-8"))), System.currentTimeMillis());
+            } catch (Exception error) { AppSessionLog.event("RADARES OSM", "Semilla: " + error.getMessage()); }
+        }, "e87-osm-radar-seed").start();
         seedFromAssetsAsync();
     }
 
@@ -144,7 +166,7 @@ final class RadarRepository {
             return null;
         }
         int alertDistance = alertDistanceMeters(speedKmh);
-        Record record = database.nearest(location.getLatitude(), location.getLongitude(), alertDistance);
+        Record record = database.nearest(location, alertDistance);
         if (record == null) {
             clearTracking();
             return null;
@@ -362,9 +384,10 @@ final class RadarRepository {
                 + "DGT=" + database.countBySource(SOURCE_DGT) + " · semilla=" + seedStatus + "\n"
                 + "Complemento estático=" + database.countBySource(SOURCE_LUFOP)
                 + " · semilla=" + supplementalSeedStatus + "\n"
+                + "OSM=" + database.countBySource(SOURCE_OSM) + " · aviso solo con corredor y rumbo compatibles\n"
                 + "última actualización=" + lastResult + "\n"
                 + "fuente=" + DGT_ENDPOINT + "\n"
-                + "complemento=Lufop/RadarDroid TYPE=1 · local, sin descarga\n"
+                + "complemento=Lufop ASC ESFixeES · local, sin descarga\n"
                 + "solo=fijos y tramo; móviles excluidos\n"
                 + "lectura=en local durante la marcha; feed nacional; actualización máx. una vez/24 h\n";
     }
@@ -553,9 +576,11 @@ final class RadarRepository {
     }
 
     private static Alert alertFor(Record record, boolean approaching, boolean passageMarginActive) {
-        return new Alert(record.id, record.type, record.road, record.direction,
+        Alert alert = new Alert(record.id, record.type, record.road, record.direction,
                 displayedDistanceFor(record.type, record.distanceMeters), record.distanceMeters,
                 record.province, record.source, approaching, true, passageMarginActive, record.updatedAt);
+        alert.cameraLimitKmh = record.cameraLimitKmh;
+        return alert;
     }
 
     private DirectionEvidence directionEvidence(Location location, Record record, Double speedKmh,
@@ -733,6 +758,7 @@ final class RadarRepository {
     }
 
     static final class Alert {
+        Integer cameraLimitKmh;
         final String id, type, road, direction, province, source;
         final double distanceMeters;
         /** Raw DGT-reference distance retained for diagnostics; UI uses distanceMeters. */
@@ -781,6 +807,7 @@ final class RadarRepository {
     }
 
     private static final class RawRecord {
+        String osmMetadata = "";
         final String id, type, road, direction, points, province, source;
         RawRecord(String id, String type, String road, String direction, String points, String province) {
             this(id, type, road, direction, points, province, SOURCE_DGT);
@@ -829,6 +856,7 @@ final class RadarRepository {
     }
 
     private static final class Record {
+        Integer cameraLimitKmh;
         final String id, type, road, direction, province, points, source;
         final double distanceMeters;
         final long updatedAt;
@@ -842,16 +870,17 @@ final class RadarRepository {
 
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_dgt_radars.db";
-        Database(Context context) { super(context, NAME, null, 2); }
+        Database(Context context) { super(context, NAME, null, 3); }
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE radars (id TEXT PRIMARY KEY, type TEXT NOT NULL, road TEXT NOT NULL, "
                     + "direction TEXT NOT NULL, points TEXT NOT NULL, province TEXT NOT NULL, source TEXT NOT NULL, updated_at INTEGER NOT NULL, "
-                    + "min_lat REAL NOT NULL, max_lat REAL NOT NULL, min_lon REAL NOT NULL, max_lon REAL NOT NULL)");
+                    + "min_lat REAL NOT NULL, max_lat REAL NOT NULL, min_lon REAL NOT NULL, max_lon REAL NOT NULL, osm_metadata TEXT NOT NULL DEFAULT '')");
             db.execSQL("CREATE INDEX radar_bounds ON radars(min_lat, max_lat, min_lon, max_lon)");
             db.execSQL("CREATE INDEX radar_province ON radars(province)");
             db.execSQL("CREATE INDEX radar_source ON radars(source)");
         }
         @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            if (oldVersion < 3) db.execSQL("ALTER TABLE radars ADD COLUMN osm_metadata TEXT NOT NULL DEFAULT ''");
             if (oldVersion < 2) {
                 db.execSQL("ALTER TABLE radars ADD COLUMN source TEXT NOT NULL DEFAULT 'DGT'");
                 db.execSQL("CREATE INDEX IF NOT EXISTS radar_source ON radars(source)");
@@ -868,6 +897,16 @@ final class RadarRepository {
                 db.setTransactionSuccessful();
             } finally { db.endTransaction(); }
             return imported;
+        }
+
+        synchronized void replaceOsmProvince(String province, ArrayList<RawRecord> records, long now) {
+            SQLiteDatabase db = getWritableDatabase();
+            db.beginTransaction();
+            try {
+                db.delete("radars", "source = ? AND province = ?", new String[]{SOURCE_OSM, province});
+                insertRecords(db, records, now);
+                db.setTransactionSuccessful();
+            } finally { db.endTransaction(); }
         }
 
         synchronized int replaceDgtAll(ArrayList<RawRecord> records, long now) {
@@ -905,15 +944,19 @@ final class RadarRepository {
                 values.put("points", record.points);
                 values.put("province", record.province);
                 values.put("source", record.source);
+                values.put("osm_metadata", record.osmMetadata);
                 values.put("updated_at", now);
                 values.put("min_lat", bounds[0]); values.put("max_lat", bounds[1]);
                 values.put("min_lon", bounds[2]); values.put("max_lon", bounds[3]);
-                if (db.insertWithOnConflict("radars", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1) imported++;
+                if (db.insertWithOnConflict("radars", null, values, SQLiteDatabase.CONFLICT_REPLACE) == -1)
+                    throw new IllegalStateException("No se pudo guardar el radar " + record.id);
+                imported++;
             }
             return imported;
         }
 
-        synchronized Record nearest(double latitude, double longitude, int maxDistanceMeters) {
+        synchronized Record nearest(Location location, int maxDistanceMeters) {
+            double latitude = location.getLatitude(), longitude = location.getLongitude();
             double latDelta = maxDistanceMeters / 111_320d;
             double lonDelta = maxDistanceMeters / Math.max(1d, 111_320d * Math.cos(Math.toRadians(latitude)));
             String selection = "min_lat <= ? AND max_lat >= ? AND min_lon <= ? AND max_lon >= ?";
@@ -921,7 +964,7 @@ final class RadarRepository {
                     String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
             Record result = null;
             try (Cursor cursor = getReadableDatabase().query("radars",
-                    new String[]{"id", "type", "road", "direction", "province", "points", "source", "updated_at"},
+                    new String[]{"id", "type", "road", "direction", "province", "points", "source", "updated_at", "osm_metadata"},
                     selection, args, null, null, null)) {
                 while (cursor.moveToNext()) {
                     String points = cursor.getString(5);
@@ -930,6 +973,14 @@ final class RadarRepository {
                     Record candidate = new Record(cursor.getString(0), cursor.getString(1), cursor.getString(2),
                             cursor.getString(3), cursor.getString(4), points, cursor.getString(6), distance,
                             cursor.getLong(7));
+                    if (SOURCE_OSM.equals(candidate.source)) {
+                        int limit = OsmRadarMatch.limit(location, cursor.getString(8));
+                        if (limit < 0) continue;
+                        candidate.cameraLimitKmh = limit == 0 ? null : limit;
+                        // Do not emit a second approach for an installation already represented
+                        // by the existing DGT/static layer. Never copy metadata between points.
+                        if (hasLegacyNear(points, 120)) continue;
+                    }
                     // DGT remains authoritative when both sources describe the same installation.
                     // Do not require the DGT point to be the closer coordinate: the official
                     // reference and a supplemental POI can legitimately differ by about the
@@ -950,6 +1001,19 @@ final class RadarRepository {
                 }
             }
             return result;
+        }
+
+        private boolean hasLegacyNear(String points, int meters) {
+            String[] pair = points.split(",");
+            if (pair.length != 2) return true;
+            double lat = Double.parseDouble(pair[0]), lon = Double.parseDouble(pair[1]);
+            double dy = meters / 111320d, dx = dy / Math.cos(Math.toRadians(lat));
+            try (Cursor c = getReadableDatabase().query("radars", new String[]{"points"},
+                    "source != ? AND min_lat <= ? AND max_lat >= ? AND min_lon <= ? AND max_lon >= ?",
+                    new String[]{SOURCE_OSM, ""+(lat+dy), ""+(lat-dy), ""+(lon+dx), ""+(lon-dx)}, null,null,null)) {
+                while(c.moveToNext()) if(nearestDistance(lat,lon,c.getString(0))<=meters)return true;
+            }
+            return false;
         }
 
         synchronized int countBySource(String source) {

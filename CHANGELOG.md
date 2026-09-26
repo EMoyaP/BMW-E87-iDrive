@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## 1.26.1 — 26/09/2026
+
+- Semillas incluidas: 113.227 tramos OSM de Alicante, 479 gasolineras diésel,
+  radares DGT nacionales, INVIVE nacional, límites DGT y 1.219 fijos complementarios.
+- Nueva capa local de radares fijos OSM de Alicante. Solo activa el límite propio del radar
+  cuando una relación `enforcement=maxspeed` aporta corredor `from/to` y la trayectoria GPS
+  coincide; no interpreta por sí sola la orientación óptica de la cámara.
+- Las actualizaciones OSM usan POST, conservan la base anterior si fallan y respetan las
+  ventanas existentes de 24 horas tras éxito y 30 minutos tras error.
+- Los radares OSM coincidentes con DGT o la semilla complementaria no generan avisos dobles.
+- La tarjeta de radar visible incorpora un aura roja de pulsación lenta (0,5 Hz), sin apagados
+  completos ni destellos bruscos.
+- Corregido el inicio de la vista de conducción cuando todavía no existe un límite de vía.
+
+## 1.26.0 — 19/09/2026
+
+- Vista de conducción nativa basada en el boceto aprobado: esfera abierta a la izquierda,
+  BMW E87 central, señal de límite a la derecha y avisos debajo de la señal.
+- Velocidad y relleno naranja al superar límites explícitos; señales aconsejadas azules.
+- Entrada con fundido y escala tras dos lecturas fiables >5 km/h; salida tras 60 segundos
+  continuos <2 km/h. Las pérdidas de GPS no equivalen a una parada.
+- Autonomía, consumo y temperatura conectados a las lecturas existentes. Menú accesible.
+- Sin cambios al ciclo de vida de Android Auto, algoritmos de mapas ni avisos sonoros.
+
 ## 1.25.2 — 29/08/2026
 
 - El primer aviso de radar fijo con trayectoria confirmada pasa a una distancia fija de **600 m**.

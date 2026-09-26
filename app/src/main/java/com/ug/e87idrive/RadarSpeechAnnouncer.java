@@ -99,7 +99,7 @@ final class RadarSpeechAnnouncer {
     }
 
     private void announce(RadarRepository.Alert alert, SpeedLimitRepository.Match limit, boolean reminder) {
-        int resource = resourceFor(limit);
+        int resource = alert.cameraLimitKmh != null ? resourceForValue(alert.cameraLimitKmh) : resourceFor(limit);
         if (loadedResources.contains(resource)) play(resource, reminder);
         else {
             pendingResource = resource;
@@ -189,7 +189,11 @@ final class RadarSpeechAnnouncer {
 
     private static int resourceFor(SpeedLimitRepository.Match limit) {
         if (limit == null || !limit.exact) return R.raw.radar_fijo_generico;
-        switch (limit.limitKmh) {
+        return resourceForValue(limit.limitKmh);
+    }
+
+    private static int resourceForValue(int value) {
+        switch (value) {
             case 30: return R.raw.radar_fijo_30;
             case 40: return R.raw.radar_fijo_40;
             case 50: return R.raw.radar_fijo_50;
@@ -206,6 +210,8 @@ final class RadarSpeechAnnouncer {
 
     static String messageFor(RadarRepository.Alert alert, SpeedLimitRepository.Match limit) {
         if (alert == null || !"FIJO".equalsIgnoreCase(alert.type)) return "";
+        if (alert.cameraLimitKmh != null) return "Atención. Radar fijo. Límite "
+                + alert.cameraLimitKmh + " kilómetros por hora.";
         // A blue classification guidance is not a statutory radar limit; do not voice it as one.
         if (limit != null && limit.exact && limit.limitKmh > 0) {
             return "Atención. Radar fijo. Límite " + limit.limitKmh + " kilómetros por hora.";

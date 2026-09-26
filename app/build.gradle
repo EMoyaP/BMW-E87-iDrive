@@ -82,8 +82,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 59
-        versionName "1.25.2"
+        versionCode 61
+        versionName "1.26.1"
     }
 
     compileOptions {
@@ -104,4 +104,5 @@ tasks.named('preBuild').configure {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }

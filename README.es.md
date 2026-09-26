@@ -14,9 +14,9 @@ Reúne información de conducción obtenida por GPS, precios españoles de gasol
 
 ## Panel principal
 
-![Panel principal v1.25.2: ordenador de a bordo, velocímetro GPS, límite local, radar fijo a 581 m, gasolineras y accesos OEM](docs/screenshots/bmw-e87-ui-v1.25.2-dashboard-radar-581m.png)
+![Vista de conducción v1.26.1 con velocímetro GPS, radar fijo a 450 m y aura roja de aviso](docs/screenshots/driving-v1.26.1-radar-glow.png)
 
-*Captura de la interfaz v1.25.2 en emulador con un recorrido GPS reproducido: autonomía 700 km, consumo 6,2 l/100 km, exterior 28,0 °C, límite local y radar fijo a 581 m. Esos tres valores del ordenador son una escena visual exclusiva de depuración; en la radio solo se mostrarán lecturas reales que publiquen sus fuentes pasivas.*
+*Captura de la interfaz v1.26.1 en emulador con un recorrido GPS reproducido: autonomía 700 km, consumo 6,2 l/100 km, exterior 28,0 °C y radar fijo a 450 m. La tarjeta respira con un aura roja lenta de 0,5 Hz. Esos tres valores del ordenador son una escena visual exclusiva de depuración; en la radio solo se mostrarán lecturas reales que publiquen sus fuentes pasivas.*
 
 El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehículo central, ordenador de a bordo dinámico, tarjetas de aplicaciones OEM configurables y una fila contextual de estado del vehículo.
 
@@ -25,7 +25,7 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 - **Velocímetro GPS.** GPS es la fuente de velocidad validada en la radio física. La esfera E87 de 0–260 km/h rellena progresivamente solo su aro exterior. Un límite local verificado se marca en naranja y, al superarlo, la cifra y el aro pasan a naranja; sin límite local verificado, ambos se mantienen en verde.
 - **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Un círculo rojo solo representa un `maxspeed` explícito; el cuadrado azul es una velocidad aconsejada conservadora por tipo de vía cuando la zona GPS se ha actualizado, nunca un límite legal ni un disparador naranja del velocímetro. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
 - **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. Si un dato no está disponible se oculta.
-- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT y una semilla complementaria española Lufop/RadarDroid de fijos `TYPE=1`. DGT conserva prioridad cuando ambas fuentes coinciden. Para un radar fijo con trayectoria confirmada, la tarjeta y el primer aviso de voz se activan a **600 m**; hay un único recordatorio a **300 m**. Tras el paso confirmado, la tarjeta conserva 100 m de margen. La distancia visible siempre usa la coordenada original: no se desplaza artificialmente ningún radar. Los controles móviles se excluyen expresamente. La locución solicita a Android un foco transitorio `MAY_DUCK`, sin enviar órdenes OEM. El valor circular es el límite verificado de la **vía** en el mapa local, no un límite de radar inventado.
+- **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT, una semilla complementaria española Lufop/RadarDroid de fijos `TYPE=1` y radares fijos OSM de Alicante. DGT conserva prioridad y las coincidencias no se duplican. Para un radar fijo con trayectoria confirmada, la tarjeta y el primer aviso de voz se activan a **600 m**; hay un único recordatorio a **300 m**. La tarjeta visible recibe un aura roja lenta de 0,5 Hz. Tras el paso confirmado conserva 100 m de margen. Un límite propio de radar OSM solo se acepta si existe una relación `enforcement=maxspeed` con corredor `from/to` y coincide con rumbo y trayectoria; nunca se deduce únicamente por proximidad u orientación óptica. Los controles móviles se excluyen expresamente.
 - **Zonas de vigilancia INVIVE.** Una tarjeta propia muestra `ZONA DE VIGILANCIA` al aproximarse o circular por un tramo oficial de intensificación. Naranja indica distancia hasta la entrada y rojo la distancia hasta la salida. Nunca se representa como radar, no activa la locución de radar fijo y no aporta un límite legal. Si radar e INVIVE coinciden, **prevalece siempre la tarjeta de radar** y la zona queda oculta hasta que el radar deje de aplicar.
 
 ![Aproximación a una zona INVIVE: tarjeta naranja, entrada a 141 m](docs/screenshots/bmw-e87-ui-v1.25.2-invive-approach.png)
@@ -65,15 +65,15 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 - Diésel y radio de 7 km como valores predeterminados, ambos configurables.
 - Precios procedentes del servicio oficial español, filtrados localmente y guardados en una caché de 150 km alrededor del vehículo.
 - Los precios próximos se actualizan cada diez minutos mientras la app está visible y Android publica una red IP.
-- La APK incorpora un mapa completo de carretera de **Alicante**: clases de **112.709** vías transitables, límites `maxspeed` genéricos y 89 geometrías que publican `maxspeed:forward/backward`. La vía se identifica primero por posición, rumbo y continuidad; después se aplica el dato más fiable de esa misma vía y sentido. Murcia, Valencia y Albacete mantienen sus semillas compactas.
+- La APK incorpora un mapa completo de carretera de **Alicante** actualizado el 26/09/2026: **113.227** tramos transitables con clases, límites `maxspeed` y datos direccionales disponibles. La vía se identifica primero por posición, rumbo y continuidad; después se aplica el dato más fiable de esa misma vía y sentido. Murcia, Valencia y Albacete mantienen sus semillas compactas anteriores.
 - La primera ejecución también dispone sin red de la instantánea oficial de precios de diésel de Alicante incluida en la APK, con su fecha de origen visible. Al recuperar Internet, la caché se sustituye por el endpoint oficial del Ministerio.
-- La APK incorpora además el inventario nacional DATEX II de la DGT para radares fijos y de tramo (unos 2 MB antes de comprimir) y una semilla local complementaria de 1.297 fijos españoles Lufop/RadarDroid. DGT conserva prioridad ante una coincidencia. Durante la marcha la coincidencia se realiza por completo en local; no consulta un servicio de radares en cada posición GPS.
+- La APK incorpora además el inventario nacional DATEX II de la DGT para radares fijos y de tramo, una semilla local complementaria de **1.219** fijos españoles Lufop/RadarDroid y **83** nodos de cámara OSM de Alicante; 75 disponen de corredor explícito utilizable con rumbo. Durante la marcha todo se consulta en local.
 - También incluye el inventario nacional DATEX II de **tramos INVIVE**. Esta base señala zonas de intensificación de vigilancia, no radares ni límites de velocidad. La detección cruza la carretera oficial con la referencia y geometría OSM local para reducir coincidencias con vías paralelas.
 - La búsqueda de la vía próxima es local y se ejecuta con cada fix GPS de conducción (normalmente alrededor de una vez por segundo); no realiza una consulta de red al cambiar el límite.
 - OSM mantiene el alcance provincial de Alicante y su ventana anti-bloqueo. Las capas oficiales de
   DGT (límites TN-ITS, radares e INVIVE) se descargan completas a escala nacional y se consultan
   después en local. Una descarga correcta de cada fuente no se repite durante 24 horas; los precios
-  conservan su actualización automática cada 10 minutos.
+  conservan su actualización automática cada 10 minutos. Cuando Android confirma Internet, la app también actualiza automáticamente las vías y radares OSM de la provincia detectada, sin repetir una descarga correcta antes de 24 horas y conservando la base previa si falla.
 - El botón **Actualizar todo** abre un modal secuencial con una barra por fuente y una fase final de
   consolidación. También puedes actualizar OSM Alicante, gasolineras, radares DGT, límites DGT o
   INVIVE por separado. Cada fila conserva la fecha y hora de su última descarga correcta.
@@ -121,7 +121,7 @@ INVIVE se integra desde el [conjunto oficial del NAP de la DGT](https://nap.dgt.
 
 ### Semilla complementaria de radares fijos
 
-La APK incorpora una fotografía estática de 1.297 radares fijos españoles `TYPE=1` procesada del
+La APK incorpora una fotografía estática de 1.219 radares fijos españoles `TYPE=1` procesada del
 archivo RadarDroid facilitado. No contiene credenciales, no descarga nada de Lufop ni requiere una
 herramienta externa. DGT conserva prioridad si ambos inventarios coinciden. Los radares fijos de esta
 semilla también pueden activar la locución; semáforos, zonas, extremos de tramo y controles móviles

@@ -43,10 +43,13 @@ public final class DebugPresentationReceiver extends BroadcastReceiver {
             fix.setSpeed((float) (intent.getDoubleExtra("speed_kmh", 0d) / 3.6d));
             fix.setBearing((float) intent.getDoubleExtra("bearing", 0d));
             fix.setTime(System.currentTimeMillis());
-            fix.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+            // Leave a small margin for emulator/provider clock rounding during validation.
+            fix.setElapsedRealtimeNanos(Math.max(1L,SystemClock.elapsedRealtimeNanos()-100_000_000L));
             manager.setTestProviderLocation(LocationManager.GPS_PROVIDER, fix);
         } catch (SecurityException ignored) {
             // adb did not grant mock-location; production behaviour remains untouched.
+        } catch (IllegalArgumentException rejectedFix) {
+            android.util.Log.w("DebugPresentation", "Mock GPS fix rejected", rejectedFix);
         }
     }
 

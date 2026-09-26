@@ -1,0 +1,58 @@
+{
+  "prepared_at_utc": "2026-09-26T09:55:04.967361+00:00",
+  "version": "1.26.1",
+  "seeds": [
+    {
+      "file": "e87_speed_limits_alicante.tsv.gz",
+      "bytes": 7007846,
+      "sha256": "4946408571deefa60d5d10ed205e53721f7992769711b18aefb0f4d64381cfc2",
+      "records": 113227,
+      "source_date": "2026-09-26T09:51:36Z"
+    },
+    {
+      "file": "e87_osm_radars_alicante.json",
+      "bytes": 74694,
+      "sha256": "96e56447e253db6ca5596ad1061c8de7a83011b3f3ad2c02cd6af170489fe285",
+      "source_date": "2026-09-26T09:49:31Z",
+      "records": 354,
+      "camera_nodes": 83
+    },
+    {
+      "file": "e87_fuel_stations_alicante_diesel.json",
+      "bytes": 182246,
+      "sha256": "51b235745116969269b8cf6e3dc498d6c8f8fe7889cba9d350f424f69618633e",
+      "source_date": "26/09/2026 11:50:58",
+      "records": 479
+    },
+    {
+      "file": "e87_lufop_radars_es.dat",
+      "bytes": 39050,
+      "sha256": "625cd038f8e967628a4fb89d021e8107e896fe968ab77e5399b46a79ab499c1b",
+      "records": 1219,
+      "status": "Static user-supplied archive from 2026-09-20; not downloaded today"
+    },
+    {
+      "file": "e87_dgt_invive_spain.xml",
+      "bytes": 4380763,
+      "sha256": "77d8667065fbe1cd291995c79db684fd2487ebec6fb27fe596f58ac8f397c191",
+      "source_dates": [
+        "2026-09-26T10:32:24.104+02:00"
+      ]
+    },
+    {
+      "file": "e87_dgt_radars_spain.xml",
+      "bytes": 2051128,
+      "sha256": "25eb40a9af2b60e2fc2e6b7578ada9fcf4f9faac1b7da40b61ce8af92d305238",
+      "source_dates": [
+        "2025-12-18T09:56:52.406+01:00"
+      ]
+    },
+    {
+      "file": "e87_dgt_speed_limits_spain.xml",
+      "bytes": 401213,
+      "sha256": "c67843b890801cbd24f21dc9898249a76ad3bd8f5499147441da1e90a731360c",
+      "source_dates": []
+    }
+  ],
+  "other_provinces": "Murcia, Valencia and Albacete retain existing bundled snapshots; not refreshed in this release"
+}

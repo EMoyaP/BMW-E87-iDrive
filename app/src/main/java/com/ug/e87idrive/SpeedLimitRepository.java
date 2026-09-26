@@ -72,7 +72,7 @@ final class SpeedLimitRepository {
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
-    private static final int BUNDLED_SEED_VERSION = 5;
+    private static final int BUNDLED_SEED_VERSION = 6;
     /** The GPS listener may deliver up to two fixes per second. Local map work is throttled by
      * vehicle speed: parked fixes are reused, while motorway fixes are evaluated immediately. */
     private static final long PARKED_LOOKUP_INTERVAL_MS = 5_000L;
@@ -431,21 +431,17 @@ final class SpeedLimitRepository {
             finish(callback, false, "Actualización limitada: espera unos segundos antes de repetir");
             return;
         }
-        if (provincialUpdate) {
-            long lastSuccess = lastSuccessfulUpdate(selectedProvince.code);
-            if (lastSuccess > 0L && now - lastSuccess < AUTO_REFRESH_INTERVAL_MS) {
-                finish(callback, false, "" + selectedProvince.label + " ya se actualizó correctamente "
-                        + "hace menos de 24 h");
-                return;
-            }
-        }
+        final boolean roadsFresh = provincialUpdate && lastSuccessfulUpdate(selectedProvince.code) > 0L
+                && now - lastSuccessfulUpdate(selectedProvince.code) < AUTO_REFRESH_INTERVAL_MS;
         lastRefreshAt = now;
         updateRunning = true;
         Thread worker = new Thread(() -> {
             HttpURLConnection connection = null;
             try {
                 int imported;
-                if (provincialUpdate && "ALICANTE".equals(selectedProvince.code)) {
+                if (roadsFresh) {
+                    imported = 0;
+                } else if (provincialUpdate && "ALICANTE".equals(selectedProvince.code)) {
                     // Loading an 84 MB Overpass JSON response into the head unit would be
                     // wasteful and fragile. This compact stream carries every road class and
                     // explicit maxspeed without accumulating it in the Java heap.
@@ -453,15 +449,20 @@ final class SpeedLimitRepository {
                 } else {
                     String query = buildQuery(location, selectedProvince);
                     String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
-                    URL url = new URL(ENDPOINT + "?data=" + encoded);
+                    URL url = new URL(ENDPOINT);
                     // Bind the request to the network Android has actually exposed. This covers
                     // Wi-Fi, Ethernet and BT PAN if the OEM creates a usable IP interface.
                     connection = (HttpURLConnection) selectedNetwork.openConnection(url);
                     connection.setConnectTimeout(15_000);
                     connection.setReadTimeout((PROVINCE_QUERY_TIMEOUT_SECONDS + 20) * 1_000);
-                    connection.setRequestMethod("GET");
+                    connection.setRequestMethod("POST");
+                    connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
                     connection.setRequestProperty("Accept", "application/json");
                     connection.setRequestProperty("User-Agent", "BMW-E87-iDrive/1.20 (offline speed-limit cache)");
+                    try (java.io.OutputStream output = connection.getOutputStream()) {
+                        output.write(("data=" + encoded).getBytes(StandardCharsets.UTF_8));
+                    }
                     int response = connection.getResponseCode();
                     if (response < 200 || response >= 300) {
                         throw new IOException("HTTP " + response);
@@ -475,10 +476,22 @@ final class SpeedLimitRepository {
                         + " · OpenStreetMap"
                         : imported + " tramos guardados en local · " + provinceLabel(province)
                         + " · OpenStreetMap";
-                if (provincialUpdate || automatic) {
+                if (!roadsFresh && (provincialUpdate || automatic)) {
                     updatePreferences.edit().putLong(successPreference(
                                     provincialUpdate ? selectedProvince.code : province),
                             System.currentTimeMillis()).apply();
+                }
+                if (roadsFresh) lastResult = selectedProvince.label + " · vías vigentes (<24 h)";
+                if (provincialUpdate) {
+                    try {
+                        lastResult += " · " + OsmRadarData.refresh(context, selectedNetwork,
+                                selectedProvince.code, selectedProvince.osmRelationId);
+                    } catch (Exception radarError) {
+                        lastResult += " · radares OSM pendientes: " + radarError.getMessage();
+                        AppSessionLog.event(TAG, lastResult);
+                        finish(callback, false, lastResult);
+                        return;
+                    }
                 }
                 AppSessionLog.event(TAG, "Actualización Wi-Fi correcta · " + lastResult);
                 finish(callback, true, lastResult);
@@ -559,7 +572,10 @@ final class SpeedLimitRepository {
         if (now - lastAutomaticAttemptAt < AUTO_RETRY_INTERVAL_MS) return;
         String province = automaticProvince(lastLocation);
         long lastSuccess = lastSuccessfulUpdate(province);
-        if (lastSuccess > 0L && now - lastSuccess < AUTO_REFRESH_INTERVAL_MS) return;
+        long cameraSuccess = context.getSharedPreferences("osm_radar_updates", Context.MODE_PRIVATE)
+                .getLong("success_" + province, 0L);
+        if (lastSuccess > 0L && now - lastSuccess < AUTO_REFRESH_INTERVAL_MS
+                && (findProvince(province) == null || now - cameraSuccess < AUTO_REFRESH_INTERVAL_MS)) return;
         lastAutomaticAttemptAt = now;
         AppSessionLog.event(TAG, "Actualización automática solicitada · provincia="
                 + provinceLabel(province) + " · red=" + networkLabel());

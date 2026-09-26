@@ -14,9 +14,9 @@ It combines GPS-backed driving information, nearby Spanish fuel prices, locally 
 
 ## Main dashboard
 
-![Version 1.25.2 main iDrive dashboard: trip computer, GPS speedometer, local road limit, fixed camera at 581 m, fuel stations and OEM shortcuts](docs/screenshots/bmw-e87-ui-v1.25.2-dashboard-radar-581m.png)
+![Version 1.26.1 driving view with GPS speedometer, fixed camera at 450 m and slow red warning glow](docs/screenshots/driving-v1.26.1-radar-glow.png)
 
-*Version 1.25.2 emulator capture with a replayed GPS route: 700 km range, 6.2 l/100 km consumption, 28.0 °C exterior temperature, a local limit and a fixed camera at 581 m. Those three trip-computer values are a debug-only presentation scenario; the radio only shows real readings from its passive sources.*
+*Version 1.26.1 emulator capture with a replayed GPS route: 700 km range, 6.2 l/100 km consumption, 28.0 °C exterior temperature and a fixed camera at 450 m. The card uses a slow 0.5 Hz red breathing glow. Those three trip-computer values are a debug-only presentation scenario; the radio only shows real readings from its passive sources.*
 
 The dashboard targets 1280×720 / 16:9 automotive displays. It has a central vehicle image, a dynamic trip-computer panel, configurable OEM app cards and a contextual vehicle-status strip.
 
@@ -65,15 +65,15 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
 - Diesel and a 7 km working radius by default; both are configurable.
 - Fuel prices come from the official Spanish service, are filtered locally and cached within 150 km of the vehicle.
 - Nearby prices refresh every ten minutes while the app is visible, when Android exposes an IP network.
-- The APK includes a complete drivable-road map for **Alicante**: classes for **112,709** roads, generic `maxspeed` values and 89 geometries carrying `maxspeed:forward/backward`. Position, heading and continuity select the road first; only then is the best value for that same road and direction applied. Murcia, Valencia and Albacete keep their compact seeds.
+- The APK includes a complete Alicante road snapshot dated 2026-09-26: **113,227** drivable segments with road classes, `maxspeed` and available directional data. Position, heading and continuity select the road first; only then is the best value for that same road and direction applied. Murcia, Valencia and Albacete retain their previous compact seeds.
 - The first run also works offline with the dated official Alicante diesel-price snapshot bundled in the APK. Once Internet becomes available, the normal Ministry endpoint replaces that seed cache.
-- The APK also includes the compact national DGT DATEX II inventory of fixed and section cameras (about 2 MB before compression) and a local complementary seed with 1,297 Spanish Lufop/RadarDroid fixed-camera records. DGT remains the priority when both inventories match. Camera matching remains entirely local while driving; it never queries a radar service on each GPS fix.
+- The APK also includes the national DGT DATEX II fixed/section inventory, **1,219** static Spanish Lufop/RadarDroid fixed records and **83** Alicante OSM camera nodes; 75 have explicit corridors usable with heading. DGT keeps priority and duplicates are suppressed. An OSM camera limit is accepted only from a matching `enforcement=maxspeed` `from/to` corridor. Matching remains entirely offline while driving.
 - It also includes the national DGT DATEX II **INVIVE** inventory. INVIVE identifies intensified speed-enforcement sections, not cameras or speed limits. Detection combines the official road with the local OSM road reference and geometry to reduce matches against parallel roads.
 - The nearby-road lookup is local and runs with each driving GPS fix (normally about once per second); it does not make a network request when the limit changes.
 - OSM keeps the provincial Alicante scope and its anti-abuse window. Official DGT layers
   (TN-ITS limits, cameras and INVIVE) are downloaded at national scope and queried locally
   afterwards. Each successful source update has its own 24-hour guard; fuel prices keep their
-  ten-minute automatic refresh policy.
+  ten-minute automatic refresh policy. Whenever Android validates Internet access, roads and OSM cameras for the detected province can also refresh automatically; a successful provincial download is not repeated within 24 hours and the prior cache survives failure.
 - **Update all** opens a sequential modal with one progress row per source and a final local
   consolidation step. OSM Alicante, fuel prices, DGT cameras, DGT limits and INVIVE can also be
   updated individually. Each row shows the date and time of its latest successful download.
@@ -121,7 +121,7 @@ INVIVE is integrated from the [official DGT NAP dataset](https://nap.dgt.es/en/d
 
 ### Complementary fixed-camera seed
 
-The APK contains a static snapshot of 1,297 Spanish `TYPE=1` fixed cameras processed from the
+The APK contains a static snapshot of 1,219 Spanish `TYPE=1` fixed cameras processed from the
 provided RadarDroid file. It has no credentials, never downloads from Lufop and needs no external
 tool. DGT remains the priority when both inventories match. Fixed cameras from this seed may also
 trigger speech; red lights, areas, section boundaries and mobile controls are excluded. Attribution:
