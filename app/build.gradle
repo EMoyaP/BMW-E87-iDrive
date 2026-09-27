@@ -82,8 +82,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 64
-        versionName "1.26.4"
+        versionCode 65
+        versionName "1.26.5"
     }
 
     compileOptions {
