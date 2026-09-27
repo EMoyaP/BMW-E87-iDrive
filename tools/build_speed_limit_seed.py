@@ -4,10 +4,10 @@
 This is a release-preparation tool, not code executed by the radio. It reads a
 regional Geofabrik OSM PBF once, clips ways to the Alicante administrative
 boundary and writes a gzip TSV asset. It can also transform a saved Overpass
-response containing every drivable road class. The latter produces schema v3:
-generic and directional OSM ``maxspeed`` values plus clearly marked
-DGT-reference advisory rows where OSM has no numeric limit. The application
-imports that asset into its private SQLite cache on first start.
+response containing every drivable road class. The latter produces schema v5:
+generic and directional OSM ``maxspeed`` values, road references, street names
+and clearly marked DGT-reference advisory rows where OSM has no numeric limit.
+The application imports that asset into its private SQLite cache on first start.
 """
 
 from __future__ import annotations
@@ -54,6 +54,15 @@ def advisory_limit(road_class: str) -> int | None:
     }.get(road_class)
 
 
+def road_name(tags) -> str:
+    """Prefer the Spanish OSM name, then fall back to the canonical way name."""
+    for key in ("name:es", "name", "official_name", "alt_name"):
+        value = (tags.get(key) or "").strip()
+        if value:
+            return " ".join(value.replace("\t", " ").replace("\r", " ").replace("\n", " ").split())
+    return ""
+
+
 def load_boundary(path: Path):
     from shapely.geometry import shape
     from shapely.prepared import prep
@@ -75,7 +84,7 @@ def build_pbf_rows(pbf: Path, boundary_path: Path):
             super().__init__()
             self.prepared_boundary = prepared_boundary
             self.min_lon, self.min_lat, self.max_lon, self.max_lat = bounds
-            self.rows: list[tuple[str, str, int, str, int, int, str, str]] = []
+            self.rows: list[tuple[str, str, int, str, int, int, str, str, str]] = []
 
         def way(self, way):  # noqa: N802 - pyosmium callback name
             tags = way.tags
@@ -111,7 +120,7 @@ def build_pbf_rows(pbf: Path, boundary_path: Path):
                               limit, road_class,
                               parse_limit(tags.get("maxspeed:forward")) or 0,
                               parse_limit(tags.get("maxspeed:backward")) or 0,
-                              (tags.get("ref") or "").strip(), geometry))
+                              (tags.get("ref") or "").strip(), road_name(tags), geometry))
 
     handler = AlicanteWayHandler(prepared_boundary, bounds)
     handler.apply_file(str(pbf), locations=True)
@@ -120,7 +129,7 @@ def build_pbf_rows(pbf: Path, boundary_path: Path):
 
 def build_overpass_rows(path: Path):
     document = json.loads(path.read_text(encoding="utf-8"))
-    rows: dict[str, tuple[str, str, int, str, int, int, str, str]] = {}
+    rows: dict[str, tuple[str, str, int, str, int, int, str, str, str]] = {}
     for element in document.get("elements", []):
         tags = element.get("tags") or {}
         road_class = tags.get("highway", "").strip().lower()
@@ -143,24 +152,24 @@ def build_overpass_rows(path: Path):
         rows[osm_id] = (osm_id, "EXACT" if explicit is not None else "ADVISORY",
                         limit, road_class, parse_limit(tags.get("maxspeed:forward")) or 0,
                         parse_limit(tags.get("maxspeed:backward")) or 0,
-                        (tags.get("ref") or "").strip(), geometry)
+                        (tags.get("ref") or "").strip(), road_name(tags), geometry)
     return [rows[key] for key in sorted(rows, key=int)]
 
 
-def write_v4(rows, output: Path, region: str):
+def write_v5(rows, output: Path, region: str):
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as compressed:
         with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as gzip_output:
             gzip_output.write(
-                f"# schema=e87-road-class-seed-v4 source=OpenStreetMap roads+maxspeed+directional+ref region={region}\n".encode("utf-8")
+                f"# schema=e87-road-class-seed-v5 source=OpenStreetMap roads+maxspeed+directional+ref+name region={region}\n".encode("utf-8")
             )
-            for osm_id, kind, limit, road_class, forward, backward, road_ref, geometry in rows:
+            for osm_id, kind, limit, road_class, forward, backward, road_ref, name, geometry in rows:
                 gzip_output.write(
-                    f"{osm_id}\t{kind}\t{limit}\t{road_class}\t{forward}\t{backward}\t{road_ref}\t{geometry}\n".encode("utf-8")
+                    f"{osm_id}\t{kind}\t{limit}\t{road_class}\t{forward}\t{backward}\t{road_ref}\t{name}\t{geometry}\n".encode("utf-8")
                 )
     exact = sum(1 for row in rows if row[1] == "EXACT")
-    raw_bytes = sum(len(f"{osm_id}\t{kind}\t{limit}\t{road_class}\t{forward}\t{backward}\t{road_ref}\t{geometry}\n".encode("utf-8"))
-                    for osm_id, kind, limit, road_class, forward, backward, road_ref, geometry in rows)
+    raw_bytes = sum(len(f"{osm_id}\t{kind}\t{limit}\t{road_class}\t{forward}\t{backward}\t{road_ref}\t{name}\t{geometry}\n".encode("utf-8"))
+                    for osm_id, kind, limit, road_class, forward, backward, road_ref, name, geometry in rows)
     print(f"ways={len(rows)} exact={exact} advisory={len(rows) - exact} raw_bytes={raw_bytes} gzip_bytes={output.stat().st_size}")
 
 
@@ -176,12 +185,12 @@ def main() -> None:
 
     if args.overpass_json:
         rows = build_overpass_rows(args.overpass_json)
-        write_v4(rows, args.output, args.region)
+        write_v5(rows, args.output, args.region)
     else:
         if not args.boundary:
             parser.error("--boundary es obligatorio al usar --pbf")
         rows, boundary = build_pbf_rows(args.pbf, args.boundary)
-        write_v4(rows, args.output, args.region)
+        write_v5(rows, args.output, args.region)
 
 
 if __name__ == "__main__":

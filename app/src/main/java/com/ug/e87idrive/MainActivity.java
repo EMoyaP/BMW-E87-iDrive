@@ -52,10 +52,14 @@ import java.io.FileWriter;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @SuppressLint("SetTextI18n") // This fixed Spanish automotive UI is intentionally assembled in code.
 public class MainActivity extends Activity {
     private static final int REQUEST_USB_DIAGNOSTIC_DIRECTORY = 301;
+    private static final String KEY_DEBUG_SPEED_LIMIT_TRANSITIONS =
+            "debug_speed_limit_transitions";
     private int BG, PANEL, PANEL2, ACCENT, BLUE, TEXT, MUTED, LINE;
     private SharedPreferences vehiclePreferences, uiPreferences;
     private AppRepository apps;
@@ -108,6 +112,14 @@ public class MainActivity extends Activity {
     private int mediaRefreshTick;
     private String lastMediaLog = "";
     private boolean vehicleRefreshQueued;
+    private final ExecutorService mapExecutor = Executors.newSingleThreadExecutor();
+    private Location lastMapRoadCenter;
+    private long lastMapRoadRequestAt;
+    private long mapRoadRequestSequence;
+    /** Signature of the last effective speed-limit state written to the opt-in debug log. */
+    private String lastSpeedLimitTransitionSignature = "";
+    private String lastSpeedLimitTransitionLabel = "sin dato";
+    private Button speedLimitDebugButton;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -132,6 +144,10 @@ public class MainActivity extends Activity {
                     && location.getAccuracy() <= 25f
                     && android.os.SystemClock.elapsedRealtime() - fixMs <= 5_000L;
             setDrivingView(drivingViewPolicy.accept(fixMs, location.getSpeed() * 3.6d, reliable));
+            if (drivingOverlay != null) {
+                drivingOverlay.mapLocation(location, kmh);
+                requestMapRoads(location);
+            }
             fuelStations.onLocation(location);
             speedLimits.onLocation(location, kmh);
             radars.onLocation(location);
@@ -206,6 +222,7 @@ public class MainActivity extends Activity {
         oemRadio.stop();
         vehicleData.stop();
         if (usbDiagnostics != null) usbDiagnostics.close();
+        mapExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -245,11 +262,23 @@ public class MainActivity extends Activity {
         drivingInvive = new InviveNoticeView(this, TEXT, BLUE, MUTED, ACCENT);
         drivingRadar.setVisibility(View.GONE);
         drivingInvive.setVisibility(View.GONE);
+        ImageView drivingAndroidAuto = new ImageView(this);
+        drivingAndroidAuto.setImageResource(R.drawable.ic_role_android_auto);
+        drivingAndroidAuto.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        drivingAndroidAuto.setPadding(dp(11), dp(9), dp(11), dp(9));
+        drivingAndroidAuto.setBackground(slotBg());
+        drivingAndroidAuto.setContentDescription("Abrir Android Auto");
+        drivingAndroidAuto.setOnClickListener(v -> launchRole("auto"));
+        drivingAndroidAuto.setOnLongClickListener(v -> {
+            appPicker("auto", "Android Auto / S-Play");
+            return true;
+        });
         TextView drivingMenu = txt("☰", 26, TEXT, true);
         drivingMenu.setGravity(Gravity.CENTER);
         drivingMenu.setContentDescription("Abrir menú iDrive");
         drivingMenu.setOnClickListener(v -> mainMenuModal());
-        drivingOverlay.attach(drivingSign, drivingRadar, drivingInvive, drivingMenu);
+        drivingOverlay.attach(drivingSign, drivingRadar, drivingInvive, drivingAndroidAuto,
+                drivingMenu);
         drivingOverlay.setVisibility(View.GONE);
         screen.addView(drivingOverlay, frameLp(-1, -1, Gravity.CENTER));
     }
@@ -935,13 +964,42 @@ public class MainActivity extends Activity {
         }, 150L);
     }
 
+    /** Loads only the visual road window off the UI thread; the speed matcher remains independent. */
+    private void requestMapRoads(Location location) {
+        if (location == null || speedLimits == null) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastMapRoadCenter != null && lastMapRoadCenter.distanceTo(location) < 160f
+                && now - lastMapRoadRequestAt < 3_000L) return;
+        lastMapRoadCenter = new Location(location);
+        lastMapRoadRequestAt = now;
+        final long request = ++mapRoadRequestSequence;
+        final Location copy = new Location(location);
+        mapExecutor.execute(() -> {
+            java.util.List<OfflineRoadMapView.Road> roads = speedLimits.nearbyMapRoads(copy);
+            java.util.List<OfflineRoadMapView.Radar> mapRadars = radars.nearbyMapRadars(copy);
+            runOnUiThread(() -> {
+                if (request != mapRoadRequestSequence || drivingOverlay == null) return;
+                drivingOverlay.mapRoads(roads);
+                drivingOverlay.mapRadars(mapRadars);
+            });
+        });
+    }
+
     private void refreshSpeedLimitWidget() {
         if (speedLimitView == null || speedLimits == null || gps == null) return;
-        ResolvedSpeed resolved = resolveSpeed(gps.getLastLocation());
+        Location currentLocation = gps.getLastLocation();
+        ResolvedSpeed resolved = resolveSpeed(currentLocation);
+        logSpeedLimitTransition(currentLocation, resolved);
         SpeedLimitRepository.Match match = resolved.match;
         if (drivingOverlay != null) {
             drivingSign.setLimit(match == null ? null : match.limitKmh, match != null && match.exact);
             drivingOverlay.road(match == null ? null : match.limitKmh, match != null && match.exact);
+            drivingOverlay.mapRoad(match == null ? null : match.osmId,
+                    match == null ? null : match.roadRef,
+                    match == null ? null : match.roadName,
+                    match == null ? Double.NaN : match.roadBearingDegrees,
+                    gps.getLastLocation() != null && gps.getLastLocation().hasBearing()
+                            ? gps.getLastLocation().getBearing() : null);
         }
         if (match == null) {
             speedLimitView.setLimit(null);
@@ -980,6 +1038,106 @@ public class MainActivity extends Activity {
                 speedLimitUpdateInfo.setTextColor(BLUE);
             }
         }
+    }
+
+    /**
+     * Writes one compact, auditable event whenever the effective limit/source/road changes.
+     * The feature is explicitly opt-in because coordinates are personal movement data.
+     */
+    private void logSpeedLimitTransition(Location location, ResolvedSpeed resolved) {
+        if (!isSpeedLimitTransitionDebugEnabled()) return;
+        SpeedLimitRepository.Match match = resolved == null ? null : resolved.match;
+        String source = match == null ? "SIN_DATO"
+                : resolved.dgt ? "DGT"
+                : match.exact ? "OSM" : "OSM_RECOMENDADA";
+        String roadRef = match == null ? "" : safeDebugValue(match.roadRef);
+        String roadName = match == null ? "" : safeDebugValue(match.roadName);
+        String signature = match == null ? "SIN_DATO"
+                : source + "|" + match.limitKmh + "|" + roadRef + "|" + roadName;
+        if (signature.equals(lastSpeedLimitTransitionSignature)) return;
+
+        String currentLabel = match == null ? "sin límite"
+                : String.format(Locale.ROOT, "%d km/h [%s]%s%s",
+                match.limitKmh, source,
+                roadRef.isEmpty() ? "" : " · " + roadRef,
+                roadName.isEmpty() ? "" : " · " + roadName);
+        StringBuilder event = new StringBuilder(420);
+        event.append("CAMBIO DE LÍMITE")
+                .append(" · anterior=").append(lastSpeedLimitTransitionLabel)
+                .append(" · nuevo=").append(currentLabel);
+        if (location == null) {
+            event.append(" · ubicación=sin GPS");
+        } else {
+            event.append(String.format(Locale.ROOT,
+                    " · lat=%.6f · lon=%.6f · StreetView=https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=%.6f,%.6f",
+                    location.getLatitude(), location.getLongitude(),
+                    location.getLatitude(), location.getLongitude()));
+            event.append(" · precisión=").append(location.hasAccuracy()
+                    ? String.format(Locale.ROOT, "%.1f m", location.getAccuracy())
+                    : "no publicada");
+            if (location.hasBearing()) {
+                event.append(String.format(Locale.ROOT, " · rumbo=%.0f°", location.getBearing()));
+            }
+            if (location.hasSpeed()) {
+                event.append(String.format(Locale.ROOT, " · velocidad=%.1f km/h",
+                        Math.max(0f, location.getSpeed() * 3.6f)));
+            }
+        }
+        if (match != null) {
+            event.append(String.format(Locale.ROOT, " · distancia_vía=%.1f m", match.distanceMeters));
+            if (!roadName.isEmpty()) event.append(" · nombre_vía=").append(roadName);
+            if (!roadRef.isEmpty()) event.append(" · ref_vía=").append(roadRef);
+            if (match.osmId != null && !match.osmId.isEmpty()) {
+                event.append(" · id=").append(safeDebugValue(match.osmId));
+            }
+            event.append(" · provincia=").append(safeDebugValue(match.province));
+            if (!Double.isNaN(match.headingDifferenceDegrees)) {
+                event.append(String.format(Locale.ROOT, " · Δrumbo_vía=%.0f°",
+                        match.headingDifferenceDegrees));
+            }
+        }
+        lastSpeedLimitTransitionSignature = signature;
+        lastSpeedLimitTransitionLabel = currentLabel;
+        AppSessionLog.event("LÍMITES DEBUG", event.toString());
+    }
+
+    private boolean isSpeedLimitTransitionDebugEnabled() {
+        return uiPreferences != null
+                && uiPreferences.getBoolean(KEY_DEBUG_SPEED_LIMIT_TRANSITIONS, false);
+    }
+
+    private static String safeDebugValue(String value) {
+        return value == null ? "" : value.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private void updateSpeedLimitDebugButton() {
+        if (speedLimitDebugButton == null) return;
+        boolean enabled = isSpeedLimitTransitionDebugEnabled();
+        speedLimitDebugButton.setText(enabled
+                ? "DEBUG LÍMITES + GPS · ACTIVO"
+                : "ACTIVAR DEBUG · CAMBIOS DE LÍMITE + GPS");
+        speedLimitDebugButton.setTextColor(enabled ? ACCENT : TEXT);
+        speedLimitDebugButton.setContentDescription(enabled
+                ? "Desactivar registro de cambios de límite con ubicación"
+                : "Activar registro de cambios de límite con ubicación");
+    }
+
+    private void toggleSpeedLimitTransitionDebug() {
+        boolean enabled = !isSpeedLimitTransitionDebugEnabled();
+        uiPreferences.edit().putBoolean(KEY_DEBUG_SPEED_LIMIT_TRANSITIONS, enabled).apply();
+        lastSpeedLimitTransitionSignature = "";
+        lastSpeedLimitTransitionLabel = "sin dato";
+        if (enabled && gps != null && !gps.isCoordinateLoggingEnabled()) {
+            // This explicit debug action is the user's consent to include coordinates.
+            gps.setCoordinateLoggingEnabled(true);
+        }
+        AppSessionLog.event("LÍMITES DEBUG", enabled
+                ? "ACTIVADO · se registrará cada transición con coordenadas y enlace de Maps"
+                : "DESACTIVADO · no se registrarán nuevas transiciones de límite");
+        updateSpeedLimitDebugButton();
+        toast(enabled
+                ? "Debug de cambios de límite activado; se guardarán coordenadas"
+                : "Debug de cambios de límite desactivado");
     }
 
     private ResolvedSpeed resolveSpeed(Location location) {
@@ -1217,10 +1375,34 @@ public class MainActivity extends Activity {
         reading.setSingleLine(true);
         reading.setIncludeFontPadding(false);
         reading.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        int valueColor = boardSummaryValueColor(field, value);
+        reading.setTextColor(valueColor);
+        reading.setShadowLayer(valueColor == TEXT ? 0f : dp(2), 0f, 0f, Color.WHITE);
         // Let the reading consume only the width it actually needs. A fixed wide column made
         // the short labels (Autonomía, Consumo, Exterior) truncate on the 1280x720 radio.
         row.addView(reading, lp(-2, -1));
         return row;
+    }
+
+    private int boardSummaryValueColor(VehicleField field, String value) {
+        if (field != VehicleField.RANGE) return TEXT;
+        Double rangeKm = leadingNumber(value);
+        if (rangeKm == null) return TEXT;
+        if (rangeKm <= 100d) return Color.rgb(225, 38, 38);
+        if (rangeKm < 200d) return Color.rgb(246, 126, 13);
+        return TEXT;
+    }
+
+    private static Double leadingNumber(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().replace(',', '.').replaceAll("[^0-9.+-]", " ").trim();
+        if (normalized.isEmpty()) return null;
+        String[] tokens = normalized.split("\\s+");
+        try {
+            return Double.parseDouble(tokens[0]);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /** Keep labels short and place units after the large reading for distance legibility. */
@@ -1933,6 +2115,9 @@ public class MainActivity extends Activity {
         logGpsCoordinates.setPadding(dp(12), dp(2), dp(12), dp(2));
         logGpsCoordinates.setChecked(gps.isCoordinateLoggingEnabled());
         box.addView(logGpsCoordinates, lp(-1, dp(42)));
+        speedLimitDebugButton = dialogButton("");
+        updateSpeedLimitDebugButton();
+        box.addView(speedLimitDebugButton, lp(-1, dp(48)));
         TextView reportView = txt(diagnostics.buildScreenSummary(), 12, TEXT, false);
         reportView.setTextIsSelectable(true);
         reportView.setPadding(dp(14), dp(8), dp(14), dp(8));
@@ -1990,8 +2175,16 @@ public class MainActivity extends Activity {
         exportOem.setOnClickListener(v -> requestOemExport(exportOem));
         exportFull.setOnClickListener(v -> requestFullExport());
         inspectCan.setOnClickListener(v -> canbusInspectorModal());
+        speedLimitDebugButton.setOnClickListener(v -> toggleSpeedLimitTransitionDebug());
         logGpsCoordinates.setOnCheckedChangeListener((button, enabled) -> {
             gps.setCoordinateLoggingEnabled(enabled);
+            if (!enabled && isSpeedLimitTransitionDebugEnabled()) {
+                uiPreferences.edit().putBoolean(KEY_DEBUG_SPEED_LIMIT_TRANSITIONS, false).apply();
+                lastSpeedLimitTransitionSignature = "";
+                lastSpeedLimitTransitionLabel = "sin dato";
+                updateSpeedLimitDebugButton();
+                toast("Debug de cambios de límite desactivado al quitar las coordenadas");
+            }
             button.setTextColor(enabled ? ACCENT : MUTED);
             toast(enabled ? "Registro de posición GPS activado" : "Registro de posición GPS desactivado");
         });
@@ -3250,25 +3443,55 @@ public class MainActivity extends Activity {
             canvas.drawBitmap(watchEye, null, eyeBounds, paint);
 
             float left = iconBounds.right + dp(12);
-            paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-            paint.setTextSize(Math.max(12f, h * .16f));
-            paint.setColor(stateColor);
-            canvas.drawText("ZONA DE VIGILANCIA", left, h * .25f, paint);
-            paint.setTextSize(Math.max(10f, h * .13f));
-            paint.setColor(foreground);
-            canvas.drawText(alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road,
-                    left, h * .43f, paint);
-            paint.setTextSize(Math.max(19f, h * .27f));
-            paint.setColor(foreground);
+            float right = w - dp(10);
+            drawFittedText(canvas, "ZONA DE VIGILANCIA", left, h * .25f, right,
+                    Math.max(12f, h * .16f), Math.max(9f, h * .11f), stateColor,
+                    Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            drawFittedText(canvas,
+                    alert.road == null || alert.road.isEmpty() ? "Vía DGT" : alert.road,
+                    left, h * .43f, right, Math.max(10f, h * .13f), Math.max(8f, h * .09f),
+                    foreground, Typeface.DEFAULT);
             String distance = Double.isFinite(alert.distanceMeters)
                     ? (alert.inside ? "Salida a " : "Entrada a ") + formatDistance(alert.distanceMeters)
                     : (alert.inside ? "TRAMO ACTIVO" : "ENTRADA PRÓXIMA");
-            canvas.drawText(distance, left, h * .72f, paint);
-            paint.setTypeface(Typeface.DEFAULT);
-            paint.setTextSize(Math.max(9f, h * .105f));
-            paint.setColor(muted);
-            canvas.drawText(alert.inside ? "INVIVE DGT · EN TRAMO · NO ES RADAR"
-                    : "INVIVE DGT · APROXIMACIÓN · NO ES RADAR", left, h * .91f, paint);
+            drawFittedText(canvas, distance, left, h * .72f, right,
+                    Math.max(19f, h * .27f), Math.max(14f, h * .18f), foreground,
+                    Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            drawFittedText(canvas, alert.inside ? "INVIVE DGT · EN TRAMO · NO ES RADAR"
+                    : "INVIVE DGT · APROXIMACIÓN · NO ES RADAR", left, h * .91f, right,
+                    Math.max(9f, h * .105f), Math.max(7f, h * .075f), muted, Typeface.DEFAULT);
+        }
+
+        private void drawFittedText(Canvas canvas, String value, float left, float baseline,
+                                    float right, float requestedSize, float minimumSize, int color,
+                                    Typeface typeface) {
+            String text = value == null ? "" : value.trim();
+            if (text.isEmpty() || right <= left) return;
+            float available = right - left;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTypeface(typeface);
+            float textSize = Math.max(minimumSize, requestedSize);
+            paint.setTextSize(textSize);
+            float measured = paint.measureText(text);
+            if (measured > available && measured > 0f) {
+                textSize = Math.max(minimumSize, textSize * available / measured);
+                paint.setTextSize(textSize);
+            }
+            if (paint.measureText(text) > available) {
+                String ellipsis = "…";
+                String fitted = ellipsis;
+                for (int end = text.length() - 1; end > 0; end--) {
+                    String candidate = text.substring(0, end).trim() + ellipsis;
+                    if (paint.measureText(candidate) <= available) {
+                        fitted = candidate;
+                        break;
+                    }
+                }
+                text = fitted;
+            }
+            paint.setColor(color);
+            canvas.drawText(text, left, baseline, paint);
         }
 
         private static String formatDistance(double meters) {

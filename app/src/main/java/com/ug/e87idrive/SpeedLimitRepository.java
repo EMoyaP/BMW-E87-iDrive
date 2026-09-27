@@ -27,6 +27,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
@@ -64,6 +66,8 @@ final class SpeedLimitRepository {
     private static final long MAX_DERIVED_SPEED_AGE_MS = 10_000L;
     private static final double HEADING_PENALTY_METERS_PER_DEGREE = 0.32d;
     private static final double CONTINUITY_PREFERENCE_METERS = 6d;
+    private static final double MAX_PLAUSIBLE_HEADING_DIFFERENCE_DEGREES = 68d;
+    private static final double AMBIGUOUS_CANDIDATE_MARGIN_METERS = 7d;
     /** A new road must be materially more plausible, or remain plausible across two moving
      * fixes, before replacing the current trajectory.  This prevents a nearby parallel lane
      * from briefly changing an advisory sign while preserving immediate changes on the same
@@ -72,7 +76,11 @@ final class SpeedLimitRepository {
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
-    private static final int BUNDLED_SEED_VERSION = 6;
+    // v8 replaces the road-class seed with the same geometry plus OSM street names for the
+    // offline driving map. Existing installations re-import only this app-owned cache.
+    private static final int BUNDLED_SEED_VERSION = 8;
+    private static final long RECENT_EXPLICIT_LIMIT_MAX_AGE_MS = 8L * 60L * 1_000L;
+    private static final float RECENT_EXPLICIT_LIMIT_MAX_DISTANCE_METERS = 6_000f;
     /** The GPS listener may deliver up to two fixes per second. Local map work is throttled by
      * vehicle speed: parked fixes are reused, while motorway fixes are evaluated immediately. */
     private static final long PARKED_LOOKUP_INTERVAL_MS = 5_000L;
@@ -119,6 +127,11 @@ final class SpeedLimitRepository {
     private String lastMatchedOsmId;
     private String pendingOsmId;
     private int pendingOsmIdObservations;
+    private String recentExplicitRoadRef = "";
+    private int recentExplicitLimitKmh;
+    private boolean recentExplicitForward;
+    private long recentExplicitAt;
+    private Location recentExplicitLocation;
     private volatile Location lastLocation;
     private volatile String lastLookupResult = "Sin consulta GPS todavía";
     private volatile String lastLoggedLookup = "";
@@ -221,6 +234,7 @@ final class SpeedLimitRepository {
                 bearing, null);
         Match result = stabilizeTrajectory(raw, location, matchRadius, bearing, speedKmh);
         result = applyVerifiedAlicanteZones(result, bearing);
+        result = retainRecentExplicitRoadLimit(result, location, bearing, speedKmh, now);
         result = applyContextualAdvisory(result);
         cachedLat = location.getLatitude();
         cachedLon = location.getLongitude();
@@ -231,6 +245,59 @@ final class SpeedLimitRepository {
             lastMatchedOsmId = result.osmId;
         }
         return result;
+    }
+
+    /**
+     * Returns a small visual road snapshot around the current fix. This is intentionally
+     * separate from {@link #lookup(Location)}: the map may draw several nearby roads, while
+     * limit selection must continue to use the stricter trajectory matcher above.
+     */
+    List<OfflineRoadMapView.Road> nearbyMapRoads(Location location) {
+        if (location == null) return new ArrayList<>();
+        return database.mapRoads(location.getLatitude(), location.getLongitude(), 1_150, 520);
+    }
+
+    /**
+     * Bridges short OSM tagging gaps on one continuous numbered road. A preceding explicit
+     * maxspeed may remain useful after the way is split into a new segment with no maxspeed.
+     * The carried value is deliberately downgraded to ADVISORY: it cannot become a legal red
+     * sign without an explicit source for the current segment. Road reference, direction,
+     * movement, age and distance must all agree, preventing leakage to a nearby carriageway.
+     */
+    private Match retainRecentExplicitRoadLimit(Match current, Location location, Float bearing,
+                                                double speedKmh, long now) {
+        if (current == null || location == null) return current;
+        String roadRef = normalizeRoadRef(current.roadRef);
+        boolean hasDirection = bearing != null && !Double.isNaN(current.roadBearingDegrees);
+        boolean forward = hasDirection && Database.followsGeometryDirection(bearing,
+                current.roadBearingDegrees);
+        if (current.exact && !roadRef.isEmpty() && hasDirection) {
+            recentExplicitRoadRef = roadRef;
+            recentExplicitLimitKmh = current.limitKmh;
+            recentExplicitForward = forward;
+            recentExplicitAt = now;
+            recentExplicitLocation = new Location(location);
+            return current;
+        }
+        if (current.exact || speedKmh < 3d || roadRef.isEmpty() || !hasDirection
+                || recentExplicitLimitKmh <= 0 || recentExplicitLocation == null
+                || now - recentExplicitAt > RECENT_EXPLICIT_LIMIT_MAX_AGE_MS
+                || !roadRef.equals(recentExplicitRoadRef) || forward != recentExplicitForward
+                || recentExplicitLocation.distanceTo(location)
+                > RECENT_EXPLICIT_LIMIT_MAX_DISTANCE_METERS) {
+            return current;
+        }
+        // Never turn a carried value into a less cautious recommendation than the class value.
+        // For EL-20 this preserves the preceding explicit 80 through the untagged motorway ways
+        // instead of jumping abruptly to the generic blue 120.
+        int advisory = Math.min(current.limitKmh, recentExplicitLimitKmh);
+        return advisory > 0 && advisory != current.limitKmh
+                ? current.withAdvisoryLimit(advisory) : current;
+    }
+
+    private static String normalizeRoadRef(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT)
+                .replace(" ", "").replace("_", "-");
     }
 
     private double effectiveSpeedKmh(Location location, long now) {
@@ -710,7 +777,8 @@ final class SpeedLimitRepository {
                 db.beginTransaction();
                 try (BufferedReader reader = openSeedReader(connection.getInputStream())) {
                     String header = reader.readLine();
-                    if (header == null || !(header.contains("e87-road-class-seed-v4")
+                    if (header == null || !(header.contains("e87-road-class-seed-v5")
+                            || header.contains("e87-road-class-seed-v4")
                             || header.contains("e87-road-class-seed-v3"))) {
                         throw new IOException("La semilla publicada no contiene el mapa vial compatible");
                     }
@@ -729,7 +797,7 @@ final class SpeedLimitRepository {
         }
     }
 
-    /** Imports v1 explicit-maxspeed, v2 road-class and v3 directional rows without loading the
+    /** Imports v1 explicit-maxspeed through v5 named directional rows without loading the
      * compressed map into the Java heap. */
     private int importSeedReader(SQLiteDatabase db, BufferedReader reader, Province province, long now)
             throws IOException {
@@ -737,7 +805,9 @@ final class SpeedLimitRepository {
         String line;
         while ((line = reader.readLine()) != null) {
             if (line.isEmpty() || line.charAt(0) == '#') continue;
-            String[] columns = line.split("\\t", 8);
+            String[] columns = line.split("\\t", 9);
+            boolean v5 = columns.length == 9 && ("EXACT".equals(columns[1])
+                    || "ADVISORY".equals(columns[1]));
             boolean v4 = columns.length == 8 && ("EXACT".equals(columns[1])
                     || "ADVISORY".equals(columns[1]));
             boolean v3 = columns.length == 7 && ("EXACT".equals(columns[1])
@@ -745,18 +815,19 @@ final class SpeedLimitRepository {
             boolean v2 = columns.length == 5 && ("EXACT".equals(columns[1])
                     || "ADVISORY".equals(columns[1]));
             String id = columns[0];
-            int limit = parseLimit(v4 || v3 || v2 ? columns[2]
+            int limit = parseLimit(v5 || v4 || v3 || v2 ? columns[2]
                     : (columns.length > 1 ? columns[1] : ""));
-            String roadClass = v4 || v3 || v2 ? columns[3] : "";
-            int forwardLimit = v4 || v3 ? parseLimit(columns[4]) : 0;
-            int backwardLimit = v4 || v3 ? parseLimit(columns[5]) : 0;
-            String roadRef = v4 ? columns[6] : "";
-            String geometry = v4 ? columns[7] : v3 ? columns[6] : v2 ? columns[4]
+            String roadClass = v5 || v4 || v3 || v2 ? columns[3] : "";
+            int forwardLimit = v5 || v4 || v3 ? parseLimit(columns[4]) : 0;
+            int backwardLimit = v5 || v4 || v3 ? parseLimit(columns[5]) : 0;
+            String roadRef = v5 || v4 ? columns[6] : "";
+            String roadName = v5 ? columns[7] : "";
+            String geometry = v5 ? columns[8] : v4 ? columns[7] : v3 ? columns[6] : v2 ? columns[4]
                     : (columns.length > 2 ? columns[2] : "");
-            boolean exact = !(v4 || v3 || v2) || "EXACT".equals(columns[1]);
+            boolean exact = !(v5 || v4 || v3 || v2) || "EXACT".equals(columns[1]);
             if (limit <= 0 || id.isEmpty() || geometry.isEmpty()) continue;
             imported += insertRecord(db, id, limit, geometry, now, province.code, exact,
-                    roadClass, forwardLimit, backwardLimit, roadRef);
+                    roadClass, forwardLimit, backwardLimit, roadRef, roadName);
         }
         return imported;
     }
@@ -818,6 +889,8 @@ final class SpeedLimitRepository {
                             : tags.optString("maxspeed:forward", ""));
                     int backwardLimit = parseLimit(tags == null ? null
                             : tags.optString("maxspeed:backward", ""));
+                    String roadName = tags == null ? "" : tags.optString("name:es", "");
+                    if (roadName.isEmpty() && tags != null) roadName = tags.optString("name", "");
                     int advisoryLimit = advisoryForRoadClass(roadClass);
                     JSONArray geometry = element.optJSONArray("geometry");
                     if (explicitLimit <= 0 && advisoryLimit <= 0 || geometry == null || geometry.length() < 2) continue;
@@ -828,7 +901,7 @@ final class SpeedLimitRepository {
                     imported += insertRecord(db, id,
                             explicitLimit > 0 ? explicitLimit : advisoryLimit,
                             coordinates, now, province, explicitLimit > 0, roadClass,
-                            forwardLimit, backwardLimit, roadRef);
+                            forwardLimit, backwardLimit, roadRef, roadName);
                 }
                 db.delete("speed_limits", "updated_at < ?", new String[]{String.valueOf(now - MAX_STALE_MS)});
                 db.setTransactionSuccessful();
@@ -860,6 +933,14 @@ final class SpeedLimitRepository {
     private static int insertRecord(SQLiteDatabase db, String id, int limit, String geometry,
                                     long updatedAt, String province, boolean exact, String roadClass,
                                     int forwardLimit, int backwardLimit, String roadRef) {
+        return insertRecord(db, id, limit, geometry, updatedAt, province, exact, roadClass,
+                forwardLimit, backwardLimit, roadRef, "");
+    }
+
+    private static int insertRecord(SQLiteDatabase db, String id, int limit, String geometry,
+                                    long updatedAt, String province, boolean exact, String roadClass,
+                                    int forwardLimit, int backwardLimit, String roadRef,
+                                    String roadName) {
         double[] bounds = geometryBounds(geometry);
         if (bounds == null) return 0;
         ContentValues values = new ContentValues();
@@ -873,6 +954,7 @@ final class SpeedLimitRepository {
         values.put("forward_speed", Math.max(0, forwardLimit));
         values.put("backward_speed", Math.max(0, backwardLimit));
         values.put("road_ref", roadRef == null ? "" : roadRef.trim());
+        values.put("road_name", roadName == null ? "" : roadName.trim());
         values.put("min_lat", bounds[0]);
         values.put("max_lat", bounds[1]);
         values.put("min_lon", bounds[2]);
@@ -1125,20 +1207,27 @@ final class SpeedLimitRepository {
         final double roadBearingDegrees;
         final double alongMeters;
         final String roadRef;
+        final String roadName;
         Match(int limitKmh, double distanceMeters, long updatedAt, String province,
               boolean exact, String roadClass) {
             this(limitKmh, distanceMeters, updatedAt, province, exact, roadClass,
-                    null, Double.NaN, Double.NaN, Double.NaN, "");
+                    null, Double.NaN, Double.NaN, Double.NaN, "", "");
         }
         Match(int limitKmh, double distanceMeters, long updatedAt, String province,
               boolean exact, String roadClass, String osmId, double headingDifferenceDegrees,
               double roadBearingDegrees, double alongMeters) {
             this(limitKmh, distanceMeters, updatedAt, province, exact, roadClass, osmId,
-                    headingDifferenceDegrees, roadBearingDegrees, alongMeters, "");
+                    headingDifferenceDegrees, roadBearingDegrees, alongMeters, "", "");
         }
         Match(int limitKmh, double distanceMeters, long updatedAt, String province,
               boolean exact, String roadClass, String osmId, double headingDifferenceDegrees,
               double roadBearingDegrees, double alongMeters, String roadRef) {
+            this(limitKmh, distanceMeters, updatedAt, province, exact, roadClass, osmId,
+                    headingDifferenceDegrees, roadBearingDegrees, alongMeters, roadRef, "");
+        }
+        Match(int limitKmh, double distanceMeters, long updatedAt, String province,
+              boolean exact, String roadClass, String osmId, double headingDifferenceDegrees,
+              double roadBearingDegrees, double alongMeters, String roadRef, String roadName) {
             this.limitKmh = limitKmh;
             this.distanceMeters = distanceMeters;
             this.updatedAt = updatedAt;
@@ -1150,18 +1239,19 @@ final class SpeedLimitRepository {
             this.roadBearingDegrees = roadBearingDegrees;
             this.alongMeters = alongMeters;
             this.roadRef = roadRef == null ? "" : roadRef;
+            this.roadName = roadName == null ? "" : roadName;
         }
 
         Match withVerifiedLimit(int verifiedLimit) {
             return new Match(verifiedLimit, distanceMeters, updatedAt, province, true,
                     roadClass, osmId, headingDifferenceDegrees, roadBearingDegrees, alongMeters,
-                    roadRef);
+                    roadRef, roadName);
         }
 
         Match withAdvisoryLimit(int advisoryLimit) {
             return new Match(advisoryLimit, distanceMeters, updatedAt, province, false,
                     roadClass, osmId, headingDifferenceDegrees, roadBearingDegrees, alongMeters,
-                    roadRef);
+                    roadRef, roadName);
         }
     }
 
@@ -1186,9 +1276,20 @@ final class SpeedLimitRepository {
         return score;
     }
 
+    static boolean incompatibleMovingHeading(double distanceMeters,
+                                             double headingDifferenceDegrees) {
+        return !Double.isNaN(headingDifferenceDegrees) && distanceMeters > 8d
+                && headingDifferenceDegrees > MAX_PLAUSIBLE_HEADING_DIFFERENCE_DEGREES;
+    }
+
+    static boolean conflictingGuidance(Match first, Match second) {
+        return first != null && second != null
+                && (first.limitKmh != second.limitKmh || first.exact != second.exact);
+    }
+
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_speed_limits.db";
-        private static final int VERSION = 6;
+        private static final int VERSION = 7;
 
         Database(Context context) { super(context, NAME, null, VERSION); }
 
@@ -1197,6 +1298,7 @@ final class SpeedLimitRepository {
                     + "geometry TEXT NOT NULL, updated_at INTEGER NOT NULL, province TEXT NOT NULL DEFAULT '', "
                     + "record_kind TEXT NOT NULL DEFAULT 'EXACT', road_class TEXT NOT NULL DEFAULT '', "
                     + "road_ref TEXT NOT NULL DEFAULT '', "
+                    + "road_name TEXT NOT NULL DEFAULT '', "
                     + "forward_speed INTEGER NOT NULL DEFAULT 0, backward_speed INTEGER NOT NULL DEFAULT 0, "
                     + "min_lat REAL NOT NULL DEFAULT 0, max_lat REAL NOT NULL DEFAULT 0, "
                     + "min_lon REAL NOT NULL DEFAULT 0, max_lon REAL NOT NULL DEFAULT 0)");
@@ -1235,6 +1337,9 @@ final class SpeedLimitRepository {
             if (oldVersion < 6) {
                 db.execSQL("ALTER TABLE speed_limits ADD COLUMN road_ref TEXT NOT NULL DEFAULT ''");
             }
+            if (oldVersion < 7) {
+                db.execSQL("ALTER TABLE speed_limits ADD COLUMN road_name TEXT NOT NULL DEFAULT ''");
+            }
         }
 
         Match nearest(double latitude, double longitude, int maxDistanceMeters,
@@ -1250,10 +1355,13 @@ final class SpeedLimitRepository {
             };
             Cursor cursor = db.query("speed_limits",
                     new String[]{"osm_id", "maxspeed", "geometry", "updated_at", "province",
-                            "record_kind", "road_class", "forward_speed", "backward_speed", "road_ref"},
+                            "record_kind", "road_class", "forward_speed", "backward_speed",
+                            "road_ref", "road_name"},
                     selection, args, null, null, null);
             Match nearest = null;
+            Match second = null;
             double nearestScore = Double.MAX_VALUE;
+            double secondScore = Double.MAX_VALUE;
             try {
                 while (cursor.moveToNext()) {
                     String osmId = cursor.getString(0);
@@ -1264,6 +1372,8 @@ final class SpeedLimitRepository {
                     boolean genericExact = "EXACT".equals(cursor.getString(5));
                     double directionDifference = vehicleBearing == null ? Double.NaN
                             : headingDifference(vehicleBearing, geometryMatch.roadBearingDegrees);
+                    if (incompatibleMovingHeading(geometryMatch.distanceMeters,
+                            directionDifference)) continue;
                     int limit = genericLimit;
                     boolean exact = genericExact;
                     if (vehicleBearing != null && !Double.isNaN(geometryMatch.roadBearingDegrees)) {
@@ -1281,13 +1391,24 @@ final class SpeedLimitRepository {
                     Match candidate = new Match(limit, geometryMatch.distanceMeters,
                             cursor.getLong(3), cursor.getString(4), exact, cursor.getString(6),
                             osmId, directionDifference, geometryMatch.roadBearingDegrees,
-                            geometryMatch.alongMeters, cursor.getString(9));
+                            geometryMatch.alongMeters, cursor.getString(9), cursor.getString(10));
                     if (nearest == null || score < nearestScore) {
+                        second = nearest;
+                        secondScore = nearestScore;
                         nearest = candidate;
                         nearestScore = score;
+                    } else if (second == null || score < secondScore) {
+                        second = candidate;
+                        secondScore = score;
                     }
                 }
             } finally { cursor.close(); }
+            // At crossings and tightly parallel roads, distance alone can be a coin toss. If
+            // two almost-equivalent candidates would display different guidance, showing no
+            // sign is safer than exposing a plausible-looking but wrong limit.
+            if (nearest != null && second != null
+                    && secondScore - nearestScore <= AMBIGUOUS_CANDIDATE_MARGIN_METERS
+                    && conflictingGuidance(nearest, second)) return null;
             return nearest;
         }
 
@@ -1297,7 +1418,8 @@ final class SpeedLimitRepository {
             SQLiteDatabase db = getReadableDatabase();
             try (Cursor cursor = db.query("speed_limits",
                     new String[]{"osm_id", "maxspeed", "geometry", "updated_at", "province",
-                            "record_kind", "road_class", "forward_speed", "backward_speed", "road_ref"},
+                            "record_kind", "road_class", "forward_speed", "backward_speed",
+                            "road_ref", "road_name"},
                     "osm_id = ?", new String[]{osmId}, null, null, null)) {
                 if (!cursor.moveToFirst()) return null;
                 GeometryMatch geometryMatch = nearestPolylineMatch(latitude, longitude, cursor.getString(2));
@@ -1314,8 +1436,60 @@ final class SpeedLimitRepository {
                 return new Match(limit, geometryMatch.distanceMeters, cursor.getLong(3),
                         cursor.getString(4), exact, cursor.getString(6), cursor.getString(0),
                         difference, geometryMatch.roadBearingDegrees, geometryMatch.alongMeters,
-                        cursor.getString(9));
+                        cursor.getString(9), cursor.getString(10));
             }
+        }
+
+        /** Reads only the compact road geometry needed by the visual driving map. */
+        List<OfflineRoadMapView.Road> mapRoads(double latitude, double longitude,
+                                               int radiusMeters, int maxRoads) {
+            SQLiteDatabase db = getReadableDatabase();
+            double latDelta = radiusMeters / 111_320d;
+            double lonDelta = radiusMeters / Math.max(1d,
+                    111_320d * Math.cos(Math.toRadians(latitude)));
+            String selection = "((min_lat = 0 AND max_lat = 0 AND min_lon = 0 AND max_lon = 0)"
+                    + " OR (min_lat <= ? AND max_lat >= ? AND min_lon <= ? AND max_lon >= ?))";
+            String[] args = {
+                    String.valueOf(latitude + latDelta), String.valueOf(latitude - latDelta),
+                    String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)
+            };
+            ArrayList<OfflineRoadMapView.Road> result = new ArrayList<>();
+            String order = "CASE lower(road_class) WHEN 'motorway' THEN 0 "
+                    + "WHEN 'trunk' THEN 1 WHEN 'primary' THEN 2 WHEN 'secondary' THEN 3 "
+                    + "WHEN 'tertiary' THEN 4 ELSE 5 END";
+            try (Cursor cursor = db.query("speed_limits",
+                    new String[]{"osm_id", "maxspeed", "geometry", "record_kind",
+                            "road_class", "road_ref", "road_name"}, selection, args, null, null, order,
+                    String.valueOf(Math.max(1, maxRoads)))) {
+                while (cursor.moveToNext()) {
+                    double[] points = mapGeometry(cursor.getString(2));
+                    if (points.length < 4) continue;
+                    result.add(new OfflineRoadMapView.Road(cursor.getString(0),
+                            cursor.getString(4), cursor.getString(5), cursor.getString(6),
+                            cursor.getInt(1), "EXACT".equals(cursor.getString(3)), points));
+                }
+            }
+            return result;
+        }
+
+        private static double[] mapGeometry(String geometry) {
+            if (geometry == null || geometry.isEmpty()) return new double[0];
+            ArrayList<Double> values = new ArrayList<>();
+            for (String point : geometry.split(";")) {
+                String[] pair = point.split(",");
+                if (pair.length != 2) continue;
+                try {
+                    double lat = Double.parseDouble(pair[0]);
+                    double lon = Double.parseDouble(pair[1]);
+                    if (Double.isFinite(lat) && Double.isFinite(lon)) {
+                        values.add(lat);
+                        values.add(lon);
+                    }
+                } catch (NumberFormatException ignored) { }
+            }
+            double[] result = new double[values.size()];
+            for (int i = 0; i < values.size(); i++) result[i] = values.get(i);
+            return result;
         }
 
         static boolean followsGeometryDirection(double vehicleBearing, double roadBearing) {

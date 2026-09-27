@@ -93,6 +93,7 @@ class Row:
     forward: int
     backward: int
     road_ref: str
+    road_name: str
     points: list[tuple[float, float]]
     min_lat: float
     max_lat: float
@@ -241,10 +242,14 @@ def load_rows(path: Path, route: tuple[tuple[float, float], ...]) -> list[Row]:
         for line in stream:
             if not line.strip() or line.startswith("#"):
                 continue
-            columns = line.rstrip("\n").split("\t", 7)
-            if len(columns) != 8:
+            columns = line.rstrip("\n").split("\t", 8)
+            if len(columns) not in (8, 9):
                 continue
-            osm_id, kind, raw_limit, road_class, raw_forward, raw_backward, road_ref, geometry = columns
+            if len(columns) == 9:
+                osm_id, kind, raw_limit, road_class, raw_forward, raw_backward, road_ref, road_name, geometry = columns
+            else:
+                osm_id, kind, raw_limit, road_class, raw_forward, raw_backward, road_ref, geometry = columns
+                road_name = ""
             points: list[tuple[float, float]] = []
             for raw_point in geometry.split(";"):
                 try:
@@ -262,7 +267,7 @@ def load_rows(path: Path, route: tuple[tuple[float, float], ...]) -> list[Row]:
                     or max_lon < route_min_lon or min_lon > route_max_lon):
                 continue
             rows.append(Row(osm_id, kind, int(raw_limit), road_class,
-                            int(raw_forward or 0), int(raw_backward or 0), road_ref,
+                            int(raw_forward or 0), int(raw_backward or 0), road_ref, road_name,
                             points, min_lat, max_lat, min_lon, max_lon))
     return rows
 
@@ -306,6 +311,7 @@ def contextual_limit(match: Match, limit: int, exact: bool) -> int:
 def lookup(rows: list[Row], point: tuple[float, float], vehicle_bearing: float | None,
            previous_id: str | None) -> Match | None:
     best: Match | None = None
+    second: Match | None = None
     for row in rows:
         # Cheap bounding-box rejection corresponding to the Android SQLite bounds query.
         if point[0] < row.min_lat - 0.001 or point[0] > row.max_lat + 0.001:
@@ -318,6 +324,8 @@ def lookup(rows: list[Row], point: tuple[float, float], vehicle_bearing: float |
         difference = (heading_difference(vehicle_bearing, road_bearing)
                       if vehicle_bearing is not None and not math.isnan(road_bearing)
                       else float("nan"))
+        if not math.isnan(difference) and distance > 8.0 and difference > 68.0:
+            continue
         continuous = previous_id is not None and previous_id == row.osm_id
         score = distance - (6.0 if continuous else 0.0)
         if not math.isnan(difference):
@@ -331,7 +339,13 @@ def lookup(rows: list[Row], point: tuple[float, float], vehicle_bearing: float |
                 limit, exact = directional, True
         candidate = Match(row, distance, road_bearing, along, difference, score, limit, exact)
         if best is None or candidate.score < best.score:
+            second = best
             best = candidate
+        elif second is None or candidate.score < second.score:
+            second = candidate
+    if (best is not None and second is not None and second.score - best.score <= 7.0
+            and (best.limit != second.limit or best.exact != second.exact)):
+        return None
     return best
 
 
@@ -351,6 +365,7 @@ def replay(rows: list[Row], route: tuple[tuple[float, float], ...],
     output.append("SECUENCIA DE PUNTOS")
     output.append("idx | coordenadas | rumbo | OSM | fuente | valor | distancia | tramo | rumbo vía | error")
     previous_id: str | None = None
+    recent_explicit: tuple[str, int, bool, tuple[float, float]] | None = None
     matches: list[Match | None] = []
     for index, point in enumerate(route):
         if index == 0:
@@ -365,11 +380,24 @@ def replay(rows: list[Row], route: tuple[tuple[float, float], ...],
             continue
         verified = verified_limit(match, course)
         exact = match.exact or verified != match.limit
-        limit = contextual_limit(match, verified, exact)
-        source = "EXACT" if exact else "ADVISORY"
+        limit = verified
+        forward = follows_geometry_direction(course, match.bearing)
+        road_ref = match.row.road_ref.strip().upper().replace(" ", "").replace("_", "-")
+        carried = False
+        if exact and road_ref:
+            recent_explicit = (road_ref, limit, forward, point)
+        elif not exact and road_ref and recent_explicit is not None:
+            previous_ref, previous_limit, previous_forward, previous_point = recent_explicit
+            if (road_ref == previous_ref and forward == previous_forward
+                    and distance_m(*previous_point, *point) <= 6_000.0):
+                safer = min(limit, previous_limit)
+                carried = safer != limit
+                limit = safer
+        limit = contextual_limit(match, limit, exact)
+        source = "EXACT" if exact else "ADVISORY+" if carried else "ADVISORY"
         output.append(
             f"{index:02d} | {point[0]:.6f},{point[1]:.6f} | {course:5.1f} | "
-            f"{match.row.osm_id} | {source:<8} | {limit:3d} | {match.distance:6.1f} m | "
+            f"{match.row.osm_id} | {source:<9} | {limit:3d} | {match.distance:6.1f} m | "
             f"{match.along:7.1f} m | {match.bearing:5.1f} | {match.heading_diff:5.1f}°"
         )
         previous_id = match.row.osm_id

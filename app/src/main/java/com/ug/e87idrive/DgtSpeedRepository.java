@@ -512,7 +512,8 @@ final class DgtSpeedRepository {
                     road == null ? Double.NaN : road.headingDifferenceDegrees,
                     road == null ? Double.NaN : road.roadBearingDegrees,
                     road == null ? Double.NaN : road.alongMeters,
-                    road == null ? roadRef : road.roadRef);
+                    road == null ? roadRef : road.roadRef,
+                    road == null ? "" : road.roadName);
         }
     }
 

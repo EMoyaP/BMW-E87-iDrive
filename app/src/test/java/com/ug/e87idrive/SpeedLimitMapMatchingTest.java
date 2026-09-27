@@ -24,6 +24,23 @@ public class SpeedLimitMapMatchingTest {
         assertTrue(alignedAdvisory < perpendicularExact);
     }
 
+    @Test public void movingFixRejectsASeparatedPerpendicularRoad() {
+        assertTrue(SpeedLimitRepository.incompatibleMovingHeading(12d, 80d));
+        assertTrue(!SpeedLimitRepository.incompatibleMovingHeading(4d, 80d));
+        assertTrue(!SpeedLimitRepository.incompatibleMovingHeading(20d, 15d));
+    }
+
+    @Test public void ambiguousCandidatesConflictOnlyWhenDisplayedGuidanceDiffers() {
+        SpeedLimitRepository.Match exact80 = new SpeedLimitRepository.Match(80, 2d, 1L,
+                "ALICANTE", true, "trunk", "a", 1d, 10d, 20d, "EL-20");
+        SpeedLimitRepository.Match advice120 = new SpeedLimitRepository.Match(120, 3d, 1L,
+                "ALICANTE", false, "motorway", "b", 2d, 12d, 25d, "EL-20");
+        SpeedLimitRepository.Match same80 = new SpeedLimitRepository.Match(80, 3d, 1L,
+                "ALICANTE", true, "trunk", "c", 2d, 12d, 25d, "EL-20");
+        assertTrue(SpeedLimitRepository.conflictingGuidance(exact80, advice120));
+        assertTrue(!SpeedLimitRepository.conflictingGuidance(exact80, same80));
+    }
+
     @Test public void parkedVehicleKeepsPreviouslyConfirmedRoadAcrossGpsDrift() {
         double previousRoad = SpeedLimitRepository.mapMatchScore(7.1d, false, Double.NaN, true);
         double nearbyServiceLane = SpeedLimitRepository.mapMatchScore(4.5d, false, Double.NaN, false);
@@ -69,6 +86,7 @@ public class SpeedLimitMapMatchingTest {
         SpeedLimitRepository.Match nearFortyPanel = new SpeedLimitRepository.Match(50, 2d, 1L,
                 "ALICANTE", false, "unclassified", "34145696", 2d, 82d, 111.6d);
         assertEquals(40, SpeedLimitRepository.applyVerifiedAlicanteZones(nearFortyPanel, 82f).limitKmh);
+
     }
 
     @Test public void localUnclassifiedWithoutRouteReferenceUsesBlueUrbanAdvice() {

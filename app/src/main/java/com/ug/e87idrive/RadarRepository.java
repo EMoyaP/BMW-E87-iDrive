@@ -155,6 +155,13 @@ final class RadarRepository {
         autoRefreshIfNeeded();
     }
 
+    /** Returns nearby locally stored cameras for the visual offline map only. Alert direction,
+     * trajectory and voice rules remain in {@link #alert(Location, Double)}. */
+    ArrayList<OfflineRoadMapView.Radar> nearbyMapRadars(Location location) {
+        if (location == null) return new ArrayList<>();
+        return database.mapRadars(location, 1_150, 32);
+    }
+
     /**
      * Returns a local warning only when proximity is corroborated by the current heading or a
      * short sequence of GPS fixes getting closer. A DGT camera point alone does not identify a
@@ -1001,6 +1008,76 @@ final class RadarRepository {
                 }
             }
             return result;
+        }
+
+        synchronized ArrayList<OfflineRoadMapView.Radar> mapRadars(Location location,
+                                                                     int radiusMeters,
+                                                                     int maxRadars) {
+            ArrayList<OfflineRoadMapView.Radar> result = new ArrayList<>();
+            if (location == null) return result;
+            double latitude = location.getLatitude(), longitude = location.getLongitude();
+            double latDelta = radiusMeters / 111_320d;
+            double lonDelta = radiusMeters / Math.max(1d,
+                    111_320d * Math.cos(Math.toRadians(latitude)));
+            String selection = "min_lat <= ? AND max_lat >= ? AND min_lon <= ? AND max_lon >= ?";
+            String[] args = {String.valueOf(latitude + latDelta), String.valueOf(latitude - latDelta),
+                    String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
+            try (Cursor cursor = getReadableDatabase().query("radars",
+                    new String[]{"id", "type", "road", "points", "source"}, selection, args,
+                    null, null, "CASE source WHEN 'DGT' THEN 0 ELSE 1 END, updated_at DESC",
+                    String.valueOf(Math.max(1, maxRadars * 3)))) {
+                while (cursor.moveToNext() && result.size() < maxRadars) {
+                    double[] point = nearestPoint(latitude, longitude, cursor.getString(3));
+                    if (point == null) continue;
+                    float[] distance = new float[1];
+                    Location.distanceBetween(latitude, longitude, point[0], point[1], distance);
+                    if (distance[0] > radiusMeters) continue;
+                    String source = cursor.getString(4);
+                    boolean duplicate = false;
+                    for (int i = 0; i < result.size(); i++) {
+                        OfflineRoadMapView.Radar existing = result.get(i);
+                        float[] overlap = new float[1];
+                        Location.distanceBetween(existing.latitude, existing.longitude,
+                                point[0], point[1], overlap);
+                        if (overlap[0] <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS) {
+                            duplicate = true;
+                            if (SOURCE_DGT.equals(source) && !SOURCE_DGT.equals(existing.source)) {
+                                result.set(i, new OfflineRoadMapView.Radar(cursor.getString(0),
+                                        cursor.getString(1), cursor.getString(2), source,
+                                        point[0], point[1], null));
+                            }
+                            break;
+                        }
+                    }
+                    if (!duplicate) {
+                        result.add(new OfflineRoadMapView.Radar(cursor.getString(0),
+                                cursor.getString(1), cursor.getString(2), source,
+                                point[0], point[1], null));
+                    }
+                }
+            }
+            return result;
+        }
+
+        private static double[] nearestPoint(double latitude, double longitude, String points) {
+            if (points == null || points.isEmpty()) return null;
+            double[] nearest = null;
+            float best = Float.MAX_VALUE;
+            for (String point : points.split(";")) {
+                String[] pair = point.split(",");
+                if (pair.length != 2) continue;
+                try {
+                    double pointLat = Double.parseDouble(pair[0]);
+                    double pointLon = Double.parseDouble(pair[1]);
+                    float[] distance = new float[1];
+                    Location.distanceBetween(latitude, longitude, pointLat, pointLon, distance);
+                    if (distance[0] < best) {
+                        best = distance[0];
+                        nearest = new double[]{pointLat, pointLon};
+                    }
+                } catch (NumberFormatException ignored) { }
+            }
+            return nearest;
         }
 
         private boolean hasLegacyNear(String points, int meters) {

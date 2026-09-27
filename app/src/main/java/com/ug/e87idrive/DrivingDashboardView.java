@@ -23,7 +23,7 @@ final class DrivingDashboardView extends FrameLayout {
     private double renderedFillSpeed = Double.NaN;
     private final Shader bandShader = new LinearGradient(0, 60, 0, 530,
             new int[]{Color.rgb(4,22,37),Color.rgb(2,13,24),Color.rgb(5,32,51)}, null, Shader.TileMode.CLAMP);
-    private final Bitmap car;
+    private final OfflineRoadMapView map;
     private final Bitmap brand;
     private final Rect brandSource = new Rect(88,88,424,424);
     private final RectF brandDestination = new RectF(541,31,601,91);
@@ -37,7 +37,7 @@ final class DrivingDashboardView extends FrameLayout {
     void radarLimit(Integer value) { cameraLimit = value; invalidate(); }
     private boolean exact;
     private String range, consumption, temperature;
-    private View sign, radar, surveillance, menu;
+    private View sign, radar, surveillance, androidAuto, menu;
     private static final int WHITE = Color.rgb(242, 246, 250);
     private static final int MUTED = Color.rgb(162, 181, 199);
     private static final int GREEN = Color.rgb(65, 198, 120);
@@ -48,9 +48,8 @@ final class DrivingDashboardView extends FrameLayout {
         setWillNotDraw(false);
         setBackgroundColor(Color.BLACK);
         setClickable(true);
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inSampleSize = 2;
-        car = BitmapFactory.decodeResource(getResources(), R.drawable.bmw_e87_hero_v2, options);
+        map = new OfflineRoadMapView(context);
+        addView(map);
         brand = BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher_bmw_v2);
         emblemClip.addOval(brandDestination,Path.Direction.CW);
         rim.moveTo(345, 527);
@@ -75,9 +74,10 @@ final class DrivingDashboardView extends FrameLayout {
         setContentDescription("Cuadro de conducción BMW 118d E87");
     }
 
-    void attach(View sign, View radar, View surveillance, View menu) {
-        this.sign = sign; this.radar = radar; this.surveillance = surveillance; this.menu = menu;
-        addView(sign); addView(radar); addView(surveillance); addView(menu);
+    void attach(View sign, View radar, View surveillance, View androidAuto, View menu) {
+        this.sign = sign; this.radar = radar; this.surveillance = surveillance;
+        this.androidAuto = androidAuto; this.menu = menu;
+        addView(sign); addView(radar); addView(surveillance); addView(androidAuto); addView(menu);
     }
 
     void readings(Double speed, String range, String consumption, String temperature) {
@@ -85,10 +85,31 @@ final class DrivingDashboardView extends FrameLayout {
         invalidate();
     }
 
+    void mapLocation(android.location.Location location, Double speedKmh) {
+        map.setLocation(location, speedKmh);
+    }
+
+    void mapRoads(java.util.List<OfflineRoadMapView.Road> roads) {
+        map.setRoads(roads);
+    }
+
+    void mapRadars(java.util.List<OfflineRoadMapView.Radar> radars) {
+        map.setRadars(radars);
+    }
+
+    void mapRoad(String osmId, String roadRef, double roadBearing, Float vehicleBearing) {
+        map.setCurrentRoad(osmId, roadRef, roadBearing, vehicleBearing);
+    }
+
+    void mapRoad(String osmId, String roadRef, String roadName, double roadBearing,
+                 Float vehicleBearing) {
+        map.setCurrentRoad(osmId, roadRef, roadName, roadBearing, vehicleBearing);
+    }
+
     void road(Integer limit, boolean exact) { this.limit = limit; this.exact = exact; invalidate(); }
 
     void animateInstruments(boolean entering) {
-        View[] instruments={sign,radar,surveillance,menu};
+        View[] instruments={sign,radar,surveillance,androidAuto,menu};
         for(int i=0;i<instruments.length;i++) {
             View instrument=instruments[i];
             if(instrument==null) continue;
@@ -116,10 +137,12 @@ final class DrivingDashboardView extends FrameLayout {
     }
 
     @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        place(map, 348, 146, 605, 403);
         if (sign == null) return;
         place(sign, 963, 163, 298, 298);
         place(radar, 925, 473, 335, 147);
         place(surveillance, 925, 473, 335, 147);
+        place(androidAuto, 837, 584, 76, 76);
         place(menu, 1204, 14, 60, 54);
     }
 
@@ -129,8 +152,6 @@ final class DrivingDashboardView extends FrameLayout {
         canvas.save();
         canvas.translate((getWidth() - 1280 * scale) / 2, (getHeight() - 720 * scale) / 2);
         canvas.scale(scale, scale);
-        // Preserve the exact E87 asset, including its floor reflection, behind the instruments.
-        if (car != null) canvas.drawBitmap(car, null, new RectF(348, 146, 953, 549), paint);
         drawBrand(canvas);
         text(canvas, limit != null && !exact ? "VELOCIDAD ACONSEJADA" : "LÍMITE DE LA VÍA", 1110, 155, 19, WHITE, false);
         // Shaped base, two luminous contours and a shaded inner track, like the approved image.
@@ -194,13 +215,43 @@ final class DrivingDashboardView extends FrameLayout {
         }
         text(canvas, speed == null ? "—" : String.format(Locale.getDefault(), "%.0f", speed), 245, 354, 145, speed == null ? WHITE : active, false);
         text(canvas, "km/h", 245, 392, 31, MUTED, false);
-        text(canvas, "AUTONOMÍA", 140, 605, 17, MUTED, false);
-        text(canvas, range == null ? "—" : range, 140, 657, 37, WHITE, true);
-        text(canvas, "CONSUMO", 390, 605, 17, MUTED, false);
-        text(canvas, consumption == null ? "—" : consumption, 390, 657, 31, WHITE, true);
-        text(canvas, "Temperatura exterior", 733, 605, 17, MUTED, false);
-        text(canvas, temperature == null ? "—" : temperature, 733, 651, 30, WHITE, false);
+        // Three equal visual columns: identical baseline, type size and vertical rhythm.
+        // The Android Auto shortcut occupies a separate fourth slot, so it never displaces a
+        // reading or overlaps a radar/surveillance notice above it.
+        text(canvas, "AUTONOMÍA", 140, 603, 17, MUTED, false);
+        drawAutonomyValue(canvas, range == null ? "—" : range);
+        text(canvas, "CONSUMO", 390, 603, 17, MUTED, false);
+        text(canvas, consumption == null ? "—" : consumption, 390, 655, 34, WHITE, true);
+        text(canvas, "TEMPERATURA EXTERIOR", 690, 603, 17, MUTED, false);
+        text(canvas, temperature == null ? "—" : temperature, 690, 655, 34, WHITE, true);
         canvas.restore();
+    }
+
+    private void drawAutonomyValue(Canvas canvas, String value) {
+        int color = autonomyColor(value);
+        if (color != WHITE) paint.setShadowLayer(2.6f, 0f, 0f, Color.WHITE);
+        text(canvas, value, 140, 655, 34, color, true);
+        paint.clearShadowLayer();
+    }
+
+    private static int autonomyColor(String value) {
+        Double rangeKm = leadingNumber(value);
+        if (rangeKm == null) return WHITE;
+        if (rangeKm <= 100d) return Color.rgb(225, 38, 38);
+        if (rangeKm < 200d) return Color.rgb(246, 126, 13);
+        return WHITE;
+    }
+
+    private static Double leadingNumber(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().replace(',', '.').replaceAll("[^0-9.+-]", " ").trim();
+        if (normalized.isEmpty()) return null;
+        String[] tokens = normalized.split("\\s+");
+        try {
+            return Double.parseDouble(tokens[0]);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private void drawBrand(Canvas canvas) {
