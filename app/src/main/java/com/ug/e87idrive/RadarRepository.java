@@ -44,6 +44,7 @@ final class RadarRepository {
     private static final String SOURCE_DGT = "DGT";
     private static final String SOURCE_LUFOP = "LUFOP";
     private static final String SOURCE_OSM = "OSM";
+    private static final int BUNDLED_DGT_SEED_VERSION = 2;
 
     static void replaceOsm(Context context, String province, ArrayList<OsmRadarData.Camera> cameras, long now) {
         ArrayList<RawRecord> rows = new ArrayList<>();
@@ -436,13 +437,20 @@ final class RadarRepository {
 
     private void seedFromAssetsAsync() {
         Thread worker = new Thread(() -> {
-            if (database.countBySource(SOURCE_DGT) > 0) seedStatus = "Base local existente";
+            int installedVersion = preferences.getInt("bundled_seed_version", 0);
+            if (database.countBySource(SOURCE_DGT) > 0
+                    && installedVersion >= BUNDLED_DGT_SEED_VERSION) {
+                seedStatus = "Base local existente";
+            }
             else {
                 try (InputStream allSpain = context.getAssets().open("e87_dgt_radars_spain.xml")) {
                     ArrayList<RawRecord> records = parseDgt(allSpain, "TODAS");
+                    if (records.isEmpty()) throw new IOException("Semilla nacional de radares vacía");
                     int imported = database.replaceDgtAll(records, System.currentTimeMillis());
                     seedStatus = imported + " fijos/tramo DGT nacionales";
                     lastResult = "Base nacional inicial: " + seedStatus;
+                    preferences.edit().putInt("bundled_seed_version",
+                            BUNDLED_DGT_SEED_VERSION).apply();
                     AppSessionLog.event(TAG, "Semilla nacional local lista · " + lastResult);
                 } catch (Exception allSpainUnavailable) {
                     seedAlicanteFallback(allSpainUnavailable);

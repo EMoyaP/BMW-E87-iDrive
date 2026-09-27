@@ -7,14 +7,21 @@ def dgtInviveAsset = dgtInviveAssetDir.map { it.file('e87_dgt_invive_spain.xml')
 def dgtSpeedAssetDir = layout.buildDirectory.dir('generated/dgtSpeedAssets')
 def dgtSpeedAsset = dgtSpeedAssetDir.map { it.file('e87_dgt_speed_limits_spain.xml') }
 
+def validateXmlSeed = { File output, String marker, String label ->
+    if (output.length() < 1024) throw new GradleException("Respuesta DGT ${label} vacía")
+    if (!output.getText('UTF-8').contains(marker)) {
+        throw new GradleException("Respuesta DGT ${label} sin contenido esperado: ${marker}")
+    }
+}
+
 // The DGT DATEX II feed is a compact (~2 MB) public national inventory. Bundling the current
 // response keeps fixed/tramo alerts entirely offline after installation. A build without network
 // still succeeds with the Alicante fallback seed committed in src/main/assets.
 tasks.register('prepareDgtRadarSeed') {
     outputs.file(dgtRadarAsset)
+    outputs.upToDateWhen { false }
     doLast {
         def output = dgtRadarAsset.get().asFile
-        if (output.exists() && output.length() > 1024) return
         output.parentFile.mkdirs()
         try {
             def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml').openConnection()
@@ -22,7 +29,7 @@ tasks.register('prepareDgtRadarSeed') {
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
             connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
-            if (output.length() < 1024) throw new GradleException('Respuesta DGT de radares vacía')
+            validateXmlSeed(output, 'predefinedLocation', 'de radares')
         } catch (Exception error) {
             logger.warn("No se pudo preparar la semilla nacional DGT: ${error.class.simpleName}. Se empaquetará la semilla de Alicante.")
             output.delete()
@@ -34,9 +41,9 @@ tasks.register('prepareDgtRadarSeed') {
 // It is deliberately kept separate from fixed radars and legal speed-limit data.
 tasks.register('prepareDgtInviveSeed') {
     outputs.file(dgtInviveAsset)
+    outputs.upToDateWhen { false }
     doLast {
         def output = dgtInviveAsset.get().asFile
-        if (output.exists() && output.length() > 1024) return
         output.parentFile.mkdirs()
         try {
             def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml').openConnection()
@@ -44,7 +51,7 @@ tasks.register('prepareDgtInviveSeed') {
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
             connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
-            if (output.length() < 1024) throw new GradleException('Respuesta DGT INVIVE vacía')
+            validateXmlSeed(output, 'predefinedLocation', 'INVIVE')
         } catch (Exception error) {
             logger.warn("No se pudo preparar la semilla INVIVE nacional: ${error.class.simpleName}. Se empaquetará el respaldo de Alicante.")
             output.delete()
@@ -56,9 +63,9 @@ tasks.register('prepareDgtInviveSeed') {
 // debug/release APK when the build has Internet; the checked-in TSV remains an offline fallback.
 tasks.register('prepareDgtSpeedSeed') {
     outputs.file(dgtSpeedAsset)
+    outputs.upToDateWhen { false }
     doLast {
         def output = dgtSpeedAsset.get().asFile
-        if (output.exists() && output.length() > 1024) return
         output.parentFile.mkdirs()
         try {
             def connection = new URL('https://infocar.dgt.es/tnits/limitesVelocidad.xml').openConnection()
@@ -66,7 +73,7 @@ tasks.register('prepareDgtSpeedSeed') {
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
             connection.inputStream.withCloseable { input -> output.newOutputStream().withCloseable { out -> out << input } }
-            if (output.length() < 1024) throw new GradleException('Respuesta DGT de límites vacía')
+            validateXmlSeed(output, 'GenericSafetyFeature', 'de límites')
         } catch (Exception error) {
             logger.warn("No se pudo preparar la semilla nacional DGT de límites: ${error.class.simpleName}. Se usará el TSV semanal incluido.")
             output.delete()
@@ -82,8 +89,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 65
-        versionName "1.26.5"
+        versionCode 66
+        versionName "1.26.6"
     }
 
     compileOptions {

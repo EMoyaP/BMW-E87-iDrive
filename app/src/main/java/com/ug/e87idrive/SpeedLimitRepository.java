@@ -76,9 +76,8 @@ final class SpeedLimitRepository {
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
-    // v8 replaces the road-class seed with the same geometry plus OSM street names for the
-    // offline driving map. Existing installations re-import only this app-owned cache.
-    private static final int BUNDLED_SEED_VERSION = 8;
+    // v9 transactionally refreshes the four packaged provinces without deleting the SQLite file.
+    private static final int BUNDLED_SEED_VERSION = 9;
     private static final long RECENT_EXPLICIT_LIMIT_MAX_AGE_MS = 8L * 60L * 1_000L;
     private static final float RECENT_EXPLICIT_LIMIT_MAX_DISTANCE_METERS = 6_000f;
     /** The GPS listener may deliver up to two fixes per second. Local map work is throttled by
@@ -699,33 +698,43 @@ final class SpeedLimitRepository {
                         < BUNDLED_SEED_VERSION;
                 seedStatus = needsSeedCheck ? "Verificando semillas provinciales" : "Verificando base local";
                 int imported = 0;
+                boolean seedInstalled = false;
                 boolean replaceOldMapCache = updatePreferences.getInt("bundled_seed_version", 0)
                         < BUNDLED_SEED_VERSION;
                 SQLiteDatabase db = database.getWritableDatabase();
                 long now = System.currentTimeMillis();
                 db.beginTransaction();
                 try {
-                    // This intentionally resets only iDrive's own speed-map cache. It does not
-                    // touch fuel prices, diagnostics, OEM settings or any radio application.
-                    // Keeping the old maxspeed-only cache would prevent the bundled Alicante
-                    // class rows from replacing it after an APK upgrade.
-                    if (replaceOldMapCache) db.delete("speed_limits", null, null);
+                    // Remove only legacy unscoped rows here. Each packaged province is replaced
+                    // inside this transaction immediately before importing its complete snapshot.
+                    // GPS-area downloads and unsupported provinces remain available.
+                    if (replaceOldMapCache) {
+                        db.delete("speed_limits", "province IS NULL OR province = ''", null);
+                    }
                     for (Province province : SUPPORTED_PROVINCES) {
                         // Older builds could retain generic records and therefore omit the
                         // packaged provincial base. Do not replace a province already updated
                         // by the user; only fill one that is absent.
                         if (replaceOldMapCache || database.countProvince(province.code) == 0) {
+                            if (replaceOldMapCache) {
+                                db.delete("speed_limits", "province = ?",
+                                        new String[]{province.code});
+                            }
                             imported += importSeedAsset(db, province, now);
                         }
                     }
                     db.setTransactionSuccessful();
+                    seedInstalled = true;
                 } catch (Exception error) {
+                    imported = 0;
                     seedStatus = "Error: " + error.getClass().getSimpleName();
                     AppSessionLog.event(TAG, "Semillas locales fallidas · " + error.getMessage());
                 } finally {
                     db.endTransaction();
                 }
-                if (imported > 0) {
+                if (!seedInstalled) {
+                    lastResult = "Semillas locales no instaladas; se conserva la base anterior";
+                } else if (imported > 0) {
                     seedStatus = imported + " tramos importados";
                     lastResult = imported + " tramos iniciales · Alicante/Murcia/Valencia/Albacete";
                     AppSessionLog.event(TAG, "Semillas locales listas · " + lastResult);
@@ -733,14 +742,16 @@ final class SpeedLimitRepository {
                 } else {
                     seedStatus = "Base local existente";
                 }
-                SharedPreferences.Editor seedEditor = updatePreferences.edit()
-                        .putInt("bundled_seed_version", BUNDLED_SEED_VERSION);
-                if (replaceOldMapCache) {
-                    for (Province province : SUPPORTED_PROVINCES) {
-                        seedEditor.remove(successPreference(province.code));
+                if (seedInstalled) {
+                    SharedPreferences.Editor seedEditor = updatePreferences.edit()
+                            .putInt("bundled_seed_version", BUNDLED_SEED_VERSION);
+                    if (replaceOldMapCache) {
+                        for (Province province : SUPPORTED_PROVINCES) {
+                            seedEditor.remove(successPreference(province.code));
+                        }
                     }
+                    seedEditor.apply();
                 }
-                seedEditor.apply();
                 main.post(SpeedLimitRepository.this::autoRefreshIfNeeded);
             }
         }, "e87-speed-limit-seed");
@@ -748,14 +759,22 @@ final class SpeedLimitRepository {
         worker.start();
     }
 
-    private int importSeedAsset(SQLiteDatabase db, Province province, long now) {
-        int imported = 0;
+    private int importSeedAsset(SQLiteDatabase db, Province province, long now) throws IOException {
         try (BufferedReader reader = openSeedReader(province)) {
-            imported = importSeedReader(db, reader, province, now);
-        } catch (IOException error) {
-            AppSessionLog.event(TAG, "Semilla no disponible · " + province.label + " · " + error.getMessage());
+            String header = reader.readLine();
+            if (!compatibleSeedHeader(header)) {
+                throw new IOException("Formato de semilla incompatible: " + province.label);
+            }
+            int imported = importSeedReader(db, reader, province, now);
+            if (imported <= 0) throw new IOException("Semilla vacía: " + province.label);
+            return imported;
         }
-        return imported;
+    }
+
+    static boolean compatibleSeedHeader(String header) {
+        return header != null && (header.contains("e87-road-class-seed-v5")
+                || header.contains("e87-road-class-seed-v4")
+                || header.contains("e87-road-class-seed-v3"));
     }
 
     /** Replaces only iDrive's Alicante road map with a compact OSM snapshot. This never
@@ -777,9 +796,7 @@ final class SpeedLimitRepository {
                 db.beginTransaction();
                 try (BufferedReader reader = openSeedReader(connection.getInputStream())) {
                     String header = reader.readLine();
-                    if (header == null || !(header.contains("e87-road-class-seed-v5")
-                            || header.contains("e87-road-class-seed-v4")
-                            || header.contains("e87-road-class-seed-v3"))) {
+                    if (!compatibleSeedHeader(header)) {
                         throw new IOException("La semilla publicada no contiene el mapa vial compatible");
                     }
                     db.delete("speed_limits", "province = ?", new String[]{province.code});
@@ -903,7 +920,8 @@ final class SpeedLimitRepository {
                             coordinates, now, province, explicitLimit > 0, roadClass,
                             forwardLimit, backwardLimit, roadRef, roadName);
                 }
-                db.delete("speed_limits", "updated_at < ?", new String[]{String.valueOf(now - MAX_STALE_MS)});
+                db.delete("speed_limits", "province = ? AND updated_at < ?",
+                        new String[]{province, String.valueOf(now - MAX_STALE_MS)});
                 db.setTransactionSuccessful();
             } finally {
                 db.endTransaction();

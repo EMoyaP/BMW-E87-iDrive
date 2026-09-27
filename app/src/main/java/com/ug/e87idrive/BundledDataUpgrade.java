@@ -8,28 +8,13 @@ import java.io.File;
 /**
  * Invalidates app-owned source caches once per installed APK revision.
  *
- * Android deliberately preserves an application's data directory during an update. That is
- * useful for user preferences, but it is unsafe for bundled road/radar seeds: an older SQLite
- * cache could otherwise remain alongside the new APK assets. This class removes only source
- * datasets and update markers; vehicle/app/UI preferences are intentionally left untouched.
+ * Records the installed APK revision and removes only short-lived binary caches. Persistent
+ * road, radar and surveillance SQLite databases are migrated by their repositories so weekly
+ * deltas and already verified source history survive an application update.
  */
 final class BundledDataUpgrade {
     private static final String PREFS = "bundled_data_upgrade";
     private static final String KEY_REVISION = "last_applied_app_version";
-    private static final String[] DATA_DATABASES = {
-            "e87_speed_limits.db",
-            "e87_dgt_speed.db",
-            "e87_dgt_radars.db",
-            "e87_dgt_invive.db"
-    };
-    private static final String[] DATA_PREFERENCES = {
-            "speed_limit_updates",
-            "dgt_speed_updates",
-            "dgt_radar_updates",
-            "osm_radar_updates",
-            "dgt_invive_updates"
-    };
-
     private BundledDataUpgrade() { }
 
     static void apply(Context context) {
@@ -38,29 +23,11 @@ final class BundledDataUpgrade {
         int currentVersion = installedAppVersion(context);
         if (marker.getInt(KEY_REVISION, 0) == currentVersion) return;
 
-        int deletedDatabases = 0;
-        for (String database : DATA_DATABASES) {
-            try {
-                if (context.deleteDatabase(database)) deletedDatabases++;
-            } catch (Exception error) {
-                AppSessionLog.event("DATOS", "No se pudo limpiar " + database + " · "
-                        + error.getClass().getSimpleName());
-            }
-        }
-        for (String preferences : DATA_PREFERENCES) {
-            try {
-                context.getSharedPreferences(preferences, Context.MODE_PRIVATE)
-                        .edit().clear().apply();
-            } catch (Exception error) {
-                AppSessionLog.event("DATOS", "No se pudo reiniciar preferencias " + preferences
-                        + " · " + error.getClass().getSimpleName());
-            }
-        }
         int deletedFuelCaches = clearFuelCaches(context.getCacheDir());
         marker.edit().putInt(KEY_REVISION, currentVersion).apply();
-        AppSessionLog.event("DATOS", "Cachés de fuentes reiniciadas por actualización · APK="
-                + currentVersion + " · bases=" + deletedDatabases + " · gasolineras="
-                + deletedFuelCaches + " · configuración personal conservada");
+        AppSessionLog.event("DATOS", "Migración por actualización · APK=" + currentVersion
+                + " · cachés temporales=" + deletedFuelCaches
+                + " · SQLite e historial incremental conservados");
     }
 
     private static int clearFuelCaches(File cacheDirectory) {
@@ -84,7 +51,7 @@ final class BundledDataUpgrade {
                     .getPackageInfo(context.getPackageName(), 0).versionCode;
         } catch (Exception ignored) {
             // The fallback keeps the migration deterministic if package metadata is unavailable.
-            return 65;
+            return 66;
         }
     }
 }

@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 1.26.6 — 27/09/2026
+
+- Las SQLite se conservan al actualizar la APK. Los límites DGT semanales se fusionan por
+  fecha y las instantáneas completas de OSM, radares e INVIVE reemplazan únicamente su fuente
+  o provincia dentro de una transacción.
+- Una semilla OSM incompleta o incompatible revierte toda la importación y no queda marcada
+  como instalada. La limpieza por antigüedad queda limitada a la provincia actual.
+- El GPS descarta posiciones antiguas y evita que una lectura de red menos precisa sustituya
+  a una posición GPS reciente; posición y velocidad caducan cuando dejan de ser fiables.
+- Cada compilación vuelve a solicitar las tres fuentes DGT y valida que el XML contiene el tipo
+  de registros esperado antes de incluirlo en la APK.
+- Añadidas pruebas de precedencia GPS, orden temporal de deltas DGT y formato de semillas OSM.
+
 ## 1.26.1 — 26/09/2026
 
 - Semillas incluidas: 113.227 tramos OSM de Alicante, 479 gasolineras diésel,

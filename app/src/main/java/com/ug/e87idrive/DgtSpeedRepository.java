@@ -50,6 +50,12 @@ final class DgtSpeedRepository {
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final double MAX_MATCH_METERS = 180d;
     private static final int BUNDLED_SEED_VERSION = 1;
+    private static final String KEY_LAST_DATASET_CREATED_AT = "last_dataset_created_at";
+
+    static boolean shouldApplyChange(long existingChangedAt, long incomingChangedAt) {
+        return existingChangedAt <= 0L || incomingChangedAt <= 0L
+                || incomingChangedAt >= existingChangedAt;
+    }
 
     private final Context context;
     private final ConnectivityManager connectivity;
@@ -184,6 +190,10 @@ final class DgtSpeedRepository {
                         .putLong("last_success_national", checked)
                         .putString("seed_mode", "weekly_delta_merged")
                         .putInt("last_applied", applied);
+                if (dataset.datasetCreatedAt > 0L) {
+                    editor.putLong(KEY_LAST_DATASET_CREATED_AT, Math.max(dataset.datasetCreatedAt,
+                            preferences.getLong(KEY_LAST_DATASET_CREATED_AT, 0L)));
+                }
                 String responseEtag = connection.getHeaderField("ETag");
                 String responseModified = connection.getHeaderField("Last-Modified");
                 if (responseEtag != null && !responseEtag.isEmpty()) editor.putString("etag", responseEtag);
@@ -211,23 +221,38 @@ final class DgtSpeedRepository {
 
     private void seedFromAssetsAsync() {
         new Thread(() -> {
-            if (database.count("ACTIVE") > 0) {
-                seedStatus = database.count("ACTIVE") + " límites DGT conservados en local";
-                return;
-            }
+            int activeBefore = database.count("ACTIVE");
             int imported = 0;
             try (InputStream input = context.getAssets().open(XML_ASSET)) {
                 Dataset dataset = parseXml(input);
-                imported = database.apply(dataset.records, dataset.datasetCreatedAt,
-                        "DGT_WEEKLY_SEED");
-                if (imported <= 0) throw new IOException("semilla XML vacía");
-                seedStatus = imported + " cambios DGT nacionales · semilla semanal parcial";
+                if (dataset.records.isEmpty()) throw new IOException("semilla XML vacía");
+                long installedDatasetAt = preferences.getLong(KEY_LAST_DATASET_CREATED_AT, 0L);
+                if (activeBefore > 0 && dataset.datasetCreatedAt > 0L
+                        && dataset.datasetCreatedAt <= installedDatasetAt) {
+                    seedStatus = activeBefore + " límites DGT conservados · semilla ya aplicada";
+                } else {
+                    imported = database.apply(dataset.records, dataset.datasetCreatedAt,
+                            "DGT_WEEKLY_SEED");
+                    seedStatus = imported + " cambios DGT fusionados · semilla semanal parcial";
+                    if (dataset.datasetCreatedAt > 0L) {
+                        preferences.edit().putLong(KEY_LAST_DATASET_CREATED_AT,
+                                Math.max(dataset.datasetCreatedAt, installedDatasetAt)).apply();
+                    }
+                }
             } catch (Exception xmlError) {
+                if (activeBefore > 0 && preferences.getInt("bundled_seed_version", 0)
+                        >= BUNDLED_SEED_VERSION) {
+                    seedStatus = activeBefore + " límites DGT conservados en local";
+                    AppSessionLog.event(TAG, "Semilla XML no aplicable; se conserva el historial · "
+                            + xmlError.getClass().getSimpleName());
+                    return;
+                }
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                         context.getAssets().open(TSV_ASSET), StandardCharsets.UTF_8))) {
                     ArrayList<FeatureRecord> records = parseTsv(reader);
+                    if (records.isEmpty()) throw new IOException("semilla TSV vacía");
                     imported = database.apply(records, 0L, "DGT_WEEKLY_SEED");
-                    seedStatus = imported + " cambios DGT nacionales · semilla TSV semanal parcial";
+                    seedStatus = imported + " cambios DGT fusionados · semilla TSV semanal parcial";
                 } catch (Exception tsvError) {
                     seedStatus = "Sin semilla DGT local · " + tsvError.getClass().getSimpleName();
                     AppSessionLog.event(TAG, "Semilla DGT fallida · XML="
@@ -635,26 +660,31 @@ final class DgtSpeedRepository {
             int applied = 0;
             try {
                 for (FeatureRecord record : records) {
+                    long incomingChangedAt = datasetAt > 0L ? datasetAt : record.changedAt;
+                    long existingChangedAt = changedAt(db, record.id);
+                    if (!shouldApplyChange(existingChangedAt, incomingChangedAt)) continue;
                     String action = record.action == null ? "ADD" : record.action.toUpperCase(Locale.ROOT);
                     if ("REMOVE".equals(action)) {
                         ContentValues removed = new ContentValues();
                         removed.put("status", "REMOVED");
-                        removed.put("changed_at", record.changedAt);
+                        removed.put("changed_at", incomingChangedAt);
                         if (db.update("dgt_speed_limits", removed, "id = ?", new String[]{record.id}) == 0) {
-                            ContentValues tombstone = values(record, "REMOVED", 0, "");
+                            ContentValues tombstone = values(record, "REMOVED", 0, "",
+                                    incomingChangedAt);
                             db.insertWithOnConflict("dgt_speed_limits", null, tombstone,
                                     SQLiteDatabase.CONFLICT_REPLACE);
                         }
                     } else {
-                        ContentValues values = values(record, "ACTIVE", record.speed, record.geometry);
+                        ContentValues values = values(record, "ACTIVE", record.speed, record.geometry,
+                                incomingChangedAt);
                         db.insertWithOnConflict("dgt_speed_limits", null, values,
                                 SQLiteDatabase.CONFLICT_REPLACE);
                     }
-                    String key = record.id + "|" + action + "|" + record.speed + "|" + record.changedAt;
+                    String key = record.id + "|" + action + "|" + record.speed + "|" + incomingChangedAt;
                     ContentValues change = new ContentValues();
                     change.put("change_key", key); change.put("id", record.id);
                     change.put("action", action); change.put("speed_kmh", record.speed);
-                    change.put("changed_at", record.changedAt);
+                    change.put("changed_at", incomingChangedAt);
                     db.insertWithOnConflict("dgt_speed_changes", null, change,
                             SQLiteDatabase.CONFLICT_IGNORE);
                     applied++;
@@ -664,8 +694,15 @@ final class DgtSpeedRepository {
             return applied;
         }
 
+        private static long changedAt(SQLiteDatabase db, String id) {
+            try (Cursor cursor = db.query("dgt_speed_limits", new String[]{"changed_at"},
+                    "id = ?", new String[]{id}, null, null, null, "1")) {
+                return cursor.moveToFirst() ? cursor.getLong(0) : 0L;
+            }
+        }
+
         private static ContentValues values(FeatureRecord record, String status, int speed,
-                                             String geometry) {
+                                             String geometry, long changedAt) {
             ContentValues values = new ContentValues();
             values.put("id", record.id); values.put("provider_id", record.provider);
             values.put("status", status); values.put("road_ref", record.road);
@@ -673,7 +710,7 @@ final class DgtSpeedRepository {
             if (Double.isFinite(record.fromPk)) values.put("from_pk", record.fromPk); else values.putNull("from_pk");
             if (Double.isFinite(record.toPk)) values.put("to_pk", record.toPk); else values.putNull("to_pk");
             values.put("speed_kmh", speed); values.put("geometry", geometry == null ? "" : geometry);
-            values.put("geometry_crs", record.geometryCrs); values.put("changed_at", record.changedAt);
+            values.put("geometry_crs", record.geometryCrs); values.put("changed_at", changedAt);
             double[] bounds = bounds(geometry);
             if (bounds != null) {
                 values.put("min_lat", bounds[0]); values.put("max_lat", bounds[1]);

@@ -37,7 +37,7 @@ final class InviveRepository {
             "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml";
     private static final long UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1_000L;
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-    private static final int BUNDLED_SEED_VERSION = 1;
+    private static final int BUNDLED_SEED_VERSION = 2;
     private static final double STRICT_CORRIDOR_METERS = 180d;
     private static final long ACTIVE_HYSTERESIS_MS = 4_000L;
 

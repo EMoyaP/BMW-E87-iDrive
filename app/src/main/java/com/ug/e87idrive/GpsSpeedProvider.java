@@ -8,12 +8,16 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 public class GpsSpeedProvider implements LocationListener {
+    private static final long MAX_LOCATION_AGE_MS = 15_000L;
+    private static final long MAX_SPEED_AGE_MS = 10_000L;
+    private static final long MAX_INFERIOR_PROVIDER_HOLD_MS = 12_000L;
     static final String DEBUG_PREFERENCES = "ui";
     static final String KEY_LOG_COORDINATES = "debug_log_gps_coordinates";
     public interface Listener { void onLocation(Location location, Double kmh); }
@@ -22,6 +26,7 @@ public class GpsSpeedProvider implements LocationListener {
     private final Listener listener;
     private Double kmh;
     private long timestamp, locationTimestamp;
+    private long lastFixElapsedMs;
     private Location lastLocation;
     private String lastLoggedState = "";
     private long lastLoggedAt;
@@ -91,10 +96,13 @@ public class GpsSpeedProvider implements LocationListener {
         started = false;
         try { lm.removeUpdates(this); } catch(Exception ignored) {}
     }
-    public Double getKmh() { return kmh; }
-    public Double getLastValue() { return kmh; }
+    public Double getKmh() { return freshSpeed(); }
+    public Double getLastValue() { return freshSpeed(); }
     public long getLastTimestamp() { return timestamp; }
-    public Location getLastLocation() { return lastLocation == null ? null : new Location(lastLocation); }
+    public Location getLastLocation() {
+        return lastLocation == null || !isFresh(lastFixElapsedMs, MAX_LOCATION_AGE_MS)
+                ? null : new Location(lastLocation);
+    }
     public long getLocationTimestamp() { return locationTimestamp; }
 
     static boolean coordinateLoggingEnabled(Context context) {
@@ -169,9 +177,23 @@ public class GpsSpeedProvider implements LocationListener {
     }
 
     @Override public void onLocationChanged(Location l) {
+        if (l == null || !Double.isFinite(l.getLatitude()) || !Double.isFinite(l.getLongitude())
+                || l.getLatitude() == 0d && l.getLongitude() == 0d) return;
+        long nowElapsed = SystemClock.elapsedRealtime();
+        long candidateFixElapsed = fixElapsedRealtimeMs(l, nowElapsed);
+        long ageMs = Math.max(0L, nowElapsed - candidateFixElapsed);
+        if (ageMs > MAX_LOCATION_AGE_MS) {
+            logRejectedLocation(l, "antigua " + ageMs + " ms");
+            return;
+        }
+        if (!shouldAccept(l, candidateFixElapsed, nowElapsed)) {
+            logRejectedLocation(l, "menos fiable que la posición activa");
+            return;
+        }
         Location previous = lastLocation;
         lastLocation = new Location(l);
-        locationTimestamp = System.currentTimeMillis();
+        lastFixElapsedMs = candidateFixElapsed;
+        locationTimestamp = Math.max(0L, System.currentTimeMillis() - ageMs);
         if(l.hasSpeed()) {
             kmh=Math.max(0d,(double)l.getSpeed()*3.6);
             timestamp=locationTimestamp;
@@ -187,8 +209,55 @@ public class GpsSpeedProvider implements LocationListener {
                 timestamp = locationTimestamp;
             }
         }
-        if(listener!=null) listener.onLocation(new Location(l), kmh);
+        if (System.currentTimeMillis() - timestamp > MAX_SPEED_AGE_MS) kmh = null;
+        if(listener!=null) listener.onLocation(new Location(l), freshSpeed());
         logLocationState(l, false);
+    }
+
+    private Double freshSpeed() {
+        return kmh != null && timestamp > 0L
+                && System.currentTimeMillis() - timestamp <= MAX_SPEED_AGE_MS ? kmh : null;
+    }
+
+    private boolean shouldAccept(Location candidate, long candidateFixElapsed, long nowElapsed) {
+        if (lastLocation == null || !isFresh(lastFixElapsedMs, MAX_LOCATION_AGE_MS)) return true;
+        long deltaMs = candidateFixElapsed - lastFixElapsedMs;
+        if (deltaMs < -1_000L) return false;
+        float candidateAccuracy = candidate.hasAccuracy() ? candidate.getAccuracy() : Float.MAX_VALUE;
+        float currentAccuracy = lastLocation.hasAccuracy() ? lastLocation.getAccuracy() : Float.MAX_VALUE;
+        boolean currentGps = LocationManager.GPS_PROVIDER.equals(lastLocation.getProvider());
+        boolean candidateGps = LocationManager.GPS_PROVIDER.equals(candidate.getProvider());
+        return preferCandidate(deltaMs, currentGps, candidateGps, currentAccuracy,
+                candidateAccuracy, nowElapsed - lastFixElapsedMs);
+    }
+
+    static boolean preferCandidate(long deltaMs, boolean currentGps, boolean candidateGps,
+                                   float currentAccuracy, float candidateAccuracy,
+                                   long currentAgeMs) {
+        if (deltaMs < -1_000L) return false;
+        if (currentGps && !candidateGps && currentAgeMs < MAX_INFERIOR_PROVIDER_HOLD_MS
+                && candidateAccuracy >= currentAccuracy) return false;
+        return deltaMs > 0L || candidateAccuracy < currentAccuracy;
+    }
+
+    private static boolean isFresh(long fixElapsedMs, long maxAgeMs) {
+        return fixElapsedMs > 0L && SystemClock.elapsedRealtime() - fixElapsedMs <= maxAgeMs;
+    }
+
+    private static long fixElapsedRealtimeMs(Location location, long nowElapsed) {
+        long fixElapsed = location.getElapsedRealtimeNanos() / 1_000_000L;
+        if (fixElapsed > 0L && fixElapsed <= nowElapsed + 1_000L) return fixElapsed;
+        long wallAge = location.getTime() <= 0L ? 0L
+                : Math.max(0L, System.currentTimeMillis() - location.getTime());
+        return Math.max(1L, nowElapsed - wallAge);
+    }
+
+    private void logRejectedLocation(Location location, String reason) {
+        long now = System.currentTimeMillis();
+        if (now - lastLoggedAt < 5_000L) return;
+        lastLoggedAt = now;
+        AppSessionLog.event("GPS", "Posición descartada · proveedor=" + location.getProvider()
+                + " · motivo=" + reason);
     }
 
     private void logLocationState(Location l, boolean force) {
