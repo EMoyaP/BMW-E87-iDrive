@@ -51,6 +51,10 @@ public final class MediaNotificationListener extends NotificationListenerService
         if (item == null || item.getNotification() == null) return;
         Bundle extras = item.getNotification().extras;
         if (extras == null) return;
+        // A notification listener is intentionally broad enough for Spotify and phone media,
+        // but it must not surface unrelated car-bridge notifications as a media title.
+        if (!Notification.CATEGORY_TRANSPORT.equals(item.getNotification().category)
+                && !extras.containsKey(Notification.EXTRA_MEDIA_SESSION)) return;
         String title = value(extras.getCharSequence(Notification.EXTRA_TITLE));
         if (title.isEmpty()) title = value(extras.getCharSequence(Notification.EXTRA_TITLE_BIG));
         String text = value(extras.getCharSequence(Notification.EXTRA_TEXT));

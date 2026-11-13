@@ -26,7 +26,13 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Locale;
+import java.util.Map;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.TimeZone;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -40,11 +46,12 @@ final class RadarRepository {
     interface ProvinceResolver { String resolve(); }
     private static final String TAG = "RADARES DGT";
     private static final String DGT_ENDPOINT =
-            "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml";
+            "https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml";
     private static final String SOURCE_DGT = "DGT";
     private static final String SOURCE_LUFOP = "LUFOP";
     private static final String SOURCE_OSM = "OSM";
     private static final int BUNDLED_DGT_SEED_VERSION = 2;
+    private static final String[] OSM_SEED_PROVINCES={"ALICANTE","MURCIA","VALENCIA","ALBACETE","ALMERIA"};
 
     static void replaceOsm(Context context, String province, ArrayList<OsmRadarData.Camera> cameras, long now) {
         ArrayList<RawRecord> rows = new ArrayList<>();
@@ -97,10 +104,8 @@ final class RadarRepository {
     private double trackedDistance = Double.NaN;
     private String suppressedId;
     private double suppressedDistance = Double.NaN;
-    private String candidateId;
-    private double candidateDistance = Double.NaN;
-    private Location candidateLocation;
-    private long candidateAt;
+    /** Keep a short observation for every nearby camera, not only the closest one. */
+    private final Map<String, CandidateObservation> candidateObservations = new HashMap<>();
     /** Camera whose ±100 m passage window was entered while trajectory was confirmed. */
     private String fixedCameraPassageId;
     private boolean networkCallbackRegistered;
@@ -120,17 +125,47 @@ final class RadarRepository {
         connectivity = (ConnectivityManager) this.context.getSystemService(Context.CONNECTIVITY_SERVICE);
         preferences = this.context.getSharedPreferences("dgt_radar_updates", Context.MODE_PRIVATE);
         database = new Database(this.context);
-        new Thread(() -> {
-            if (database.countBySource(SOURCE_OSM) > 0) return;
-            try (InputStream input = this.context.getAssets().open("e87_osm_radars_alicante.json")) {
-                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-                byte[] buffer = new byte[8192]; int n;
-                while ((n = input.read(buffer)) != -1) out.write(buffer, 0, n);
-                replaceOsm(this.context, "ALICANTE", OsmRadarData.parse(new org.json.JSONObject(
-                        out.toString("UTF-8"))), System.currentTimeMillis());
-            } catch (Exception error) { AppSessionLog.event("RADARES OSM", "Semilla: " + error.getMessage()); }
-        }, "e87-osm-radar-seed").start();
+        new Thread(this::seedOsmFromAssets,"e87-osm-radar-seed").start();
         seedFromAssetsAsync();
+    }
+
+    private void seedOsmFromAssets(){
+        long bundledAt=bundledOsmTimestamp();int imported=0;
+        for(String province:OSM_SEED_PROVINCES){
+            String code=province.toLowerCase(Locale.ROOT);
+            try{
+                if(bundledAt>0L&&database.latestBySourceProvince(SOURCE_OSM,province)>bundledAt)continue;
+                try(InputStream raw=context.getAssets().open("e87_osm_radars_"+code+"_seed.jsonz");
+                    InputStream input=new GZIPInputStream(new BufferedInputStream(raw))){
+                    java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
+                    byte[] buffer=new byte[8192];int n;while((n=input.read(buffer))!=-1)out.write(buffer,0,n);
+                    ArrayList<OsmRadarData.Camera> cameras=OsmRadarData.parse(
+                            new org.json.JSONObject(out.toString("UTF-8")));
+                    replaceOsm(context,province,cameras,bundledAt>0L?bundledAt:System.currentTimeMillis());
+                    imported+=cameras.size();
+                }
+            }catch(java.io.FileNotFoundException missing){
+                if(!"ALICANTE".equals(province))continue;
+                try(InputStream input=context.getAssets().open("e87_osm_radars_alicante.json")){
+                    java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;
+                    while((n=input.read(buffer))!=-1)out.write(buffer,0,n);
+                    ArrayList<OsmRadarData.Camera> cameras=OsmRadarData.parse(new org.json.JSONObject(out.toString("UTF-8")));
+                    replaceOsm(context,province,cameras,System.currentTimeMillis());imported+=cameras.size();
+                }catch(Exception error){AppSessionLog.event("RADARES OSM","Semilla Alicante no disponible");}
+            }catch(Exception error){AppSessionLog.event("RADARES OSM","Semilla "+province+" · "+error.getClass().getSimpleName());}
+        }
+        if(imported>0)AppSessionLog.event("RADARES OSM",imported+" cámaras provinciales verificadas");
+    }
+
+    private long bundledOsmTimestamp(){
+        try(InputStream input=context.getAssets().open("e87_data_bundle_manifest.json")){
+            java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;
+            while((n=input.read(buffer))!=-1)out.write(buffer,0,n);
+            String version=new org.json.JSONObject(out.toString("UTF-8")).optString("bundle_version","");
+            SimpleDateFormat format=new SimpleDateFormat("yyyyMMdd-HHmmss",Locale.ROOT);
+            format.setTimeZone(TimeZone.getTimeZone("UTC"));Date parsed=format.parse(version);
+            return parsed==null?0L:parsed.getTime();
+        }catch(Exception ignored){return 0L;}
     }
 
     void start(Location location) {
@@ -174,14 +209,17 @@ final class RadarRepository {
             return null;
         }
         int alertDistance = alertDistanceMeters(speedKmh);
-        Record record = database.nearest(location, alertDistance);
-        if (record == null) {
+        ArrayList<Record> candidates = database.nearby(location, alertDistance);
+        if (candidates.isEmpty()) {
             clearTracking();
             return null;
         }
         double tolerance = Math.max(14d, location.hasAccuracy() ? location.getAccuracy() : 14d);
+        Record record = selectApproachingCandidate(location, candidates, speedKmh, tolerance);
         DirectionEvidence evidence = directionEvidence(location, record, speedKmh, tolerance);
-        rememberCandidate(location, record);
+        // Remember all local candidates. On a parallel road the nearest camera may be behind us;
+        // the next fix must still be able to confirm another, valid camera ahead.
+        rememberCandidates(location, candidates);
         boolean fixedCameraPassage = isFixedCameraPassage(record, tolerance);
         if (evidence.opening) {
             if (fixedCameraPassage) {
@@ -242,6 +280,23 @@ final class RadarRepository {
                     + " · punto DGT conservado");
         }
         return alertFor(record, approaching, false);
+    }
+
+    /** Prefer a candidate corroborated by heading/trajectory over a closer point on a parallel
+     * road or behind the vehicle. The nearest candidate remains the observation anchor while
+     * there is not yet enough movement evidence to choose safely. */
+    private Record selectApproachingCandidate(Location location, ArrayList<Record> candidates,
+                                               Double speedKmh, double tolerance) {
+        Record selected = candidates.get(0);
+        for (Record candidate : candidates) {
+            DirectionEvidence evidence = directionEvidence(location, candidate, speedKmh, tolerance);
+            boolean passage = isFixedCameraPassage(candidate, tolerance);
+            if (evidence.opening || (!evidence.confirmed && !passage)) continue;
+            if (candidate.id.equals(trackedId)) return candidate;
+            selected = candidate;
+            break;
+        }
+        return selected;
     }
 
     void refreshFromInternet(String province, UpdateCallback callback) {
@@ -400,6 +455,12 @@ final class RadarRepository {
                 + "lectura=en local durante la marcha; feed nacional; actualización máx. una vez/24 h\n";
     }
 
+    String inventorySummary() {
+        return "Radares: DGT " + database.countBySource(SOURCE_DGT)
+                + " · local " + database.countBySource(SOURCE_LUFOP)
+                + " · OSM " + database.countBySource(SOURCE_OSM);
+    }
+
     static String[] supportedProvinceLabels() {
         return new String[]{"España · inventario nacional", "Alicante · provincia completa", "Murcia · provincia completa",
                 "Valencia · provincia completa", "Albacete · provincia completa"};
@@ -548,10 +609,7 @@ final class RadarRepository {
         trackedDistance = Double.NaN;
         suppressedId = null;
         suppressedDistance = Double.NaN;
-        candidateId = null;
-        candidateDistance = Double.NaN;
-        candidateLocation = null;
-        candidateAt = 0L;
+        candidateObservations.clear();
         fixedCameraPassageId = null;
     }
 
@@ -614,11 +672,12 @@ final class RadarRepository {
         boolean closing = false;
         boolean opening = false;
         long now = System.currentTimeMillis();
-        if (moving && record.id.equals(candidateId) && Double.isFinite(candidateDistance)
-                && candidateLocation != null && now - candidateAt <= TRAJECTORY_WINDOW_MS) {
-            float travelled = candidateLocation.distanceTo(location);
+        CandidateObservation previous = candidateObservations.get(record.id);
+        if (moving && previous != null && Double.isFinite(previous.distance)
+                && previous.location != null && now - previous.at <= TRAJECTORY_WINDOW_MS) {
+            float travelled = previous.location.distanceTo(location);
             if (travelled >= 5f) {
-                double change = record.distanceMeters - candidateDistance;
+                double change = record.distanceMeters - previous.distance;
                 double threshold = Math.max(7d, tolerance * .45d);
                 closing = change <= -threshold;
                 opening = change >= threshold;
@@ -635,11 +694,45 @@ final class RadarRepository {
         return new DirectionEvidence(heading || closing, opening, detail);
     }
 
-    private void rememberCandidate(Location location, Record record) {
-        candidateId = record.id;
-        candidateDistance = record.distanceMeters;
-        candidateLocation = new Location(location);
-        candidateAt = System.currentTimeMillis();
+    private void rememberCandidates(Location location, ArrayList<Record> candidates) {
+        long now = System.currentTimeMillis();
+        Iterator<Map.Entry<String, CandidateObservation>> iterator =
+                candidateObservations.entrySet().iterator();
+        while (iterator.hasNext()) {
+            CandidateObservation observation = iterator.next().getValue();
+            if (now - observation.at > TRAJECTORY_WINDOW_MS) iterator.remove();
+        }
+        for (Record candidate : candidates) {
+            if (candidate == null || candidate.id == null || candidate.id.isEmpty()) continue;
+            candidateObservations.put(candidate.id,
+                    new CandidateObservation(candidate.distanceMeters, location, now));
+        }
+        // `nearby` is bounded, so this is normally much smaller than the cap. It protects the
+        // repository if a malformed local import happens to return a dense cluster of points.
+        while (candidateObservations.size() > 32) {
+            String oldest = null;
+            long oldestAt = Long.MAX_VALUE;
+            for (Map.Entry<String, CandidateObservation> entry : candidateObservations.entrySet()) {
+                if (entry.getValue().at < oldestAt) {
+                    oldestAt = entry.getValue().at;
+                    oldest = entry.getKey();
+                }
+            }
+            if (oldest == null) break;
+            candidateObservations.remove(oldest);
+        }
+    }
+
+    private static final class CandidateObservation {
+        final double distance;
+        final Location location;
+        final long at;
+
+        CandidateObservation(double distance, Location location, long at) {
+            this.distance = distance;
+            this.location = location == null ? null : new Location(location);
+            this.at = at;
+        }
     }
 
     private static Location nearestPoint(Location location, String points) {
@@ -970,14 +1063,14 @@ final class RadarRepository {
             return imported;
         }
 
-        synchronized Record nearest(Location location, int maxDistanceMeters) {
+        synchronized ArrayList<Record> nearby(Location location, int maxDistanceMeters) {
             double latitude = location.getLatitude(), longitude = location.getLongitude();
             double latDelta = maxDistanceMeters / 111_320d;
             double lonDelta = maxDistanceMeters / Math.max(1d, 111_320d * Math.cos(Math.toRadians(latitude)));
             String selection = "min_lat <= ? AND max_lat >= ? AND min_lon <= ? AND max_lon >= ?";
             String[] args = {String.valueOf(latitude + latDelta), String.valueOf(latitude - latDelta),
                     String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
-            Record result = null;
+            ArrayList<Record> result = new ArrayList<>();
             try (Cursor cursor = getReadableDatabase().query("radars",
                     new String[]{"id", "type", "road", "direction", "province", "points", "source", "updated_at", "osm_metadata"},
                     selection, args, null, null, null)) {
@@ -996,25 +1089,19 @@ final class RadarRepository {
                         // by the existing DGT/static layer. Never copy metadata between points.
                         if (hasLegacyNear(points, 120)) continue;
                     }
-                    // DGT remains authoritative when both sources describe the same installation.
-                    // Do not require the DGT point to be the closer coordinate: the official
-                    // reference and a supplemental POI can legitimately differ by about the
-                    // ±100 m fixed-camera positioning margin. Outside this small overlap,
-                    // regular nearest-point selection still applies.
-                    boolean dgtOverridesSupplemental = result != null
-                            && SOURCE_DGT.equals(candidate.source)
-                            && !SOURCE_DGT.equals(result.source)
-                            && Math.abs(distance - result.distanceMeters) <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS;
-                    boolean supplementalCannotOverrideDgt = result != null
-                            && !SOURCE_DGT.equals(candidate.source)
-                            && SOURCE_DGT.equals(result.source)
-                            && Math.abs(distance - result.distanceMeters) <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS;
-                    if (result == null || dgtOverridesSupplemental
-                            || (!supplementalCannotOverrideDgt && distance < result.distanceMeters)) {
-                        result = candidate;
-                    }
+                    result.add(candidate);
                 }
             }
+            java.util.Collections.sort(result, (left, right) -> {
+                int distance = Double.compare(left.distanceMeters, right.distanceMeters);
+                if (Math.abs(left.distanceMeters - right.distanceMeters)
+                        <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS) {
+                    boolean leftDgt = SOURCE_DGT.equals(left.source);
+                    boolean rightDgt = SOURCE_DGT.equals(right.source);
+                    if (leftDgt != rightDgt) return leftDgt ? -1 : 1;
+                }
+                return distance;
+            });
             return result;
         }
 
@@ -1031,16 +1118,21 @@ final class RadarRepository {
             String[] args = {String.valueOf(latitude + latDelta), String.valueOf(latitude - latDelta),
                     String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
             try (Cursor cursor = getReadableDatabase().query("radars",
-                    new String[]{"id", "type", "road", "points", "source"}, selection, args,
+                    new String[]{"id", "type", "road", "direction", "points", "source",
+                            "osm_metadata"}, selection, args,
                     null, null, "CASE source WHEN 'DGT' THEN 0 ELSE 1 END, updated_at DESC",
                     String.valueOf(Math.max(1, maxRadars * 3)))) {
                 while (cursor.moveToNext() && result.size() < maxRadars) {
-                    double[] point = nearestPoint(latitude, longitude, cursor.getString(3));
+                    String points = cursor.getString(4);
+                    double[] point = nearestPoint(latitude, longitude, points);
                     if (point == null) continue;
                     float[] distance = new float[1];
                     Location.distanceBetween(latitude, longitude, point[0], point[1], distance);
                     if (distance[0] > radiusMeters) continue;
-                    String source = cursor.getString(4);
+                    String source = cursor.getString(5);
+                    Float directionBearing = mapDirectionBearing(cursor.getString(3),
+                            cursor.getString(6));
+                    Integer cameraLimit = mapCameraLimit(cursor.getString(6));
                     boolean duplicate = false;
                     for (int i = 0; i < result.size(); i++) {
                         OfflineRoadMapView.Radar existing = result.get(i);
@@ -1052,7 +1144,7 @@ final class RadarRepository {
                             if (SOURCE_DGT.equals(source) && !SOURCE_DGT.equals(existing.source)) {
                                 result.set(i, new OfflineRoadMapView.Radar(cursor.getString(0),
                                         cursor.getString(1), cursor.getString(2), source,
-                                        point[0], point[1], null));
+                                        point[0], point[1], cameraLimit, directionBearing));
                             }
                             break;
                         }
@@ -1060,11 +1152,71 @@ final class RadarRepository {
                     if (!duplicate) {
                         result.add(new OfflineRoadMapView.Radar(cursor.getString(0),
                                 cursor.getString(1), cursor.getString(2), source,
-                                point[0], point[1], null));
+                                point[0], point[1], cameraLimit, directionBearing));
                     }
                 }
             }
             return result;
+        }
+
+        private static Integer mapCameraLimit(String metadata) {
+            if (metadata == null || metadata.isEmpty()) return null;
+            try {
+                org.json.JSONArray corridors = new org.json.JSONObject(metadata)
+                        .optJSONArray("corridors");
+                if (corridors == null) return null;
+                Integer found = null;
+                for (int i = 0; i < corridors.length(); i++) {
+                    int value = corridors.getJSONObject(i).optInt("limit", 0);
+                    if (value <= 0) continue;
+                    if (found != null && found != value) return null;
+                    found = value;
+                }
+                return found;
+            } catch (Exception ignored) { return null; }
+        }
+
+        /** Uses only explicit OSM from/to corridors or an unambiguous numeric/cardinal tag. */
+        private static Float mapDirectionBearing(String direction, String metadata) {
+            if (metadata != null && !metadata.isEmpty()) {
+                try {
+                    org.json.JSONArray corridors = new org.json.JSONObject(metadata)
+                            .optJSONArray("corridors");
+                    Float found = null;
+                    if (corridors != null) for (int i = 0; i < corridors.length(); i++) {
+                        org.json.JSONObject corridor = corridors.getJSONObject(i);
+                        float[] result = new float[2];
+                        Location.distanceBetween(corridor.getDouble("fromLat"),
+                                corridor.getDouble("fromLon"), corridor.getDouble("toLat"),
+                                corridor.getDouble("toLon"), result);
+                        float bearing = normalizeBearing(result[1]);
+                        if (found != null && angularDifference(found, bearing) > 15f) return null;
+                        found = bearing;
+                    }
+                    if (found != null) return found;
+                } catch (Exception ignored) { }
+            }
+            String normalized = direction == null ? "" : direction.trim().toUpperCase(Locale.ROOT);
+            try {
+                float numeric = Float.parseFloat(normalized.replace("°", "").trim());
+                return numeric >= 0f && numeric < 360f ? numeric : null;
+            } catch (NumberFormatException ignored) { }
+            switch (normalized) {
+                case "N": return 0f; case "NE": return 45f; case "E": return 90f;
+                case "SE": return 135f; case "S": return 180f; case "SW": case "SO": return 225f;
+                case "W": case "O": return 270f; case "NW": case "NO": return 315f;
+                default: return null;
+            }
+        }
+
+        private static float normalizeBearing(float value) {
+            float normalized = value % 360f;
+            return normalized < 0f ? normalized + 360f : normalized;
+        }
+
+        private static float angularDifference(float first, float second) {
+            float difference = Math.abs(normalizeBearing(first) - normalizeBearing(second));
+            return difference > 180f ? 360f - difference : difference;
         }
 
         private static double[] nearestPoint(double latitude, double longitude, String points) {
@@ -1105,6 +1257,14 @@ final class RadarRepository {
             try (Cursor cursor = getReadableDatabase().rawQuery(
                     "SELECT COUNT(*) FROM radars WHERE source = ?", new String[]{source})) {
                 return cursor.moveToFirst() ? cursor.getInt(0) : 0;
+            }
+        }
+
+        synchronized long latestBySourceProvince(String source,String province){
+            try(Cursor cursor=getReadableDatabase().rawQuery(
+                    "SELECT MAX(updated_at) FROM radars WHERE source = ? AND province = ?",
+                    new String[]{source,province})){
+                return cursor.moveToFirst()&&!cursor.isNull(0)?cursor.getLong(0):0L;
             }
         }
 

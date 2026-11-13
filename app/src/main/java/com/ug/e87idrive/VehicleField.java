@@ -17,6 +17,7 @@ public enum VehicleField {
     RPM("rpm", "RPM", false),
     ENGINE_TEMPERATURE("temp_engine", "Temperatura motor", false),
     RANGE("range", "Autonomía", false),
+    ODOMETER("odometer", "Kilómetros totales", false),
     CONSUMPTION("consumption", "Consumo medio", false);
 
     private final String key;

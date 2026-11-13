@@ -117,6 +117,18 @@ final class RadarSpeechAnnouncer {
         pendingReminder = false;
     }
 
+    /** Audible check exposed from the maintenance screen; it never creates a radar alert. */
+    void playTest() {
+        int resource = R.raw.radar_fijo_50;
+        AppSessionLog.event("RADARES DGT", "Prueba manual de locución solicitada");
+        if (loadedResources.contains(resource)) {
+            play(resource, false);
+        } else {
+            pendingResource = resource;
+            pendingReminder = false;
+        }
+    }
+
     void stop() {
         pendingResource = 0;
         pendingReminder = false;

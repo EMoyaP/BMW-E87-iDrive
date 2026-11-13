@@ -34,7 +34,7 @@ import java.util.Locale;
 final class InviveRepository {
     private static final String TAG = "INVIVE DGT";
     private static final String ENDPOINT =
-            "https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml";
+            "https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml";
     private static final long UPDATE_INTERVAL_MS = 24L * 60L * 60L * 1_000L;
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
     private static final int BUNDLED_SEED_VERSION = 2;
@@ -222,6 +222,10 @@ final class InviveRepository {
                 + "última actualización=" + lastResult + "\n"
                 + "fuente=" + ENDPOINT + "\n"
                 + "uso=aviso de zona de vigilancia; no radar y no límite de velocidad\n";
+    }
+
+    String inventorySummary() {
+        return "Zonas INVIVE: " + database.count();
     }
 
     private void autoRefreshIfNeeded(String province) {

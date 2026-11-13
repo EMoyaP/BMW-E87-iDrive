@@ -24,6 +24,7 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 
 - **GPS speedometer.** GPS is the validated speed source on the physical radio. The E87-style 0–260 km/h dial progressively fills its outer ring. A verified local road limit is marked in orange and the speed value/progress ring turn orange only once it is exceeded; without a verified local limit, both remain green.
 - **Local road limit.** The traffic sign is looked up in a local SQLite database, never fetched while driving. A red circle is only an explicit OSM `maxspeed`; a blue square is conservative class-based guidance after a local GPS-area update, never a legal limit or orange speedometer trigger. Physical signs and the vehicle's instruments remain the legal reference.
+- **Head-unit-safe glows.** The red/blue sign aura and the vehicle's white separation outline use explicit filled layers and bitmap silhouettes. They do not depend on blurred shadows that some Android head-unit GPUs silently omit.
 - **Dynamic trip computer.** Range, average consumption, exterior temperature, climate values and other data are shown only when the radio provides a plausible reading. Unavailable data is hidden.
 - **Fixed and section camera warning.** The APK carries the national DGT inventory locally plus a Spanish Lufop/RadarDroid complementary seed of `TYPE=1` fixed cameras. DGT remains authoritative whenever both sources match. For a fixed camera with confirmed trajectory, the card and first speech warning start at **600 m**; one reminder follows at **300 m**. After confirmed passage, the card keeps a 100 m margin. The displayed distance always stays tied to the original coordinate; no camera is artificially shifted. Mobile controls are intentionally excluded. Speech requests Android transient `MAY_DUCK` audio focus without sending OEM commands. The circular value is the verified **road** limit from the local map, not an invented radar limit.
 - **INVIVE watch zones.** A dedicated `SPEED WATCH ZONE` card appears when approaching or driving through an official intensified-enforcement section. Orange means distance to the entry and red means distance to the exit. It is never rendered as a camera, never triggers fixed-camera speech and never supplies a legal speed limit. When a camera and INVIVE overlap, the **camera card always takes priority** and the INVIVE card remains hidden until the camera no longer applies.
@@ -33,7 +34,9 @@ The dashboard targets 1280×720 / 16:9 automotive displays. It has a central veh
 ![Inside an INVIVE watch zone: red card and remaining distance to its exit](docs/screenshots/bmw-e87-ui-v1.25.2-invive-inside.png)
 
 ![Fixed-camera reminder with 293 m remaining distance](docs/screenshots/bmw-e87-ui-v1.25.2-radar-300m.png)
-- **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app.
+- **Fuel stations.** The cheapest and nearest station are calculated against the radio GPS position for the selected fuel. Press a result to navigate using a compatible installed maps app. In driving mode, cached official stations are also drawn on the map and the cheapest one inside the configured radius is highlighted in green.
+- **Optional connected data.** DGT DATEX II and OSM remain the default sources. A user-provided TomTom Freemium key can complement incidents, colour the current road segment by traffic flow, verify a `Maximum` speed through several recent Snap to Roads fixes and provide reverse-geocoding fallback. DGT keeps priority, `Recommended` speeds are ignored and conflicts are logged. The key stays in private preferences and is never bundled or logged. Shared monthly counters stop at 80% of the documented free quotas; without Internet or allowance the app falls back to DGT/OSM.
+- **Where I am.** Below the trip-computer values, the driving view shows `Locality (Province) · street/road · GPS latitude, longitude`. Road and province come from the local map; Android's standard reverse geocoder adds the locality when available. Coordinates use WGS84 decimal degrees and pressing the line opens the current position through a standard `geo:` intent supported by Google Maps and other installed map apps.
 - **OEM app cards.** Radio, Android Auto, phone and app cards open their assigned OEM applications. Metadata is displayed only when Android or an OEM service actually publishes it.
 
 ## Safety boundary
@@ -76,7 +79,9 @@ Aftermarket head units do not share a universal CAN protocol. A package or class
   ten-minute automatic refresh policy. Whenever Android validates Internet access, roads and OSM cameras for the detected province can also refresh automatically; a successful provincial download is not repeated within 24 hours and the prior cache survives failure.
 - **Update all** opens a sequential modal with one progress row per source and a final local
   consolidation step. OSM Alicante, fuel prices, DGT cameras, DGT limits and INVIVE can also be
-  updated individually. Each row shows the date and time of its latest successful download.
+  updated individually. Each row shows the date and time of its latest successful download. If
+  Android kills the process, the pending operation is retained and restarted after the app is
+  opened again with Internet access.
 
 ### Tools, diagnostics and updates
 
@@ -164,7 +169,7 @@ These details describe one tested radio, not a guarantee that a similar-looking 
 | `RadarRepository` | Updatable local DGT inventory and static complementary seed; DGT priority |
 | `InviveRepository` | National DGT INVIVE watch-zone cache, separate from cameras and limits |
 | `FuelStationProvider` | Official fuel prices, local cache and distance selection |
-| `JancarCarProvider` | Verified read-only getters from exported OEM packages |
+| `JancarCarProvider` | Verified read-only getters from exported OEM packages, including passive total-distance probing through `getTrip(0,0)` |
 | `MediaSessionProvider` | Standard media metadata and actions when exposed |
 | `BluetoothDeviceProvider` / `JancarBluetoothProvider` | Public and verified passive Bluetooth state |
 | `DiagnosticEngine` / `UsbDiagnosticRecorder` | Passive inspection, logs and controlled USB export |
@@ -175,8 +180,8 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 - Fuel prices: official Spanish [Fuel Prices service](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/help).
 - Speed limits: OpenStreetMap `maxspeed` data through public Overpass services; see [NOTICE.md](NOTICE.md) for attribution and terms.
-- Fixed and section cameras: official [DGT DATEX II publication](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), locally cached. Mobile controls are not part of the feature.
-- Official speed limits: the [DGT weekly TN-ITS speed-limit feed](https://infocar.dgt.es/tnits/limitesVelocidad.xml). The APK installs the national snapshot available at build time and merges later changes into SQLite without discarding history.
+- Fixed and section cameras: official [DGT DATEX II publication](https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), locally cached. Mobile controls are not part of the feature.
+- Official speed limits: the [DGT weekly TN-ITS speed-limit feed](https://nap.dgt.es/tnits/limitesVelocidad.xml). The APK installs the national snapshot available at build time and merges later changes into SQLite without discarding history.
 - Watch zones: the [DGT/NAP INVIVE dataset](https://nap.dgt.es/en/dataset/tramos-invive), stored as watch zones and never as fixed cameras.
 - Vehicle coordinates are not sent to the fuel-price service. Filtering and distance calculations run on the head unit. A map app receives the destination coordinate only after the user presses a station.
 - The app uses only an IP network Android exposes: Wi-Fi, Ethernet or Bluetooth PAN if the radio firmware truly publishes it.
@@ -185,7 +190,7 @@ The project is written in Java with Android framework APIs. It has no runtime th
 
 Current version: **1.25.2**.
 
-The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, INVIVE watch zones, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.25.2 keeps official OSM, fuel, DGT-camera, DGT-limit and INVIVE updates, while converting the RadarDroid `TYPE=1` complement into a static seed of 1,297 fixed cameras with no accounts, tokens or third-party downloads. With a confirmed trajectory, the camera card and first warning start at 600 m, there is one reminder at 300 m, and a camera takes visual priority over INVIVE. DGT data wins only after road, geometry and direction matching; OSM follows, and the blue class-based sign remains the final visual fallback. The emulator route QA validates the GPS replay, the 581/293 m camera panels and both INVIVE phases; CAN, Android Auto, Bluetooth PAN and the physical radio's audio output remain hardware-dependent validations.
+The APK has been installed and exercised as a normal application on the reference radio. GPS speed, fuel stations, local map limits, local DGT fixed/section-camera matching, INVIVE watch zones, static OEM shortcuts, USB diagnostics and selected trip-computer values work within their verified boundary. Version 1.25.2 keeps official OSM, fuel, DGT-camera, DGT-limit and INVIVE updates, while converting the RadarDroid `TYPE=1` complement into a static seed of 1,297 fixed cameras with no accounts, tokens or third-party downloads. With a confirmed trajectory, the camera card and first warning start at 600 m, there is one reminder at 300 m, and a camera takes visual priority over INVIVE. DGT data wins only after road, geometry and direction matching; OSM follows, and the blue class-based sign remains the final visual fallback. The emulator route QA validates the GPS replay, the 581/293 m camera panels and both INVIVE phases; CAN, Android Auto, Bluetooth PAN and the physical radio's audio output remain hardware-dependent validations. Android's configured geocoder may receive the current coordinate to complete the optional locality shown by `WHERE I AM`; road/province fallback remains local when that service is unavailable.
 
 Hardware-dependent items that remain deliberately unclaimed as universal:
 

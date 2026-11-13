@@ -21,7 +21,12 @@ import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStreamReader;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -30,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
 /**
@@ -48,6 +54,9 @@ final class SpeedLimitRepository {
      * Alicante classes, unlike a maxspeed-only provincial Overpass request. */
     private static final String ALICANTE_ROADS_SEED_URL = "https://raw.githubusercontent.com/EMoyaP/"
             + "BMW-E87-iDrive/main/app/src/main/assets/e87_speed_limits_alicante.tsv.gz";
+    private static final String ROADS_MANIFEST_URL = "https://raw.githubusercontent.com/EMoyaP/"
+            + "BMW-E87-iDrive/main/app/src/main/assets/e87_speed_limits_manifest.tsv";
+    private static final String ROADS_MANIFEST_ASSET = "e87_speed_limits_manifest.tsv";
     private static final int QUERY_RADIUS_METERS = 5_000;
     /** A broad nearest-road match can pick a parallel carriageway. Prefer no limit over an
      * ambiguous one; this app is an aid, never a legal/realtime traffic-sign source. */
@@ -76,8 +85,8 @@ final class SpeedLimitRepository {
     private static final float MAX_ACCEPTED_GPS_ACCURACY_METERS = 45f;
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
-    // v9 transactionally refreshes the four packaged provinces without deleting the SQLite file.
-    private static final int BUNDLED_SEED_VERSION = 9;
+    // v10 adds the fully validated 13/11/2026 five-province bundle, including Almería.
+    private static final int BUNDLED_SEED_VERSION = 10;
     private static final long RECENT_EXPLICIT_LIMIT_MAX_AGE_MS = 8L * 60L * 1_000L;
     private static final float RECENT_EXPLICIT_LIMIT_MAX_DISTANCE_METERS = 6_000f;
     /** The GPS listener may deliver up to two fixes per second. Local map work is throttled by
@@ -91,11 +100,15 @@ final class SpeedLimitRepository {
     private static final long MAX_STALE_MS = 180L * 24L * 60L * 60L * 1_000L;
     private static final int PROVINCE_QUERY_TIMEOUT_SECONDS = 90;
     private static final int MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+    /** A provincial snapshot with fewer roads is almost certainly an interrupted Overpass job. */
+    private static final int MIN_PROVINCIAL_IMPORT_RECORDS = 100;
+    private static final double MIN_REPLACEMENT_FRACTION = .20d;
     private static final Province[] SUPPORTED_PROVINCES = {
             new Province("ALICANTE", "Alicante", "e87_speed_limits_alicante.tsv.gz", 349012L),
             new Province("MURCIA", "Murcia", "e87_speed_limits_murcia.tsv.gz", 349047L),
             new Province("VALENCIA", "Valencia", "e87_speed_limits_valencia.tsv.gz", 349000L),
-            new Province("ALBACETE", "Albacete", "e87_speed_limits_albacete.tsv.gz", 348989L)
+            new Province("ALBACETE", "Albacete", "e87_speed_limits_albacete.tsv.gz", 348989L),
+            new Province("ALMERIA", "Almería", "e87_speed_limits_almeria.tsv.gz", 348997L)
     };
 
     private final Context context;
@@ -136,6 +149,7 @@ final class SpeedLimitRepository {
     private volatile String lastLoggedLookup = "";
     private volatile boolean active;
     private volatile boolean updateRunning;
+    private volatile boolean seedImportRunning;
     private boolean networkCallbackRegistered;
 
     private final ConnectivityManager.NetworkCallback networkCallback =
@@ -192,7 +206,7 @@ final class SpeedLimitRepository {
     }
 
     static String[] supportedProvinceCodes() {
-        return new String[]{"AUTO", "ALICANTE", "MURCIA", "VALENCIA", "ALBACETE"};
+        return new String[]{"AUTO", "ALICANTE", "MURCIA", "VALENCIA", "ALBACETE", "ALMERIA"};
     }
 
     static String provinceLabel(String code) {
@@ -205,6 +219,9 @@ final class SpeedLimitRepository {
 
     Match lookup(Location location) {
         if (location == null) return null;
+        // A provincial seed replacement owns SQLite in one long transaction. Never make the UI
+        // wait for that writer; the next GPS fix will query the completed database.
+        if (seedImportRunning) return cachedMatch;
         if (location.hasAccuracy() && location.getAccuracy() > MAX_ACCEPTED_GPS_ACCURACY_METERS) {
             return null;
         }
@@ -232,7 +249,7 @@ final class SpeedLimitRepository {
         Match raw = database.nearest(location.getLatitude(), location.getLongitude(), matchRadius,
                 bearing, null);
         Match result = stabilizeTrajectory(raw, location, matchRadius, bearing, speedKmh);
-        result = applyVerifiedAlicanteZones(result, bearing);
+        result = applyVerifiedAlicanteZonesFromDatabase(result, bearing);
         result = retainRecentExplicitRoadLimit(result, location, bearing, speedKmh, now);
         result = applyContextualAdvisory(result);
         cachedLat = location.getLatitude();
@@ -253,6 +270,7 @@ final class SpeedLimitRepository {
      */
     List<OfflineRoadMapView.Road> nearbyMapRoads(Location location) {
         if (location == null) return new ArrayList<>();
+        if (seedImportRunning) return new ArrayList<>();
         return database.mapRoads(location.getLatitude(), location.getLongitude(), 1_150, 520);
     }
 
@@ -322,6 +340,26 @@ final class SpeedLimitRepository {
             pendingOsmIdObservations = 0;
             return speedKmh < 3d ? previous : null;
         }
+        // An explicit maxspeed is legally useful only after the moving vehicle has been tied to
+        // that way twice. This prevents the first fix at a junction from painting the limit of a
+        // parallel or joining road. Once a way is already confirmed, its explicit value changes
+        // immediately when the same way publishes a new directional segment.
+        if (raw.exact && previous == null) {
+            if (speedKmh < 3d) {
+                pendingOsmId = null;
+                pendingOsmIdObservations = 0;
+                return null;
+            }
+            if (raw.osmId.equals(pendingOsmId)) pendingOsmIdObservations++;
+            else {
+                pendingOsmId = raw.osmId;
+                pendingOsmIdObservations = 1;
+            }
+            if (pendingOsmIdObservations < 2) return null;
+            pendingOsmId = null;
+            pendingOsmIdObservations = 0;
+            return raw;
+        }
         if (previous == null || raw.osmId == null || raw.osmId.equals(previous.osmId)) {
             pendingOsmId = null;
             pendingOsmIdObservations = 0;
@@ -336,7 +374,7 @@ final class SpeedLimitRepository {
         double previousScore = mapMatchScore(previous.distanceMeters, previous.exact,
                 previous.headingDifferenceDegrees, true);
         boolean clearlyBetter = rawScore + TRAJECTORY_SWITCH_ADVANTAGE_METERS < previousScore;
-        if (clearlyBetter) {
+        if (clearlyBetter && !raw.exact) {
             pendingOsmId = null;
             pendingOsmIdObservations = 0;
             return raw;
@@ -382,6 +420,17 @@ final class SpeedLimitRepository {
                 && match.alongMeters <= 775d) {
             verified = 60;
         }
+        return verified <= 0 ? match : match.withVerifiedLimit(verified);
+    }
+
+    private Match applyVerifiedAlicanteZonesFromDatabase(Match match, Float vehicleBearing) {
+        if (match == null || vehicleBearing == null || match.osmId == null
+                || Double.isNaN(match.roadBearingDegrees) || Double.isNaN(match.alongMeters)) {
+            return match;
+        }
+        boolean forward = Database.followsGeometryDirection(vehicleBearing,
+                match.roadBearingDegrees);
+        int verified = database.verifiedOverride(match.osmId, forward, match.alongMeters);
         return verified <= 0 ? match : match.withVerifiedLimit(verified);
     }
 
@@ -601,6 +650,24 @@ final class SpeedLimitRepository {
         return newestProvince == null ? null : new UpdateStamp(newestProvince, newest);
     }
 
+    /** Compact inventory for the maintenance panel: records and last successful refresh date. */
+    String inventorySummary() {
+        if (seedImportRunning) return "Vías locales · preparando base sin bloquear la pantalla";
+        StringBuilder result = new StringBuilder("Vías locales");
+        for (Province province : SUPPORTED_PROVINCES) {
+            result.append(" · ").append(province.label).append(":")
+                    .append(database.countProvince(province.code));
+            long updated = lastSuccessfulUpdate(province.code);
+            if (updated > 0L) result.append("/").append(shortInventoryDate(updated));
+        }
+        return result.toString();
+    }
+
+    private static String shortInventoryDate(long timestamp) {
+        return new java.text.SimpleDateFormat("dd/MM", Locale.ROOT)
+                .format(new java.util.Date(timestamp));
+    }
+
     String automaticProvince(Location location) {
         if (location != null) {
             Match match = lookup(location);
@@ -624,7 +691,7 @@ final class SpeedLimitRepository {
                 + "actualización automática=Internet Android · máximo una vez por provincia/24 h\n"
                 + "radio de descarga=" + QUERY_RADIUS_METERS + " m · radio de lectura="
                 + MIN_MATCH_RADIUS_METERS + "–" + MAX_MATCH_RADIUS_METERS + " m según precisión GPS\n"
-                + "semilla provincial=Alicante, Murcia, Valencia, Albacete\n"
+                + "semilla provincial=Alicante, Murcia, Valencia, Albacete, Almería\n"
                 + "Alicante=mapa completo local · maxspeed + clasificación de vía\n"
                 + "actualización Alicante=instantánea OSM compacta publicada · importación en flujo\n"
                 + "fuente=OpenStreetMap · límite rojo solo con maxspeed; recomendación azul por clase DGT\n";
@@ -671,7 +738,67 @@ final class SpeedLimitRepository {
         if (lat >= 38.55 && lat <= 40.92 && lon >= -1.92 && lon <= 0.02) return "VALENCIA";
         if (lat >= 37.35 && lat <= 38.80 && lon >= -2.40 && lon <= -0.62) return "MURCIA";
         if (lat >= 37.80 && lat <= 38.90 && lon >= -1.62 && lon <= 0.40) return "ALICANTE";
+        if (lat >= 36.62 && lat <= 37.95 && lon >= -3.20 && lon <= -1.55) return "ALMERIA";
         return null;
+    }
+
+    /**
+     * Activates a fully downloaded Git bundle as one SQLite transaction. The caller has already
+     * verified each compressed file SHA-256; this method validates schema, row counts and every
+     * geometry before replacing any currently active province.
+     */
+    UpdateResult installBundleRoadSeeds(Map<String, File> files, Map<String, Integer> expectedRows,
+                                        long generatedAt) {
+        if (files == null || files.size() != SUPPORTED_PROVINCES.length) {
+            return new UpdateResult(false, "El lote Git no contiene las cinco provincias");
+        }
+        synchronized (databaseLock) {
+            SQLiteDatabase db = database.getWritableDatabase();
+            int total = 0;
+            db.beginTransaction();
+            try {
+                for (Province province : SUPPORTED_PROVINCES) {
+                    File file = files.get(province.code);
+                    Integer expected = expectedRows == null ? null : expectedRows.get(province.code);
+                    if (file == null || !file.isFile() || expected == null || expected <= 0) {
+                        throw new IOException("Archivo o recuento ausente: " + province.label);
+                    }
+                    try (SeedReader reader = openSeedReader(new FileInputStream(file))) {
+                        String header = reader.readLine();
+                        if (!compatibleSeedHeader(header)) {
+                            throw new IOException("Formato incompatible: " + province.label);
+                        }
+                        db.delete("speed_limits", "province = ?", new String[]{province.code});
+                        SeedImport imported = importSeedReader(db, reader, province,
+                                generatedAt > 0L ? generatedAt : System.currentTimeMillis());
+                        int rows = imported.requireComplete(province.label);
+                        if (rows != expected) {
+                            throw new IOException("Recuento distinto en " + province.label
+                                    + ": " + rows + "/" + expected);
+                        }
+                        total += rows;
+                    }
+                }
+                db.setTransactionSuccessful();
+            } catch (Exception error) {
+                AppSessionLog.event(TAG, "Lote Git rechazado; se conserva la cartografía anterior · "
+                        + error.getMessage());
+                return new UpdateResult(false, "Cartografía no instalada: "
+                        + error.getClass().getSimpleName());
+            } finally {
+                db.endTransaction();
+            }
+            cachedLookupAt = 0L;
+            SharedPreferences.Editor editor = updatePreferences.edit();
+            for (Province province : SUPPORTED_PROVINCES) {
+                editor.putLong(successPreference(province.code),
+                        generatedAt > 0L ? generatedAt : System.currentTimeMillis());
+            }
+            editor.apply();
+            seedStatus = total + " tramos Git instalados";
+            lastResult = seedStatus + " · 5 provincias";
+            return new UpdateResult(true, lastResult);
+        }
     }
 
     private static String buildQuery(Location location, Province province) {
@@ -692,8 +819,10 @@ final class SpeedLimitRepository {
     }
 
     private void seedFromAssetsAsync() {
+        seedImportRunning = true;
         Thread worker = new Thread(() -> {
-            synchronized (databaseLock) {
+            try {
+              synchronized (databaseLock) {
                 boolean needsSeedCheck = updatePreferences.getInt("bundled_seed_version", 0)
                         < BUNDLED_SEED_VERSION;
                 seedStatus = needsSeedCheck ? "Verificando semillas provinciales" : "Verificando base local";
@@ -712,11 +841,20 @@ final class SpeedLimitRepository {
                         db.delete("speed_limits", "province IS NULL OR province = ''", null);
                     }
                     for (Province province : SUPPORTED_PROVINCES) {
+                        // Almería is delivered by the new Git bundle. Older APK assets contain
+                        // four provinces; their transaction must not fail merely because that
+                        // optional fifth packaged file does not yet exist.
+                        if (!assetExists(province.asset)) continue;
                         // Older builds could retain generic records and therefore omit the
                         // packaged provincial base. Do not replace a province already updated
-                        // by the user; only fill one that is absent.
-                        if (replaceOldMapCache || database.countProvince(province.code) == 0) {
-                            if (replaceOldMapCache) {
+                        // by the user; only fill one that is absent. A successful OSM download
+                        // is newer user data even when the APK seed version has increased.
+                        boolean hasUserUpdate = updatePreferences.getLong(
+                                successPreference(province.code), 0L) > 0L;
+                        boolean installProvince = database.countProvince(province.code) == 0
+                                || (replaceOldMapCache && !hasUserUpdate);
+                        if (installProvince) {
+                            if (replaceOldMapCache && !hasUserUpdate) {
                                 db.delete("speed_limits", "province = ?",
                                         new String[]{province.code});
                             }
@@ -736,7 +874,7 @@ final class SpeedLimitRepository {
                     lastResult = "Semillas locales no instaladas; se conserva la base anterior";
                 } else if (imported > 0) {
                     seedStatus = imported + " tramos importados";
-                    lastResult = imported + " tramos iniciales · Alicante/Murcia/Valencia/Albacete";
+                    lastResult = imported + " tramos iniciales · cinco provincias";
                     AppSessionLog.event(TAG, "Semillas locales listas · " + lastResult);
                     cachedLookupAt = 0L;
                 } else {
@@ -745,29 +883,45 @@ final class SpeedLimitRepository {
                 if (seedInstalled) {
                     SharedPreferences.Editor seedEditor = updatePreferences.edit()
                             .putInt("bundled_seed_version", BUNDLED_SEED_VERSION);
-                    if (replaceOldMapCache) {
-                        for (Province province : SUPPORTED_PROVINCES) {
-                            seedEditor.remove(successPreference(province.code));
-                        }
-                    }
+                    // Keep the successful-download markers. They distinguish a user-downloaded
+                    // province from a packaged snapshot on the next APK upgrade.
                     seedEditor.apply();
                 }
                 main.post(SpeedLimitRepository.this::autoRefreshIfNeeded);
+              }
+            } finally {
+                seedImportRunning = false;
             }
         }, "e87-speed-limit-seed");
         worker.setPriority(Thread.MIN_PRIORITY);
         worker.start();
     }
 
+    private boolean assetExists(String name) {
+        String[] candidates = name.endsWith(".gz")
+                ? new String[]{name, name.substring(0, name.length() - 3)}
+                : new String[]{name};
+        for (String candidate : candidates) {
+            try (InputStream ignored = context.getAssets().open(candidate)) {
+                return true;
+            } catch (IOException unavailable) {
+                // AAPT strips .gz from already-compressed assets; try the packaged name.
+            }
+        }
+        return false;
+    }
+
     private int importSeedAsset(SQLiteDatabase db, Province province, long now) throws IOException {
-        try (BufferedReader reader = openSeedReader(province)) {
+        SeedManifest expected = readSeedManifest(context.getAssets().open(ROADS_MANIFEST_ASSET), province.asset);
+        try (SeedReader reader = openSeedReader(province)) {
             String header = reader.readLine();
             if (!compatibleSeedHeader(header)) {
                 throw new IOException("Formato de semilla incompatible: " + province.label);
             }
-            int imported = importSeedReader(db, reader, province, now);
-            if (imported <= 0) throw new IOException("Semilla vacía: " + province.label);
-            return imported;
+            SeedImport imported = importSeedReader(db, reader, province, now);
+            int rows = imported.requireComplete(province.label);
+            reader.verify(expected, province.label, rows);
+            return rows;
         }
     }
 
@@ -782,6 +936,7 @@ final class SpeedLimitRepository {
     private int replaceAlicanteFromPublishedSeed(Network network, Province province) throws IOException {
         HttpURLConnection connection = null;
         try {
+            SeedManifest expected = downloadSeedManifest(network, province.asset);
             URL url = new URL(ALICANTE_ROADS_SEED_URL + "?revision=" + System.currentTimeMillis());
             connection = (HttpURLConnection) network.openConnection(url);
             connection.setConnectTimeout(15_000);
@@ -794,17 +949,18 @@ final class SpeedLimitRepository {
             synchronized (databaseLock) {
                 SQLiteDatabase db = database.getWritableDatabase();
                 db.beginTransaction();
-                try (BufferedReader reader = openSeedReader(connection.getInputStream())) {
+                try (SeedReader reader = openSeedReader(connection.getInputStream())) {
                     String header = reader.readLine();
                     if (!compatibleSeedHeader(header)) {
                         throw new IOException("La semilla publicada no contiene el mapa vial compatible");
                     }
                     db.delete("speed_limits", "province = ?", new String[]{province.code});
-                    int imported = importSeedReader(db, reader, province, System.currentTimeMillis());
-                    if (imported <= 0) throw new IOException("Semilla Alicante vacía");
+                    SeedImport imported = importSeedReader(db, reader, province, System.currentTimeMillis());
+                    int rows = imported.requireComplete(province.label);
+                    reader.verify(expected, province.label, rows);
                     db.setTransactionSuccessful();
                     cachedLookupAt = 0L;
-                    return imported;
+                    return rows;
                 } finally {
                     db.endTransaction();
                 }
@@ -816,12 +972,13 @@ final class SpeedLimitRepository {
 
     /** Imports v1 explicit-maxspeed through v5 named directional rows without loading the
      * compressed map into the Java heap. */
-    private int importSeedReader(SQLiteDatabase db, BufferedReader reader, Province province, long now)
+    private SeedImport importSeedReader(SQLiteDatabase db, SeedReader reader, Province province, long now)
             throws IOException {
-        int imported = 0;
+        SeedImport result = new SeedImport();
         String line;
         while ((line = reader.readLine()) != null) {
             if (line.isEmpty() || line.charAt(0) == '#') continue;
+            result.rows++;
             String[] columns = line.split("\\t", 9);
             boolean v5 = columns.length == 9 && ("EXACT".equals(columns[1])
                     || "ADVISORY".equals(columns[1]));
@@ -842,11 +999,19 @@ final class SpeedLimitRepository {
             String geometry = v5 ? columns[8] : v4 ? columns[7] : v3 ? columns[6] : v2 ? columns[4]
                     : (columns.length > 2 ? columns[2] : "");
             boolean exact = !(v5 || v4 || v3 || v2) || "EXACT".equals(columns[1]);
-            if (limit <= 0 || id.isEmpty() || geometry.isEmpty()) continue;
-            imported += insertRecord(db, id, limit, geometry, now, province.code, exact,
+            if (limit <= 0 || id.isEmpty() || geometry.isEmpty()) {
+                throw new IOException("Fila inválida en semilla " + province.label + " · línea "
+                        + result.rows);
+            }
+            int inserted = insertRecord(db, id, limit, geometry, now, province.code, exact,
                     roadClass, forwardLimit, backwardLimit, roadRef, roadName);
+            if (inserted != 1) {
+                throw new IOException("Geometría inválida en semilla " + province.label + " · línea "
+                        + result.rows);
+            }
+            result.imported += inserted;
         }
-        return imported;
+        return result;
     }
 
     /**
@@ -854,7 +1019,7 @@ final class SpeedLimitRepository {
      * source-tree representation and the packaged representation, and sniff the payload so a
      * future build-tool change cannot silently leave the local database empty.
      */
-    private BufferedReader openSeedReader(Province province) throws IOException {
+    private SeedReader openSeedReader(Province province) throws IOException {
         InputStream raw = null;
         IOException failure = null;
         String[] candidates = province.asset.endsWith(".gz")
@@ -872,7 +1037,7 @@ final class SpeedLimitRepository {
         return openSeedReader(raw);
     }
 
-    private BufferedReader openSeedReader(InputStream raw) throws IOException {
+    private SeedReader openSeedReader(InputStream raw) throws IOException {
         BufferedInputStream input = new BufferedInputStream(raw);
         input.mark(2);
         int first = input.read();
@@ -880,14 +1045,25 @@ final class SpeedLimitRepository {
         input.reset();
         InputStream payload = first == 0x1f && second == 0x8b
                 ? new GZIPInputStream(input) : input;
-        return new BufferedReader(new InputStreamReader(payload, StandardCharsets.UTF_8));
+        try {
+            return new SeedReader(payload);
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("SHA-256 no disponible", error);
+        }
     }
 
-    private int importResponse(JSONObject root, String province, boolean replaceProvince) {
+    private int importResponse(JSONObject root, String province, boolean replaceProvince) throws IOException {
+        int candidates = validateOverpassResponse(root, replaceProvince);
         JSONArray elements = root.optJSONArray("elements");
-        if (elements == null) return 0;
+        if (elements == null) throw new IOException("Overpass sin elementos");
         synchronized (databaseLock) {
             SQLiteDatabase db = database.getWritableDatabase();
+            int existing = replaceProvince ? database.countProvince(province) : 0;
+            if (replaceProvince && existing > 0
+                    && candidates < Math.ceil(existing * MIN_REPLACEMENT_FRACTION)) {
+                throw new IOException("Respuesta Overpass insuficiente: " + candidates
+                        + " vías frente a " + existing + " locales");
+            }
             int imported = 0;
             long now = System.currentTimeMillis();
             db.beginTransaction();
@@ -920,6 +1096,10 @@ final class SpeedLimitRepository {
                             coordinates, now, province, explicitLimit > 0, roadClass,
                             forwardLimit, backwardLimit, roadRef, roadName);
                 }
+                if (imported != candidates) {
+                    throw new IOException("Respuesta Overpass incompleta: " + imported
+                            + " de " + candidates + " vías importables");
+                }
                 db.delete("speed_limits", "province = ? AND updated_at < ?",
                         new String[]{province, String.valueOf(now - MAX_STALE_MS)});
                 db.setTransactionSuccessful();
@@ -929,6 +1109,121 @@ final class SpeedLimitRepository {
             cachedLookupAt = 0L;
             return imported;
         }
+    }
+
+    /** Rejects Overpass timeout/remark payloads before a provincial snapshot can be replaced. */
+    static int validateOverpassResponse(JSONObject root, boolean provincialSnapshot) throws IOException {
+        if (root == null) throw new IOException("Respuesta Overpass vacía");
+        String remark = root.optString("remark", "").trim();
+        if (!remark.isEmpty()) throw new IOException("Overpass incompleto: " + remark);
+        JSONArray elements = root.optJSONArray("elements");
+        if (elements == null) throw new IOException("Overpass sin elementos");
+        int usable = 0;
+        for (int i = 0; i < elements.length(); i++) {
+            JSONObject element = elements.optJSONObject(i);
+            if (element == null) continue;
+            JSONObject tags = element.optJSONObject("tags");
+            String roadClass = tags == null ? "" : tags.optString("highway", "");
+            int explicitLimit = parseLimit(tags == null ? null : tags.optString("maxspeed", ""));
+            JSONArray geometry = element.optJSONArray("geometry");
+            if ((explicitLimit > 0 || advisoryForRoadClass(roadClass) > 0)
+                    && !element.optString("id", "").isEmpty()) {
+                String coordinates = geometryString(geometry);
+                if (geometryBounds(coordinates) == null) {
+                    throw new IOException("Geometría Overpass inválida en "
+                            + element.optString("id", "sin id"));
+                }
+                usable++;
+            }
+        }
+        if (provincialSnapshot && usable < MIN_PROVINCIAL_IMPORT_RECORDS) {
+            throw new IOException("Respuesta Overpass provincial demasiado pequeña: " + usable + " vías");
+        }
+        return usable;
+    }
+
+    private static final class SeedImport {
+        int rows;
+        int imported;
+
+        int requireComplete(String province) throws IOException {
+            if (rows <= 0 || imported != rows) {
+                throw new IOException("Semilla incompleta: " + province + " · filas=" + rows
+                        + " · importadas=" + imported);
+            }
+            return imported;
+        }
+    }
+
+    private static final class SeedReader implements java.io.Closeable {
+        private final MessageDigest digest;
+        private final BufferedReader reader;
+
+        SeedReader(InputStream payload) throws NoSuchAlgorithmException {
+            digest = MessageDigest.getInstance("SHA-256");
+            reader = new BufferedReader(new InputStreamReader(new DigestInputStream(payload, digest),
+                    StandardCharsets.UTF_8));
+        }
+
+        String readLine() throws IOException { return reader.readLine(); }
+
+        void verify(SeedManifest expected, String province, long actualRows) throws IOException {
+            if (expected == null) throw new IOException("Manifiesto ausente: " + province);
+            String actual = hex(digest.digest());
+            if (expected.rows <= 0 || expected.rows != actualRows || !expected.sha256.equals(actual)) {
+                throw new IOException("Huella de semilla no válida: " + province);
+            }
+        }
+
+        @Override public void close() throws IOException { reader.close(); }
+    }
+
+    private static final class SeedManifest {
+        final long rows;
+        final String sha256;
+
+        SeedManifest(long rows, String sha256) {
+            this.rows = rows;
+            this.sha256 = sha256 == null ? "" : sha256.toLowerCase(Locale.ROOT);
+        }
+    }
+
+    private SeedManifest downloadSeedManifest(Network network, String asset) throws IOException {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) network.openConnection(new URL(ROADS_MANIFEST_URL));
+            connection.setConnectTimeout(15_000);
+            connection.setReadTimeout(30_000);
+            connection.setRequestProperty("Accept", "text/plain");
+            int response = connection.getResponseCode();
+            if (response < 200 || response >= 300) throw new IOException("HTTP manifiesto " + response);
+            return readSeedManifest(connection.getInputStream(), asset);
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static SeedManifest readSeedManifest(InputStream input, String asset) throws IOException {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty() || line.charAt(0) == '#') continue;
+                String[] fields = line.split("\\t", -1);
+                if (fields.length != 3 || !asset.equals(fields[0])) continue;
+                try {
+                    long rows = Long.parseLong(fields[1]);
+                    if (!fields[2].matches("[0-9a-fA-F]{64}")) break;
+                    return new SeedManifest(rows, fields[2]);
+                } catch (Exception ignored) { break; }
+            }
+        }
+        throw new IOException("Manifiesto incompatible para " + asset);
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return result.toString();
     }
 
     private static int insertRecord(SQLiteDatabase db, String id, int limit, String geometry,
@@ -981,12 +1276,16 @@ final class SpeedLimitRepository {
     }
 
     private static String geometryString(JSONArray geometry) {
+        if (geometry == null || geometry.length() < 2) return "";
         StringBuilder result = new StringBuilder();
         for (int i = 0; i < geometry.length(); i++) {
             JSONObject point = geometry.optJSONObject(i);
-            if (point == null || !point.has("lat") || !point.has("lon")) continue;
+            if (point == null || !point.has("lat") || !point.has("lon")) return "";
+            double lat = point.optDouble("lat", Double.NaN);
+            double lon = point.optDouble("lon", Double.NaN);
+            if (!validCoordinate(lat, lon)) return "";
             if (result.length() > 0) result.append(';');
-            result.append(String.format(Locale.ROOT, "%.6f,%.6f", point.optDouble("lat"), point.optDouble("lon")));
+            result.append(String.format(Locale.ROOT, "%.6f,%.6f", lat, lon));
         }
         return result.toString();
     }
@@ -1004,14 +1303,20 @@ final class SpeedLimitRepository {
             try {
                 double lat = Double.parseDouble(pair[0]);
                 double lon = Double.parseDouble(pair[1]);
+                if (!validCoordinate(lat, lon)) return null;
                 minLat = Math.min(minLat, lat);
                 maxLat = Math.max(maxLat, lat);
                 minLon = Math.min(minLon, lon);
                 maxLon = Math.max(maxLon, lon);
                 valid++;
-            } catch (Exception ignored) { }
+            } catch (Exception ignored) { return null; }
         }
-        return valid == 0 ? null : new double[]{minLat, maxLat, minLon, maxLon};
+        return valid < 2 ? null : new double[]{minLat, maxLat, minLon, maxLon};
+    }
+
+    private static boolean validCoordinate(double lat, double lon) {
+        return Double.isFinite(lat) && Double.isFinite(lon)
+                && lat >= -90d && lat <= 90d && lon >= -180d && lon <= 180d;
     }
 
     private static int parseLimit(String value) {
@@ -1307,7 +1612,7 @@ final class SpeedLimitRepository {
 
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_speed_limits.db";
-        private static final int VERSION = 7;
+        private static final int VERSION = 9;
 
         Database(Context context) { super(context, NAME, null, VERSION); }
 
@@ -1322,6 +1627,8 @@ final class SpeedLimitRepository {
                     + "min_lon REAL NOT NULL DEFAULT 0, max_lon REAL NOT NULL DEFAULT 0)");
             db.execSQL("CREATE INDEX speed_limits_updated ON speed_limits(updated_at)");
             db.execSQL("CREATE INDEX speed_limits_bounds ON speed_limits(min_lat, max_lat, min_lon, max_lon)");
+            createOverrides(db);
+            seedOverrides(db);
         }
 
         @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
@@ -1357,6 +1664,96 @@ final class SpeedLimitRepository {
             }
             if (oldVersion < 7) {
                 db.execSQL("ALTER TABLE speed_limits ADD COLUMN road_name TEXT NOT NULL DEFAULT ''");
+            }
+            if (oldVersion < 8) {
+                createOverrides(db);
+                seedOverrides(db);
+            }
+            if (oldVersion < 9) {
+                if (oldVersion >= 8) {
+                    db.execSQL("ALTER TABLE speed_limit_overrides ADD COLUMN source TEXT NOT NULL DEFAULT 'VERIFICACIÓN MANUAL'");
+                    db.execSQL("ALTER TABLE speed_limit_overrides ADD COLUMN reviewed_at INTEGER NOT NULL DEFAULT 0");
+                    db.execSQL("ALTER TABLE speed_limit_overrides ADD COLUMN geometry_hash TEXT NOT NULL DEFAULT ''");
+                }
+                seedOverrides(db);
+            }
+        }
+
+        private static void createOverrides(SQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS speed_limit_overrides ("
+                    + "osm_id TEXT NOT NULL, direction TEXT NOT NULL, min_along REAL NOT NULL, "
+                    + "max_along REAL NOT NULL, limit_kmh INTEGER NOT NULL, "
+                    + "source TEXT NOT NULL DEFAULT 'VERIFICACIÓN MANUAL', "
+                    + "reviewed_at INTEGER NOT NULL DEFAULT 0, "
+                    + "geometry_hash TEXT NOT NULL DEFAULT '', "
+                    + "PRIMARY KEY(osm_id, direction, min_along, max_along))");
+            db.execSQL("CREATE INDEX IF NOT EXISTS speed_limit_overrides_lookup "
+                    + "ON speed_limit_overrides(osm_id, direction, min_along, max_along)");
+        }
+
+        private static void seedOverrides(SQLiteDatabase db) {
+            insertOverride(db, "33908151", "B", 0d, 100_000d, 50);
+            insertOverride(db, "33908151", "F", 1_104d, 2_226d, 40);
+            insertOverride(db, "34145696", "F", 0d, 105d, 60);
+            insertOverride(db, "34145696", "F", 105d, 389d, 40);
+            insertOverride(db, "34145696", "F", 926d, 2_683d, 60);
+            insertOverride(db, "34145696", "F", 2_683d, 100_000d, 30);
+            insertOverride(db, "229338846", "B", 0d, 775d, 60);
+        }
+
+        private static void insertOverride(SQLiteDatabase db, String osmId, String direction,
+                                           double minAlong, double maxAlong, int limit) {
+            ContentValues values = new ContentValues();
+            values.put("osm_id", osmId);
+            values.put("direction", direction);
+            values.put("min_along", minAlong);
+            values.put("max_along", maxAlong);
+            values.put("limit_kmh", limit);
+            values.put("source", "RUTA VALIDADA CON SEÑALIZACIÓN");
+            values.put("reviewed_at", 1790467200000L);
+            db.insertWithOnConflict("speed_limit_overrides", null, values,
+                    SQLiteDatabase.CONFLICT_IGNORE);
+        }
+
+        int verifiedOverride(String osmId, boolean forward, double alongMeters) {
+            if (osmId == null || osmId.isEmpty() || !Double.isFinite(alongMeters)) return 0;
+            String direction = forward ? "F" : "B";
+            SQLiteDatabase db = getWritableDatabase();
+            try (Cursor cursor = db.query("speed_limit_overrides",
+                    new String[]{"limit_kmh", "geometry_hash"}, "osm_id = ? AND direction = ? AND min_along <= ? "
+                            + "AND max_along >= ?", new String[]{osmId, direction,
+                            String.valueOf(alongMeters), String.valueOf(alongMeters)}, null, null,
+                    "min_along DESC", "1")) {
+                if (!cursor.moveToFirst()) return 0;
+                int limit = cursor.getInt(0);
+                String expectedHash = cursor.getString(1);
+                String currentHash = geometryHash(db, osmId);
+                if (currentHash.isEmpty()) return 0;
+                if (expectedHash == null || expectedHash.isEmpty()) {
+                    ContentValues values = new ContentValues();
+                    values.put("geometry_hash", currentHash);
+                    db.update("speed_limit_overrides", values, "osm_id = ?", new String[]{osmId});
+                } else if (!expectedHash.equals(currentHash)) {
+                    AppSessionLog.event("LÍMITES", "Corrección local omitida: cambió la geometría OSM · " + osmId);
+                    return 0;
+                }
+                return limit;
+            }
+        }
+
+        private static String geometryHash(SQLiteDatabase db, String osmId) {
+            try (Cursor cursor = db.query("speed_limits", new String[]{"geometry"},
+                    "osm_id = ?", new String[]{osmId}, null, null, null, "1")) {
+                if (!cursor.moveToFirst()) return "";
+                String geometry = cursor.getString(0);
+                if (geometry == null || geometry.isEmpty()) return "";
+                byte[] digest = MessageDigest.getInstance("SHA-256")
+                        .digest(geometry.getBytes(StandardCharsets.UTF_8));
+                StringBuilder result = new StringBuilder(digest.length * 2);
+                for (byte value : digest) result.append(String.format(Locale.ROOT, "%02x", value));
+                return result.toString();
+            } catch (Exception ignored) {
+                return "";
             }
         }
 

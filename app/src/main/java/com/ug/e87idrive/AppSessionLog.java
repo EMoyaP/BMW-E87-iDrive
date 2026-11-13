@@ -20,8 +20,10 @@ import java.util.Map;
 final class AppSessionLog {
     static final String FILE_NAME = "e87_runtime_session_000.log";
     private static final String FILE_PREFIX = "e87_runtime_session_";
+    private static final String ARCHIVE_PREFIX = "e87_runtime_previous_";
     private static final long CHUNK_BYTES = 1L * 1024L * 1024L;
     private static final int MAX_CHUNKS_PER_SESSION = 8;
+    private static final int MAX_ARCHIVED_SESSIONS = 3;
     private static final Object LOCK = new Object();
     /**
      * The CAN service can callback several times per second with identical
@@ -40,7 +42,7 @@ final class AppSessionLog {
         synchronized (LOCK) {
             VehicleObservationTrace.reset();
             LAST_SAMPLED_AT.clear();
-            clearPreviousSession(context.getFilesDir());
+            archivePreviousSession(context.getFilesDir());
             chunkIndex = 0;
             sessionCapacityReached = false;
             file = chunkFile(context.getFilesDir(), chunkIndex);
@@ -97,6 +99,25 @@ final class AppSessionLog {
         synchronized (LOCK) { return new ArrayList<>(sessionFilesLocked()); }
     }
 
+    /** Current session plus the bounded archived sessions recoverable after a process restart. */
+    static List<File> recoverableSessionFiles() {
+        synchronized (LOCK) {
+            ArrayList<File> result = new ArrayList<>();
+            File directory = file == null ? null : file.getParentFile();
+            if (directory != null) {
+                File[] archived = directory.listFiles(candidate -> candidate != null
+                        && candidate.getName().startsWith(ARCHIVE_PREFIX)
+                        && candidate.getName().endsWith(".log"));
+                if (archived != null) {
+                    Arrays.sort(archived, (left, right) -> left.getName().compareTo(right.getName()));
+                    result.addAll(Arrays.asList(archived));
+                }
+            }
+            result.addAll(sessionFilesLocked());
+            return result;
+        }
+    }
+
     static String readFile(File source) {
         if (source == null || !source.isFile()) return "";
         try (FileInputStream input = new FileInputStream(source)) {
@@ -128,14 +149,31 @@ final class AppSessionLog {
         return new File(directory, String.format(Locale.ROOT, "%s%03d.log", FILE_PREFIX, index));
     }
 
-    private static void clearPreviousSession(File directory) {
+    /** Preserve a few completed sessions in case the radio closes before export. */
+    private static void archivePreviousSession(File directory) {
         File[] previous = directory.listFiles(candidate -> candidate != null
                 && (candidate.getName().equals("e87_runtime_session.log")
                 || (candidate.getName().startsWith(FILE_PREFIX)
                 && candidate.getName().endsWith(".log"))));
         if (previous == null) return;
+        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date());
         for (File candidate : previous) {
-            try { candidate.delete(); } catch (Exception ignored) { }
+            try {
+                File archived = new File(directory, ARCHIVE_PREFIX + stamp + "_" + candidate.getName());
+                if (!candidate.renameTo(archived)) {
+                    // Keeping an older log is preferable to losing it when a filesystem refuses
+                    // a rename during an unexpected process restart.
+                    continue;
+                }
+            } catch (Exception ignored) { }
+        }
+        File[] archived = directory.listFiles(candidate -> candidate != null
+                && candidate.getName().startsWith(ARCHIVE_PREFIX) && candidate.getName().endsWith(".log"));
+        if (archived == null) return;
+        Arrays.sort(archived, (left, right) -> right.getName().compareTo(left.getName()));
+        int keepFiles = MAX_ARCHIVED_SESSIONS * MAX_CHUNKS_PER_SESSION;
+        for (int i = keepFiles; i < archived.length; i++) {
+            try { archived[i].delete(); } catch (Exception ignored) { }
         }
     }
 

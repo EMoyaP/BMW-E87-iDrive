@@ -1,5 +1,110 @@
 # CHANGELOG
 
+## 1.28.0 — 12/11/2026
+
+- La vista de conducción representa radares con sentido verificado, gasolineras cercanas y el
+  precio más barato útil para la trayectoria; las estaciones visibles se comparan en verde/rojo.
+- Las incidencias DGT DATEX II se actualizan en directo cuando hay Internet. Vehículos parados,
+  circulación lenta y cierres colorean el tramo y muestran un aviso compacto a la derecha.
+- TomTom Traffic puede activarse como complemento opcional con una clave Freemium del usuario.
+  La clave permanece en preferencias privadas, nunca se compila ni registra, y las consultas de
+  incidencias se limitan para proteger la cuota; cada aviso identifica su fuente DGT o TomTom.
+- La misma activación opcional añade tráfico por tramos cada 90 segundos, verificación de límites
+  `Maximum` mediante varias posiciones Snap to Roads y geocodificación inversa de respaldo. DGT
+  conserva prioridad, los conflictos quedan en el log y las velocidades `Recommended` se ignoran.
+- Todas las API TomTom tienen contadores mensuales compartidos con un techo del 80 % de las cuotas
+  Freemium documentadas; al agotarse o perder Internet, la app continúa exclusivamente con DGT/OSM.
+- El modo de reposo se recupera tras 30 segundos realmente detenido; dos posiciones fiables en
+  movimiento restauran la vista de conducción sin contar pérdidas de GPS como una parada.
+- Dos barras discretas muestran la actualización automática de precios y del lote Git. El trabajo
+  persiste con requisito de red, reintenta al volver Internet e incorpora cartografía, límites,
+  radares e INVIVE sin depender de `MainActivity`.
+- El constructor portátil prepara y valida Alicante, Murcia, Valencia, Albacete y Almería con
+  manifiesto SHA-256. Las relaciones OSM conservan los nodos necesarios para verificar el sentido.
+- Los feeds DGT migran del dominio retirado `infocar.dgt.es` a los recursos oficiales operativos de
+  `nap.dgt.es`; la compilación vuelve a incluir las tres semillas nacionales actuales.
+- El diagnóstico exporta `Build.DISPLAY`, huella, incremental, parche y versión del cliente OTA
+  Jancar para comparar firmware sin flashear Android, MCU, CANBUS ni Hiworld.
+
+## 1.27.5 — 25/10/2026
+
+- La integración Jancar consulta de forma pasiva `ICar.getTrip(0, 0)`, correspondiente a
+  `Trip.Id.TOTAL` y `Trip.Index.DISTANCE` en la APK OEM exportada de esta radio.
+- La pantalla de reposo muestra `Kilómetros totales` debajo de autonomía, consumo y exterior
+  únicamente cuando el servicio publica una distancia positiva y plausible.
+- Se escucha también `onTripChanged(0, 0, valor)` y se conserva el valor bruto en el diagnóstico
+  para contrastar en la radio tanto la cifra como su unidad, sin escribir ni reiniciar contadores.
+
+## 1.27.4 — 02/10/2026
+
+- Las actualizaciones explícitas registran una tarea persistente con requisito de red. Si Android
+  destruye el proceso o reinicia la radio, la operación pendiente se repite de forma transaccional
+  y se cancela al completar la descarga normal.
+- `DÓNDE ESTOY` separa dirección y coordenadas GPS en dos líneas; las coordenadas WGS84 permanecen
+  visibles aunque el nombre de la vía sea largo, y el texto caduca al perder una posición vigente.
+- La geocodificación inversa invalida resultados en vuelo al cambiar de vía, evitando que una
+  respuesta lenta restaure el nombre del tramo anterior.
+- El receptor de presentación de la APK debug exige permiso de diagnóstico del sistema. En
+  Android 14 o posterior, los metadatos SpeedPlay solo se aceptan de una aplicación OEM/sistema.
+- Se desactiva la copia de seguridad y la transferencia automática de la base local y los
+  diagnósticos; las actualizaciones normales de la APK conservan sus SQLite como hasta ahora.
+
+## 1.27.3 — 01/10/2026
+
+- Las auras roja y azul de la señal se generan mediante capas rellenas y contornos explícitos,
+  sin sombras ni desenfoques que la GPU JCRK01/CYA pueda omitir.
+- El halo blanco del vehículo cenital sustituye `BlurMaskFilter` por seis siluetas alfa
+  concéntricas. El efecto conserva su discreción, pero utiliza las mismas operaciones bitmap
+  aceleradas que sí renderiza la radio.
+
+## 1.27.2 — 01/10/2026
+
+- La vista de conducción añade una línea pulsable `DÓNDE ESTOY` bajo los tres datos del
+  ordenador. Combina la vía/provincia del mapa local con localidad obtenida por la
+  geocodificación inversa estándar de Android y muestra coordenadas WGS84 en grados decimales.
+- Al tocar la línea se abre la posición GPS actual mediante el intent Android `geo:`; si no hay
+  una aplicación compatible, se usa como respaldo una búsqueda web de Google Maps.
+- La localidad se omite si el geocodificador de la radio no está disponible. Nunca se presenta
+  como PK la distancia interna recorrida sobre una geometría OSM.
+
+## 1.27.1 — 27/09/2026
+
+- La cámara proyecta visualmente el vehículo sobre la línea central del segmento OSM activo para
+  mantener alineados su eje delantero y trasero con la vía. El ajuste se limita según la precisión
+  GPS y se rechaza por encima de 35 m; límites y avisos siguen usando la coordenada GPS original.
+
+## 1.27.0 — 27/09/2026
+
+- La cámara del mapa adopta la composición habitual de navegación: el vehículo queda fijo al
+  72 % de la altura y la geometría gira alrededor de ese punto. Se dedica así más superficie a
+  mostrar la carretera que se aproxima, sin desplazar la posición GPS ni cambiar el zoom.
+
+## 1.26.9 — 27/09/2026
+
+- Las etiquetas del mapa siguen el criterio cartográfico habitual de OSM: orientación paralela
+  a la vía pero siempre dentro del semicírculo legible, tamaño según la jerarquía de carretera,
+  prioridad a vías principales y un máximo reducido de nombres simultáneos.
+- Se descartan nombres repetidos, etiquetas sin longitud visible suficiente y cualquier texto que
+  colisione con otro nombre, el vehículo, los controles, un radar o una gasolinera.
+
+## 1.26.8 — 27/09/2026
+
+- El mapa de conducción muestra las gasolineras de la caché oficial MITECO; la más barata del
+  radio configurado se distingue en verde y mantiene el precio visible. No se añade ninguna
+  descarga durante la marcha.
+- Los botones discretos `+` y `−` conservan el zoom elegido; una pulsación larga restablece el
+  nivel inicial.
+- La confirmación de vía cuenta posiciones GPS nuevas, no varias consultas de la misma muestra,
+  y el contexto completo caduca si deja de recibirse una posición vigente.
+- Las correcciones locales de límites guardan fuente, fecha de revisión y huella de la geometría;
+  se omiten automáticamente si cambia el tramo OSM al que estaban vinculadas.
+- Las actualizaciones interrumpidas por la terminación del proceso se reanudan al abrir la app con
+  Internet. El panel incluye inventario de registros y prueba manual de la locución de radar.
+- El diagnóstico permite marcar una incidencia de límite con vía, fuente, precisión, coordenadas
+  y enlace cartográfico para contrastarla posteriormente.
+- La importación inicial de las provincias ya no bloquea la interfaz ni prolonga la pantalla de
+  arranque mientras SQLite consolida la semilla en segundo plano.
+
 ## 1.26.6 — 27/09/2026
 
 - Las SQLite se conservan al actualizar la APK. Los límites DGT semanales se fusionan por

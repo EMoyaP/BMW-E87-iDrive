@@ -189,6 +189,22 @@ Incluso entonces, el primer adaptador será exclusivamente de lectura. Cualquier
 
 ## Identificación y actualización de firmware
 
+### Comprobación pública 2026-11-12
+
+- La unidad de referencia conserva MCU `MM40-0-2025.07.23_15:06`, plataforma `RK01` y sufijo
+  `CYA`. Se localizó públicamente otra unidad de la misma familia con sistema
+  `RK01-V1.0.60R0-251020_1611-CC-C-CYA` y la misma versión MCU, pero destinada a Renault/Opel y
+  con otra configuración CAN. Esa coincidencia demuestra que existe una compilación RK01 posterior,
+  no que su imagen sea instalable en la variante BMW.
+- No se encontró un portal oficial indexado ni un paquete firmado que permita verificar placa,
+  particiones, resolución, audio, periféricos y configuración CAN. El actualizador de datos y de la
+  APK iDrive no flashea Android, MCU ni CANBUS. Una futura comprobación de firmware exigirá
+  coincidencia exacta de `Build.DISPLAY`, `Build.FINGERPRINT`, MCU, CAN y firma del paquete.
+- El diagnóstico exporta ahora esos identificadores y la versión instalada de `com.jancar.ota` para
+  poder estudiar el cliente oficial sin ejecutar comandos ni modificar la radio.
+- Evidencia pública de la compilación posterior:
+  <https://www.tradera.com/da/item/171401/752077656/android-bilradio-til-renault-trafic-opel-vivaro-venstrestyret->.
+
 - La búsqueda pública de `rk3326_r` conduce al árbol de dispositivo Rockchip Android R/11, que además registra el cambio
   de esa plataforma a API 30. Esto refuerza que la base real de la radio es Android 11 aunque el release se presente
   como 13 o el producto se comercialice como 15:

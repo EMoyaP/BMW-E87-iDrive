@@ -3,6 +3,8 @@ package com.ug.e87idrive;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.os.Build;
 import android.os.Bundle;
 
 /**
@@ -99,6 +101,7 @@ public final class SpeedPlayMediaReceiver extends BroadcastReceiver {
 
     @Override public void onReceive(Context context, Intent intent) {
         if (intent == null || !ACTION_MEDIA_PLAY_INFO.equals(intent.getAction())) return;
+        if (!trustedSender(context)) return;
         String title = textExtra(intent, "title");
         String album = textExtra(intent, "album");
         String artist = textExtra(intent, "artist");
@@ -115,6 +118,31 @@ public final class SpeedPlayMediaReceiver extends BroadcastReceiver {
                 + " · artista=" + display(artist)
                 + " · álbum=" + display(album)
                 + " · posición=" + position + " · duración=" + duration);
+    }
+
+    /**
+     * Android 14 exposes the package which sent an explicit/implicit broadcast. On those builds
+     * accept only system-installed software (SpeedPlay is an OEM application on the head unit),
+     * plus our own package for instrumentation. Older head units do not expose this identity, so
+     * retaining the read-only legacy path is necessary for compatibility.
+     */
+    private boolean trustedSender(Context context) {
+        if (Build.VERSION.SDK_INT < 34) return true;
+        String sender = getSentFromPackage();
+        if (sender == null || sender.trim().isEmpty()) {
+            AppSessionLog.sampledEvent("speedplay_sender_missing", "SEGURIDAD",
+                    "SpeedPlay descartado: Android no identificó el emisor", 60_000L);
+            return false;
+        }
+        if (sender.equals(context.getPackageName())) return true;
+        try {
+            ApplicationInfo application = context.getPackageManager().getApplicationInfo(sender, 0);
+            int systemFlags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+            if ((application.flags & systemFlags) != 0) return true;
+        } catch (Exception ignored) { }
+        AppSessionLog.sampledEvent("speedplay_sender_rejected_" + sender, "SEGURIDAD",
+                "SpeedPlay descartado: emisor no OEM " + sender, 60_000L);
+        return false;
     }
 
     private static String textExtra(Intent intent, String name) {

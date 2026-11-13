@@ -2,6 +2,7 @@ package com.ug.e87idrive;
 
 /** GPS-only presentation state. Times are monotonic fix times, never wall-clock time. */
 final class DrivingViewPolicy {
+    static final long STOP_CONFIRMATION_MS = 30_000L;
     private boolean driving;
     private int movingFixes;
     private long lastFix = -1, stoppedSince = -1;
@@ -22,7 +23,7 @@ final class DrivingViewPolicy {
         if (driving) {
             if (kmh < 2) {
                 if (stoppedSince < 0) stoppedSince = fixMs;
-                if (fixMs - stoppedSince >= 60_000) {
+                if (fixMs - stoppedSince >= STOP_CONFIRMATION_MS) {
                     driving = false;
                     movingFixes = 0;
                     stoppedSince = -1;

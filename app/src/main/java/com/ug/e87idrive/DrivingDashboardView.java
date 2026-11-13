@@ -2,8 +2,15 @@ package com.ug.e87idrive;
 
 import android.content.Context;
 import android.graphics.*;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.StyleSpan;
 import android.view.View;
 import android.widget.FrameLayout;
+import android.widget.TextView;
+import android.graphics.drawable.GradientDrawable;
 import java.util.Locale;
 
 /** Native, resolution-independent driving cluster. No simulated vehicle values. */
@@ -37,7 +44,15 @@ final class DrivingDashboardView extends FrameLayout {
     void radarLimit(Integer value) { cameraLimit = value; invalidate(); }
     private boolean exact;
     private String range, consumption, temperature;
-    private View sign, radar, surveillance, androidAuto, menu;
+    private View sign, radar, surveillance, incident, androidAuto, menu;
+    private final TextView zoomIn;
+    private final TextView zoomOut;
+    private final FrameLayout whereAmIPanel;
+    private final TextView whereAmIAddress;
+    private final TextView whereAmICoordinates;
+    private final TextView fuelContext;
+    private boolean alertPriority;
+    private boolean fuelContextAvailable;
     private static final int WHITE = Color.rgb(242, 246, 250);
     private static final int MUTED = Color.rgb(162, 181, 199);
     private static final int GREEN = Color.rgb(65, 198, 120);
@@ -50,6 +65,40 @@ final class DrivingDashboardView extends FrameLayout {
         setClickable(true);
         map = new OfflineRoadMapView(context);
         addView(map);
+        zoomIn = zoomButton(context, "+", "Acercar mapa");
+        zoomOut = zoomButton(context, "−", "Alejar mapa");
+        zoomIn.setOnClickListener(view -> map.adjustZoom(1.22f));
+        zoomOut.setOnClickListener(view -> map.adjustZoom(1f / 1.22f));
+        zoomIn.setOnLongClickListener(view -> { map.resetZoom(); return true; });
+        zoomOut.setOnLongClickListener(view -> { map.resetZoom(); return true; });
+        addView(zoomIn);
+        addView(zoomOut);
+        whereAmIPanel = new FrameLayout(context);
+        whereAmIPanel.setClickable(true);
+        whereAmIPanel.setFocusable(true);
+        whereAmIAddress = new TextView(context);
+        whereAmIAddress.setSingleLine(true);
+        whereAmIAddress.setEllipsize(TextUtils.TruncateAt.END);
+        whereAmIAddress.setGravity(android.view.Gravity.CENTER);
+        whereAmIAddress.setTextSize(13f);
+        whereAmIAddress.setPadding(8, 0, 8, 0);
+        whereAmICoordinates = new TextView(context);
+        whereAmICoordinates.setSingleLine(true);
+        whereAmICoordinates.setGravity(android.view.Gravity.CENTER);
+        whereAmICoordinates.setTextSize(11f);
+        whereAmICoordinates.setTextColor(MUTED);
+        whereAmIPanel.addView(whereAmIAddress, panelParams(-1, 25, 0));
+        whereAmIPanel.addView(whereAmICoordinates, panelParams(-1, 19, 24));
+        addView(whereAmIPanel);
+        fuelContext = new TextView(context);
+        fuelContext.setSingleLine(true);
+        fuelContext.setEllipsize(TextUtils.TruncateAt.END);
+        fuelContext.setGravity(android.view.Gravity.CENTER);
+        fuelContext.setTextSize(13f);
+        fuelContext.setTextColor(Color.rgb(202, 231, 248));
+        fuelContext.setVisibility(GONE);
+        addView(fuelContext);
+        whereAmI("Esperando ubicación GPS");
         brand = BitmapFactory.decodeResource(getResources(), R.drawable.ic_launcher_bmw_v2);
         emblemClip.addOval(brandDestination,Path.Direction.CW);
         rim.moveTo(345, 527);
@@ -74,10 +123,10 @@ final class DrivingDashboardView extends FrameLayout {
         setContentDescription("Cuadro de conducción BMW 118d E87");
     }
 
-    void attach(View sign, View radar, View surveillance, View androidAuto, View menu) {
+    void attach(View sign, View radar, View surveillance, View incident, View androidAuto, View menu) {
         this.sign = sign; this.radar = radar; this.surveillance = surveillance;
-        this.androidAuto = androidAuto; this.menu = menu;
-        addView(sign); addView(radar); addView(surveillance); addView(androidAuto); addView(menu);
+        this.incident=incident; this.androidAuto = androidAuto; this.menu = menu;
+        addView(sign); addView(radar); addView(surveillance); addView(incident); addView(androidAuto); addView(menu);
     }
 
     void readings(Double speed, String range, String consumption, String temperature) {
@@ -97,6 +146,73 @@ final class DrivingDashboardView extends FrameLayout {
         map.setRadars(radars);
     }
 
+    void mapFuelStations(java.util.List<OfflineRoadMapView.FuelStation> stations) {
+        map.setFuelStations(stations);
+    }
+
+    void mapIncidents(java.util.List<OfflineRoadMapView.Incident> value){map.setIncidents(value);}
+
+    void mapTrafficFlows(java.util.List<OfflineRoadMapView.TrafficFlow> value) {
+        map.setTrafficFlows(value);
+    }
+
+    void contextualFuelStation(FuelStationProvider.Station station, String fuelLabel,
+                               boolean favorablePrice, boolean stale) {
+        fuelContextAvailable = station != null;
+        if (station == null) {
+            fuelContext.setText("");
+            updateFuelContextVisibility();
+            return;
+        }
+        String brand = station.brand == null || station.brand.trim().isEmpty()
+                ? "GASOLINERA" : station.brand.trim().toUpperCase(Locale.getDefault());
+        String fuel = fuelLabel == null || fuelLabel.trim().isEmpty() ? "COMBUSTIBLE"
+                : fuelLabel.trim().toUpperCase(Locale.getDefault());
+        fuelContext.setText(String.format(Locale.getDefault(),
+                "⛽  %s  ·  %s %.3f €/l  ·  %.1f km%s", brand, fuel,
+                station.price, station.distanceKm, stale ? "  ·  PRECIO SIN ACTUALIZAR" : ""));
+        int priceColor = favorablePrice ? Color.rgb(79, 205, 132) : Color.rgb(238, 72, 66);
+        fuelContext.setTextColor(stale ? ORANGE : priceColor);
+        fuelContext.setContentDescription("Gasolinera más cercana en la dirección de marcha: "
+                + fuelContext.getText());
+        updateFuelContextVisibility();
+    }
+
+    void alertPriority(boolean value) {
+        alertPriority = value;
+        updateFuelContextVisibility();
+    }
+
+    private void updateFuelContextVisibility() {
+        fuelContext.setVisibility(fuelContextAvailable && !alertPriority ? VISIBLE : GONE);
+    }
+
+    void whereAmI(String value) {
+        String location = value == null || value.trim().isEmpty()
+                ? "Esperando ubicación GPS" : value.trim();
+        int gpsSeparator = location.lastIndexOf(" · GPS ");
+        String address = gpsSeparator < 0 ? location : location.substring(0, gpsSeparator);
+        String coordinates = gpsSeparator < 0
+                ? (location.contains("no disponible") ? "GPS sin señal" : "")
+                : "GPS " + location.substring(gpsSeparator + 7);
+        String prefix = "DÓNDE ESTOY  ·  ";
+        SpannableString text = new SpannableString(prefix + address);
+        text.setSpan(new ForegroundColorSpan(Color.rgb(91, 171, 246)), 0, prefix.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(new StyleSpan(Typeface.BOLD), 0, prefix.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(new ForegroundColorSpan(WHITE), prefix.length(), text.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        whereAmIAddress.setText(text);
+        whereAmICoordinates.setText(coordinates);
+        whereAmIPanel.setContentDescription("Dónde estoy: " + location
+                + ". Toca para abrir esta posición en el mapa");
+    }
+
+    void setWhereAmIClickListener(View.OnClickListener listener) {
+        whereAmIPanel.setOnClickListener(listener);
+    }
+
     void mapRoad(String osmId, String roadRef, double roadBearing, Float vehicleBearing) {
         map.setCurrentRoad(osmId, roadRef, roadBearing, vehicleBearing);
     }
@@ -109,7 +225,7 @@ final class DrivingDashboardView extends FrameLayout {
     void road(Integer limit, boolean exact) { this.limit = limit; this.exact = exact; invalidate(); }
 
     void animateInstruments(boolean entering) {
-        View[] instruments={sign,radar,surveillance,androidAuto,menu};
+        View[] instruments={sign,radar,surveillance,incident,androidAuto,menu};
         for(int i=0;i<instruments.length;i++) {
             View instrument=instruments[i];
             if(instrument==null) continue;
@@ -136,12 +252,40 @@ final class DrivingDashboardView extends FrameLayout {
         view.layout(left, top, left + width, top + height);
     }
 
+    private static TextView zoomButton(Context context, String text, String description) {
+        TextView button = new TextView(context);
+        button.setText(text);
+        button.setTextColor(Color.rgb(194, 224, 243));
+        button.setTextSize(19f);
+        button.setGravity(android.view.Gravity.CENTER);
+        button.setContentDescription(description);
+        button.setClickable(true);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.argb(178, 3, 18, 31));
+        background.setStroke(1, Color.argb(190, 54, 123, 166));
+        background.setCornerRadius(7f);
+        button.setBackground(background);
+        return button;
+    }
+
+    private static FrameLayout.LayoutParams panelParams(int width, int height, int top) {
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
+        params.topMargin = top;
+        return params;
+    }
+
     @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
         place(map, 348, 146, 605, 403);
+        // Kept inside the map's lower-right corner so it never covers the speed sign or radar.
+        place(zoomIn, 846, 506, 44, 34);
+        place(zoomOut, 896, 506, 44, 34);
+        place(fuelContext, 365, 548, 560, 32);
+        place(whereAmIPanel, 38, 667, 782, 47);
         if (sign == null) return;
         place(sign, 963, 163, 298, 298);
         place(radar, 925, 473, 335, 147);
         place(surveillance, 925, 473, 335, 147);
+        place(incident, 925, 473, 335, 147);
         place(androidAuto, 837, 584, 76, 76);
         place(menu, 1204, 14, 60, 54);
     }

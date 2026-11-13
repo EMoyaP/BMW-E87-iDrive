@@ -207,6 +207,25 @@ public final class FuelStationProvider {
     }
 
     public synchronized Snapshot getSnapshot() { return snapshot; }
+
+    public synchronized String inventorySummary() {
+        return "Gasolineras en caché: " + (cache == null ? 0 : cache.stations.size());
+    }
+
+    /** Nearby cached stations for the offline driving map. No network request is made here. */
+    public synchronized List<Station> mapStations(Location current, int maximum) {
+        if (cache == null || current == null || maximum <= 0) return Collections.emptyList();
+        int radiusKm = Math.min(getRadiusKm(), 12);
+        ArrayList<Station> result = new ArrayList<>();
+        for (Station original : cache.stations) {
+            Station candidate = atCurrentDistance(original, current);
+            if (candidate.distanceKm <= radiusKm) result.add(candidate);
+        }
+        Collections.sort(result,
+                (left, right) -> Double.compare(left.distanceKm, right.distanceKm));
+        if (result.size() > maximum) return new ArrayList<>(result.subList(0, maximum));
+        return result;
+    }
     /** True when Android exposes an IP-capable network, including a Bluetooth PAN. */
     public boolean isInternetAvailable() { return hasActiveInternet(); }
     public int getProductId() { return preferences.getInt(PREF_PRODUCT, DEFAULT_PRODUCT_ID); }

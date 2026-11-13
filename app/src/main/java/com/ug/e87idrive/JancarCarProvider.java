@@ -34,6 +34,7 @@ final class JancarCarProvider implements VehicleDataProvider {
     private static final String DESCRIPTOR = "com.jancar.services.car.ICar";
     private static final long POLL_MS = 1_000L;
     private static final long ALERTS_MS = 12_000L;
+    private static final long ODOMETER_MS = 15_000L;
     private static final long MAINTENANCE_MS = 60_000L;
 
     // Transaction numbers from the ICar AIDL stub in the APK exported from this unit.
@@ -63,6 +64,9 @@ final class JancarCarProvider implements VehicleDataProvider {
     private static final int RT_SPEED = 1;
     private static final int RT_CONSUMPTION = 2;
     private static final int RT_RPM = 3;
+    // Trip.Id.TOTAL + Trip.Index.DISTANCE from the SDK exported by this radio.
+    private static final int TRIP_TOTAL = 0;
+    private static final int TRIP_DISTANCE = 0;
     // IVICar.ExtraState.Id
     private static final int EXTRA_BATTERY_VOLTAGE = 0;
     private static final int EXTRA_REMAIN_FUEL_DISTANCE = 2;
@@ -85,10 +89,11 @@ final class JancarCarProvider implements VehicleDataProvider {
     private Handler worker;
     private IBinder car;
     private boolean running, bound;
-    private long lastAlertRead, lastMaintenanceRead;
+    private long lastAlertRead, lastOdometerRead, lastMaintenanceRead;
     private String connectionState = "Sonda aún no iniciada";
     private String canVersion = "";
     private volatile String lastRawTelemetry = "sin lectura";
+    private volatile String lastRawOdometer = "sin lectura";
     private volatile String lastRawVehicle = "sin lectura";
     private volatile String lastRawClimate = "sin lectura";
     private final IBinder callback = new PassiveCarCallback();
@@ -173,6 +178,7 @@ final class JancarCarProvider implements VehicleDataProvider {
         out.append("estado=").append(connectionState).append('\n');
         if (!canVersion.isEmpty()) out.append("CAN OEM=").append(canVersion).append('\n');
         out.append("raw ordenador=").append(lastRawTelemetry).append('\n');
+        out.append("raw kilómetros totales=").append(lastRawOdometer).append('\n');
         out.append("raw estado=").append(lastRawVehicle).append('\n');
         out.append("raw clima=").append(lastRawClimate).append('\n');
         out.append("Método: getters y callbacks AIDL verificados en la APK exportada; "
@@ -259,6 +265,10 @@ final class JancarCarProvider implements VehicleDataProvider {
         readBoardComputer(now);
         readVehicleState(now);
         readClimate(now);
+        if (now - lastOdometerRead >= ODOMETER_MS) {
+            lastOdometerRead = now;
+            readOdometer(now);
+        }
         if (now - lastAlertRead >= ALERTS_MS) {
             lastAlertRead = now;
             readAlerts(now, false);
@@ -305,6 +315,19 @@ final class JancarCarProvider implements VehicleDataProvider {
         trace("board.range", range, range < 0 ? "desconocido" : range + " km");
         trace("board.gear", gear, gearLabel == null ? "desconocido" : gearLabel);
         trace("board.outsideTemperature", rawTemp, temp == null ? "desconocido" : temp + " °C");
+    }
+
+    /**
+     * Reads the total-distance entry published by Jancar's verified ICar contract.
+     * This is a getter only: it cannot reset a trip counter or write to CAN/MCU.
+     */
+    private void readOdometer(long now) {
+        float raw = readFloat(GET_TRIP, TRIP_TOTAL, TRIP_DISTANCE);
+        lastRawOdometer = Float.toString(raw);
+        if (validOdometer(raw)) put(VehicleField.ODOMETER, (double) raw, now);
+        else clear(VehicleField.ODOMETER);
+        trace("trip.total.distance", raw,
+                validOdometer(raw) ? raw + " km (unidad pendiente de validar)" : "no publicado");
     }
 
     private void readVehicleState(long now) {
@@ -571,6 +594,21 @@ final class JancarCarProvider implements VehicleDataProvider {
         }
     }
 
+    private void onTripCallback(int id, int index, float value) {
+        long now = System.currentTimeMillis();
+        callbackLastAt = now;
+        boolean totalDistance = id == TRIP_TOTAL && index == TRIP_DISTANCE;
+        VehicleObservationTrace.observe("JCRK01 / CYA CALLBACK",
+                "trip." + id + "." + index, value,
+                totalDistance && validOdometer(value)
+                        ? value + " km (unidad pendiente de validar)" : "no promovido");
+        if (!totalDistance) return;
+        lastRawOdometer = Float.toString(value) + " (callback)";
+        if (validOdometer(value)) put(VehicleField.ODOMETER, (double) value, now);
+        else clear(VehicleField.ODOMETER);
+        notifyIfChanged();
+    }
+
     /** Minimal local Binder implementation of the verified passive callback contract. */
     private final class PassiveCarCallback extends Binder {
         PassiveCarCallback() { attachInterface(null, CALLBACK_DESCRIPTOR); }
@@ -599,6 +637,9 @@ final class JancarCarProvider implements VehicleDataProvider {
                     break;
                 case 0x09: // onOutsideTempChanged
                     onCallbackState(null, null, null, null, null, null, data.readInt());
+                    break;
+                case 0x0c: // onTripChanged
+                    onTripCallback(data.readInt(), data.readInt(), data.readFloat());
                     break;
                 case 0x0d: // onRealTimeInfoChanged
                     onRealtimeCallback(data.readInt(), data.readFloat());
@@ -678,6 +719,21 @@ final class JancarCarProvider implements VehicleDataProvider {
         finally { reply.recycle(); data.recycle(); }
     }
 
+    private float readFloat(int transaction, int first, int second) {
+        IBinder service = currentCar();
+        if (service == null) return -1f;
+        Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(DESCRIPTOR);
+            data.writeInt(first);
+            data.writeInt(second);
+            if (!service.transact(transaction, data, reply, 0)) return -1f;
+            reply.readException();
+            return reply.readFloat();
+        } catch (Exception ignored) { return -1f; }
+        finally { reply.recycle(); data.recycle(); }
+    }
+
     private Boolean readBoolean(int transaction) {
         IBinder service = currentCar();
         if (service == null) return null;
@@ -725,6 +781,11 @@ final class JancarCarProvider implements VehicleDataProvider {
     }
 
     private static boolean validNumber(float value) { return Float.isFinite(value) && value >= 0f; }
+
+    /** Rejects the OEM unknown value (-1), empty zeroes and obviously corrupt distances. */
+    static boolean validOdometer(float value) {
+        return Float.isFinite(value) && value > 0f && value <= 2_000_000f;
+    }
 
     private void put(VehicleField field, Object value, long now) {
         synchronized (values) { values.put(field, VehicleValue.available(value, VehicleSource.JCRK01_CYA, now)); }
@@ -820,7 +881,8 @@ final class JancarCarProvider implements VehicleDataProvider {
             }
         }
         current.append("alerts=").append(maintenance.active.hashCode());
-        String raw = lastRawTelemetry + " | " + lastRawVehicle + " | " + lastRawClimate
+        String raw = lastRawTelemetry + " | odómetro=" + lastRawOdometer
+                + " | " + lastRawVehicle + " | " + lastRawClimate
                 + " | avisos=" + maintenance.message;
         long now = System.currentTimeMillis();
         if (!raw.equals(lastLoggedRaw) && now - lastLoggedRawAt >= 5_000L) {

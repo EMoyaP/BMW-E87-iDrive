@@ -21,10 +21,30 @@ y se fusionan por `IDEESS`. Recuperar red reevalúa la caché sin descargar si t
 
 El endpoint oficial no admite un círculo GPS arbitrario. El refresco provincial es la aproximación oficial más pequeña
 que conserva estaciones de varios municipios y evita omisiones habituales; cerca de límites se consultan todas las
-provincias detectadas alrededor del vehículo. No existe Worker, servicio de fondo ni actualización con la app cerrada.
+provincias detectadas alrededor del vehículo. No existe Worker ni servicio permanente con la app cerrada. Las
+descargas continúan cuando se abre otra pantalla mientras el proceso siga vivo; si Android lo termina, la operación
+pendiente se conserva y se reinicia al abrir de nuevo la app con Internet.
 
 Las distancias mostradas son geodésicas aproximadas para mantener bajo el consumo. Al tocar una fila se delega en
 Google Maps o en un manejador `geo:` compatible, que calcula la ruta por carretera.
+
+## Cartografía, límites y datos conectados
+
+`SpeedLimitRepository` mantiene la geometría OSM y sus límites explícitos en SQLite; `DgtSpeedRepository` aplica los
+cambios TN-ITS oficiales sin destruir el historial. `SpeedResolutionCoordinator` selecciona una única respuesta para
+todos los widgets con este orden: cambio DGT válido para la vía y sentido, máximo TomTom contrastado, `maxspeed` OSM y,
+por último, recomendación visual por clase. Las señales físicas siguen siendo la referencia legal.
+
+`TomTomRoadDataRepository` es totalmente opcional. Conserva hasta seis posiciones fiables del mismo proveedor GPS,
+consulta Snap to Roads como máximo cada cinco minutos y solo acepta `speedLimits.type=Maximum`, km/h, confianza mínima
+y proximidad al último punto. Flow Segment Data actualiza cada 90 segundos un tramo efímero verde, naranja o rojo. No
+se escriben respuestas TomTom en la cartografía offline ni se redistribuyen. `TomTomUsageBudget` comparte contadores
+mensuales y corta cada servicio al 80 % de su cuota Freemium. La clave vive en preferencias privadas y ningún error o
+log incluye la URL completa.
+
+`TrafficIncidentRepository` combina DGT DATEX II con incidencias TomTom activas, elimina duplicados espaciales dando
+prioridad a DGT y pondera cierre, retraso, magnitud, trayectoria y distancia. `WhereAmIProvider` solo usa geocodificación
+TomTom cuando el geocodificador estándar no aporta localidad.
 
 ## AndroidAutomotiveProvider
 Sonda opcional de solo lectura cargada por reflexión, de modo que el APK sigue funcionando en Android convencional.

@@ -239,6 +239,18 @@ public final class DiagnosticEngine {
         out.append("Build.DEVICE=").append(Build.DEVICE).append('\n');
         out.append("Build.PRODUCT=").append(Build.PRODUCT).append('\n');
         out.append("Build.BOARD=").append(Build.BOARD).append('\n');
+        out.append("Build.DISPLAY=").append(Build.DISPLAY).append('\n');
+        out.append("Build.FINGERPRINT=").append(Build.FINGERPRINT).append('\n');
+        out.append("Build.VERSION.INCREMENTAL=").append(Build.VERSION.INCREMENTAL).append('\n');
+        out.append("Build.VERSION.SECURITY_PATCH=").append(Build.VERSION.SECURITY_PATCH).append('\n');
+        try {
+            PackageInfo ota = context.getPackageManager().getPackageInfo("com.jancar.ota", 0);
+            out.append("Jancar.OTA=").append(ota.versionName).append(" (")
+                    .append(Build.VERSION.SDK_INT >= 28 ? ota.getLongVersionCode() : ota.versionCode)
+                    .append(")\n");
+        } catch (Exception ignored) {
+            out.append("Jancar.OTA=(no instalado o no visible)\n");
+        }
         out.append("SDK=").append(Build.VERSION.SDK_INT).append("  Android=")
                 .append(Build.VERSION.RELEASE).append("  app=").append(context.getPackageName()).append("\n\n");
 

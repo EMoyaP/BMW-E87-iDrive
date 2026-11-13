@@ -1,0 +1,226 @@
+{
+  "schema": "e87-data-bundle-v1",
+  "bundle_version": "20261113-060959",
+  "generated_at_utc": "2026-11-13T06:10:13.536983+00:00",
+  "repository": "EMoyaP/BMW-E87-iDrive",
+  "coverage": [
+    "Alicante",
+    "Murcia",
+    "Valencia",
+    "Albacete",
+    "Almería"
+  ],
+  "fuel_prices_included": false,
+  "files": [
+    {
+      "name": "e87_dgt_invive_spain.xml",
+      "bytes": 4380763,
+      "sha256": "404c092fb9689ea1a03a31031f0203a25044037f28aa1ae95e7e6f72e85e4a2d",
+      "records": 2662,
+      "roles": [
+        "surveillance"
+      ],
+      "source": "https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml"
+    },
+    {
+      "name": "e87_dgt_radars_spain.xml",
+      "bytes": 2051128,
+      "sha256": "25eb40a9af2b60e2fc2e6b7578ada9fcf4f9faac1b7da40b61ce8af92d305238",
+      "records": 1474,
+      "roles": [
+        "radar"
+      ],
+      "source": "https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml"
+    },
+    {
+      "name": "e87_dgt_speed_limits_spain.xml",
+      "bytes": 4075049,
+      "sha256": "dec92985a79b69d039314b10fb28bd15d646bfc8bbee0c19a31af809a2449e7b",
+      "records": 1894,
+      "roles": [
+        "speed_limit"
+      ],
+      "source": "https://nap.dgt.es/tnits/limitesVelocidad.xml"
+    },
+    {
+      "name": "e87_lufop_radars_es.dat",
+      "bytes": 39050,
+      "sha256": "625cd038f8e967628a4fb89d021e8107e896fe968ab77e5399b46a79ab499c1b",
+      "records": 1219,
+      "roles": [
+        "radar"
+      ],
+      "source": "semilla local conservada; no se afirmó una actualización"
+    },
+    {
+      "name": "e87_osm_navigation_albacete.json.gz",
+      "bytes": 19889050,
+      "sha256": "b75a3eeaf69b0fd09d80e40bb4ab3857da84d4b02c894145c612e75d1077fec3",
+      "records": 133811,
+      "roles": [
+        "routing",
+        "map_matching"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_navigation_alicante.json.gz",
+      "bytes": 23415316,
+      "sha256": "c761de98d261f4a75c3283e1ad1c94797cea4608de2c0a8be0cb85cb1bb308f6",
+      "records": 171535,
+      "roles": [
+        "routing",
+        "map_matching"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_navigation_almeria.json.gz",
+      "bytes": 10395245,
+      "sha256": "af0b65574d04979765a400e97f014f063803b5af26ad2ee33125cfe5df96ec5b",
+      "records": 77115,
+      "roles": [
+        "routing",
+        "map_matching"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_navigation_murcia.json.gz",
+      "bytes": 21004133,
+      "sha256": "f1b4682e3395c45203df4594adbd84a4bbc2379610747363d900c3f1f16b77ab",
+      "records": 158373,
+      "roles": [
+        "routing",
+        "map_matching"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_navigation_valencia.json.gz",
+      "bytes": 33079857,
+      "sha256": "390d16a8e127589b02b3c50cfb189135cac58b926bd81da89f291b2eab471a40",
+      "records": 234834,
+      "roles": [
+        "routing",
+        "map_matching"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_radars_albacete.json.gz",
+      "bytes": 14123,
+      "sha256": "d764badc9ffaa76210bf7d4256cf4c27c06a29de8286a9be92e3dd4277d4338a",
+      "records": 223,
+      "roles": [
+        "radar",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_radars_alicante.json.gz",
+      "bytes": 19123,
+      "sha256": "73a850cb0079ddd702550d47afbff1f3d2182d353c6592fe33ed98f6c58240a3",
+      "records": 442,
+      "roles": [
+        "radar",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_radars_almeria.json.gz",
+      "bytes": 7772,
+      "sha256": "90faed4cf07fca88922a66e95731b5d23eef0411b8704f7145173c46312db1dd",
+      "records": 145,
+      "roles": [
+        "radar",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_radars_murcia.json.gz",
+      "bytes": 13531,
+      "sha256": "f1e1dc8930f5ea4ef51df9b33be147b95d38cbcae13550e8104c44cd700bfd35",
+      "records": 234,
+      "roles": [
+        "radar",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_osm_radars_valencia.json.gz",
+      "bytes": 23100,
+      "sha256": "43bc53224cb43ee333ba80b571ab156d5c4c679d14bf133e351d62c02f2e429c",
+      "records": 497,
+      "roles": [
+        "radar",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_speed_limits_albacete.tsv.gz",
+      "bytes": 10033664,
+      "sha256": "02cd93e8c30fe04c08142834b028a71b1025faca6b1d7836a500306624fa4e88",
+      "records": 129387,
+      "roles": [
+        "dashboard",
+        "map_matching",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_speed_limits_alicante.tsv.gz",
+      "bytes": 11338116,
+      "sha256": "bb2011b2dcbfa2e7d5abe819b6b58f378a0df658683b8b4b7af9f826d8d839c1",
+      "records": 167053,
+      "roles": [
+        "dashboard",
+        "map_matching",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_speed_limits_almeria.tsv.gz",
+      "bytes": 5085313,
+      "sha256": "4e7c5fe5325335fc6a1a024357a44def8064c8ecc5232d542f350fbc3f5d5334",
+      "records": 74015,
+      "roles": [
+        "dashboard",
+        "map_matching",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_speed_limits_murcia.tsv.gz",
+      "bytes": 10278135,
+      "sha256": "25deb4d43aff00cb48d749cbe6b2761d825ba913de77b977dccb74d9fbebe4e3",
+      "records": 153293,
+      "roles": [
+        "dashboard",
+        "map_matching",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    },
+    {
+      "name": "e87_speed_limits_valencia.tsv.gz",
+      "bytes": 16060578,
+      "sha256": "53d46e3792eb60197967fe8ba6abf30c5ee731d1effce79bbd1aa41e84294274",
+      "records": 227355,
+      "roles": [
+        "dashboard",
+        "map_matching",
+        "routing"
+      ],
+      "source": "OpenStreetMap"
+    }
+  ]
+}

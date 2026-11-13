@@ -20,7 +20,10 @@ public final class DiagnosticFileProvider extends ContentProvider {
         return true;
     }
 
-    @Override public String getType(Uri uri) { return "text/plain"; }
+    @Override public String getType(Uri uri) {
+        String name=uri.getLastPathSegment();
+        return name!=null&&name.endsWith(".apk")?"application/vnd.android.package-archive":"text/plain";
+    }
 
     @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         if (!"r".equals(mode) && !"rt".equals(mode)) throw new FileNotFoundException("Solo lectura");

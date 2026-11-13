@@ -20,6 +20,12 @@ denominativa y los logotipos Bluetooth pertenecen a Bluetooth SIG, Inc. Hiworld,
 únicamente como identificadores observados del hardware o software; cualquier derecho sobre esos nombres corresponde
 a sus respectivos titulares.
 
+TomTom y TomTom Traffic son marcas o servicios de TomTom International BV. La integración es opcional, utiliza una
+clave aportada por el usuario y muestra TomTom como fuente de los avisos correspondientes. Cuando se activa, la
+posición GPS se envía periódicamente para consultar incidencias, flujo, ajuste a carretera y, solo como respaldo,
+geocodificación inversa. Este proyecto no incluye, publica ni redistribuye claves API ni respuestas TomTom; los
+resultados conectados caducan y no se incorporan a las semillas offline.
+
 Ninguna licencia de este repositorio concede derechos para usar, modificar, sublicenciar o redistribuir marcas,
 logotipos, nombres comerciales, imagen corporativa o diseños protegidos de terceros. En particular, el emblema BMW
 incluido en el icono de la aplicación queda expresamente fuera de las licencias `LICENSE` y `LICENSE-ASSETS.md`; el
@@ -55,7 +61,7 @@ dato mostrado es orientativo y no sustituye la señalización vial.
 
 La aplicación incorpora una copia local del inventario DATEX II de **cinemómetros fijos y de
 velocidad media** publicado por la Dirección General de Tráfico (DGT), obtenida desde su
-[publicación oficial de localizaciones predefinidas](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml).
+[publicación oficial de localizaciones predefinidas](https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml).
 La ficha de datos de la DGT identifica el conjunto como
 [Radares fijos DGT](https://nap.dgt.es/es/dataset/radares-fijos-dgt) y publica su licencia
 CC BY 4.0. Se mantiene la atribución a DGT y la URL de origen en la aplicación, los informes y
@@ -82,7 +88,7 @@ conserva prioridad. Los fijos exclusivos de la semilla local pueden activar la l
 ## Límites oficiales y zonas INVIVE
 
 La capa nacional de límites oficiales se obtiene del feed TN-ITS semanal de la DGT:
-[limitesVelocidad.xml](https://infocar.dgt.es/tnits/limitesVelocidad.xml), referenciado también en el
+[limitesVelocidad.xml](https://nap.dgt.es/tnits/limitesVelocidad.xml), referenciado también en el
 [NAP de la DGT](https://nap.dgt.es/en/dataset/limites_de_velocidad). La aplicación conserva la
 fotografía instalada y mezcla las altas, modificaciones y bajas posteriores en una base SQLite local.
 La geometría se utiliza solo cuando su sistema de coordenadas es identificable o ha sido marcada como
@@ -90,7 +96,7 @@ inferencia técnica; un registro no coincidente por carretera, proximidad y sent
 
 Las zonas de intensificación de vigilancia proceden del conjunto oficial
 [INVIVE](https://nap.dgt.es/en/dataset/tramos-invive) y de su publicación DATEX II nacional:
-[tramos_invive/content.xml](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml).
+[tramos_invive/content.xml](https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml).
 Se presentan como `ZONA DE VIGILANCIA`, nunca como radar fijo y nunca como un límite de velocidad.
 
 ## Seguridad del vehículo

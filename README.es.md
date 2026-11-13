@@ -24,7 +24,8 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 
 - **Velocímetro GPS.** GPS es la fuente de velocidad validada en la radio física. La esfera E87 de 0–260 km/h rellena progresivamente solo su aro exterior. Un límite local verificado se marca en naranja y, al superarlo, la cifra y el aro pasan a naranja; sin límite local verificado, ambos se mantienen en verde.
 - **Límite de la vía local.** La señal se consulta en una base SQLite local, nunca se descarga durante la conducción. Un círculo rojo solo representa un `maxspeed` explícito; el cuadrado azul es una velocidad aconsejada conservadora por tipo de vía cuando la zona GPS se ha actualizado, nunca un límite legal ni un disparador naranja del velocímetro. Las señales físicas y el cuadro del coche siguen siendo la referencia legal.
-- **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. Si un dato no está disponible se oculta.
+- **Auras compatibles con la radio.** Los halos rojo/azul de la señal y el contorno blanco del vehículo se construyen con capas y bitmaps convencionales. No dependen de sombras o desenfoques que algunas GPU de radios Android omiten.
+- **Ordenador de a bordo dinámico.** Autonomía, consumo medio, temperatura exterior, kilómetros totales, climatización y otros valores aparecen solo cuando la radio publica una lectura plausible. El kilometraje se consulta mediante el getter pasivo Jancar `getTrip(0,0)` y permanece oculto si la unidad no lo publica.
 - **Aviso de radares fijos y de tramo.** La APK incorpora localmente el inventario nacional de la DGT, una semilla complementaria española Lufop/RadarDroid de fijos `TYPE=1` y radares fijos OSM de Alicante. DGT conserva prioridad y las coincidencias no se duplican. Para un radar fijo con trayectoria confirmada, la tarjeta y el primer aviso de voz se activan a **600 m**; hay un único recordatorio a **300 m**. La tarjeta visible recibe un aura roja lenta de 0,5 Hz. Tras el paso confirmado conserva 100 m de margen. Un límite propio de radar OSM solo se acepta si existe una relación `enforcement=maxspeed` con corredor `from/to` y coincide con rumbo y trayectoria; nunca se deduce únicamente por proximidad u orientación óptica. Los controles móviles se excluyen expresamente.
 - **Zonas de vigilancia INVIVE.** Una tarjeta propia muestra `ZONA DE VIGILANCIA` al aproximarse o circular por un tramo oficial de intensificación. Naranja indica distancia hasta la entrada y rojo la distancia hasta la salida. Nunca se representa como radar, no activa la locución de radar fijo y no aporta un límite legal. Si radar e INVIVE coinciden, **prevalece siempre la tarjeta de radar** y la zona queda oculta hasta que el radar deje de aplicar.
 
@@ -33,7 +34,9 @@ El panel está diseñado para pantallas de coche 1280×720 / 16:9. Incluye vehí
 ![Dentro de una zona INVIVE: tarjeta roja y distancia restante de salida](docs/screenshots/bmw-e87-ui-v1.25.2-invive-inside.png)
 
 ![Recordatorio de radar fijo con la distancia restante a 293 m](docs/screenshots/bmw-e87-ui-v1.25.2-radar-300m.png)
-- **Gasolineras.** La más barata y la más cercana se calculan respecto al GPS de la radio para el combustible seleccionado. Al pulsar un resultado se navega mediante una aplicación de mapas compatible.
+- **Gasolineras.** La más barata y la más cercana se calculan respecto al GPS de la radio para el combustible seleccionado. Al pulsar un resultado se navega mediante una aplicación de mapas compatible. En conducción, las estaciones disponibles en la caché oficial también aparecen sobre el mapa y la más barata del radio configurado se resalta en verde.
+- **Datos conectados opcionales.** DGT DATEX II y OSM siguen siendo las fuentes predeterminadas. El usuario puede añadir en la radio una clave Freemium de TomTom para complementar incidencias, colorear el tramo actual por fluidez y contrastar un límite máximo mediante Snap to Roads. Solo se acepta `Maximum`, con varias posiciones GPS recientes y confianza suficiente; DGT mantiene prioridad y cualquier discrepancia queda registrada. La clave se guarda en preferencias privadas y nunca se incorpora al APK, GitHub o los logs. Los contadores mensuales se detienen al 80 % de las cuotas gratuitas y la app vuelve automáticamente a DGT/OSM.
+- **Dónde estoy.** Bajo el ordenador de a bordo aparece `Localidad (Provincia) · calle/carretera · GPS latitud, longitud`. La vía y la provincia proceden del mapa local; la localidad se añade mediante el geocodificador estándar de Android y, si este no la aporta y TomTom está activado, mediante geocodificación inversa de respaldo. Las coordenadas son WGS84 en grados decimales y toda la línea abre la posición mediante un intent `geo:` compatible con Google Maps y otras aplicaciones instaladas.
 - **Tarjetas OEM.** Radio, Android Auto, teléfono y aplicaciones abren la aplicación OEM asignada. Los metadatos solo aparecen si Android o un servicio OEM los publica realmente.
 
 ## Límite de seguridad
@@ -65,7 +68,7 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
 - Diésel y radio de 7 km como valores predeterminados, ambos configurables.
 - Precios procedentes del servicio oficial español, filtrados localmente y guardados en una caché de 150 km alrededor del vehículo.
 - Los precios próximos se actualizan cada diez minutos mientras la app está visible y Android publica una red IP.
-- La APK incorpora un mapa completo de carretera de **Alicante** actualizado el 26/09/2026: **113.227** tramos transitables con clases, límites `maxspeed` y datos direccionales disponibles. La vía se identifica primero por posición, rumbo y continuidad; después se aplica el dato más fiable de esa misma vía y sentido. Murcia, Valencia y Albacete mantienen sus semillas compactas anteriores.
+- La APK incorpora cartografía OSM validada el **13/11/2026** para Alicante, Murcia, Valencia, Albacete y Almería: **751.103** tramos transitables en total, con clases, límites `maxspeed`, nombres y datos direccionales disponibles. La vía se identifica primero por posición, rumbo y continuidad; después se aplica el dato más fiable de esa misma vía y sentido.
 - La primera ejecución también dispone sin red de la instantánea oficial de precios de diésel de Alicante incluida en la APK, con su fecha de origen visible. Al recuperar Internet, la caché se sustituye por el endpoint oficial del Ministerio.
 - La APK incorpora además el inventario nacional DATEX II de la DGT para radares fijos y de tramo, una semilla local complementaria de **1.219** fijos españoles Lufop/RadarDroid y **83** nodos de cámara OSM de Alicante; 75 disponen de corredor explícito utilizable con rumbo. Durante la marcha todo se consulta en local.
 - También incluye el inventario nacional DATEX II de **tramos INVIVE**. Esta base señala zonas de intensificación de vigilancia, no radares ni límites de velocidad. La detección cruza la carretera oficial con la referencia y geometría OSM local para reducir coincidencias con vías paralelas.
@@ -76,7 +79,9 @@ Las radios Android aftermarket no comparten un protocolo CAN universal. Un paque
   conservan su actualización automática cada 10 minutos. Cuando Android confirma Internet, la app también actualiza automáticamente las vías y radares OSM de la provincia detectada, sin repetir una descarga correcta antes de 24 horas y conservando la base previa si falla.
 - El botón **Actualizar todo** abre un modal secuencial con una barra por fuente y una fase final de
   consolidación. También puedes actualizar OSM Alicante, gasolineras, radares DGT, límites DGT o
-  INVIVE por separado. Cada fila conserva la fecha y hora de su última descarga correcta.
+  INVIVE por separado. Cada fila conserva la fecha y hora de su última descarga correcta. Si
+  Android termina el proceso durante una operación, la app conserva qué actualización estaba en
+  curso y la reanuda al volver a abrirla con Internet disponible.
 
 ### Herramientas, diagnóstico y actualizaciones
 
@@ -175,10 +180,10 @@ El proyecto está escrito en Java con APIs del framework Android. No usa depende
 
 - Precios de carburantes: servicio oficial español de [Precios de carburantes](https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/help).
 - Límites: datos `maxspeed` de OpenStreetMap mediante servicios Overpass públicos; consulta [NOTICE.md](NOTICE.md) para atribución y condiciones.
-- Radares fijos y de tramo: [publicación DATEX II oficial de la DGT](https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), guardada localmente. Los controles móviles no forman parte de esta función.
-- Límites oficiales: [feed TN-ITS semanal de límites de velocidad de la DGT](https://infocar.dgt.es/tnits/limitesVelocidad.xml). La APK instala la fotografía nacional disponible en la compilación y las actualizaciones incorporan sus cambios en SQLite sin borrar el historial.
+- Radares fijos y de tramo: [publicación DATEX II oficial de la DGT](https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml), guardada localmente. Los controles móviles no forman parte de esta función.
+- Límites oficiales: [feed TN-ITS semanal de límites de velocidad de la DGT](https://nap.dgt.es/tnits/limitesVelocidad.xml). La APK instala la fotografía nacional disponible en la compilación y las actualizaciones incorporan sus cambios en SQLite sin borrar el historial.
 - Zonas de vigilancia: [dataset INVIVE del NAP/DGT](https://nap.dgt.es/en/dataset/tramos-invive), guardado como zona de vigilancia y nunca como radar fijo.
-- Las coordenadas del coche no se envían al servicio de precios. El filtrado y las distancias se calculan en la radio. Una app de mapas recibe la coordenada destino solo después de pulsar una gasolinera.
+- Las coordenadas del coche no se envían al servicio de precios. El filtrado y las distancias se calculan en la radio. El geocodificador configurado por Android puede consultar una dirección para completar `DÓNDE ESTOY`; si no está disponible, se conserva la vía/provincia local. Una app de mapas recibe la posición actual al pulsar esa línea, o la coordenada destino al pulsar una gasolinera.
 - La app usa exclusivamente la red IP que Android publique: Wi‑Fi, Ethernet o Bluetooth PAN si el firmware de la radio realmente la crea.
 
 ## Estado del proyecto

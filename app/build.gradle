@@ -24,7 +24,7 @@ tasks.register('prepareDgtRadarSeed') {
         def output = dgtRadarAsset.get().asFile
         output.parentFile.mkdirs()
         try {
-            def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml').openConnection()
+            def connection = new URL('https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/radares/content.xml').openConnection()
             connection.connectTimeout = 15000
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
@@ -46,7 +46,7 @@ tasks.register('prepareDgtInviveSeed') {
         def output = dgtInviveAsset.get().asFile
         output.parentFile.mkdirs()
         try {
-            def connection = new URL('https://infocar.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml').openConnection()
+            def connection = new URL('https://nap.dgt.es/datex2/dgt/PredefinedLocationsPublication/tramos_invive/content.xml').openConnection()
             connection.connectTimeout = 15000
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
@@ -68,7 +68,7 @@ tasks.register('prepareDgtSpeedSeed') {
         def output = dgtSpeedAsset.get().asFile
         output.parentFile.mkdirs()
         try {
-            def connection = new URL('https://infocar.dgt.es/tnits/limitesVelocidad.xml').openConnection()
+            def connection = new URL('https://nap.dgt.es/tnits/limitesVelocidad.xml').openConnection()
             connection.connectTimeout = 15000
             connection.readTimeout = 70000
             connection.setRequestProperty('User-Agent', 'BMW-E87-iDrive build seed')
@@ -89,8 +89,8 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 66
-        versionName "1.26.6"
+        versionCode 76
+        versionName "1.28.0"
     }
 
     compileOptions {

@@ -203,7 +203,8 @@ public final class VehicleDataRepository implements VehicleDataProvider {
     public String diagnosticReport() {
         StringBuilder out = new StringBuilder(1_000);
         out.append("ORDENADOR DE A BORDO · PROCEDENCIA\n");
-        VehicleField[] fields = {VehicleField.SPEED, VehicleField.RANGE, VehicleField.CONSUMPTION,
+        VehicleField[] fields = {VehicleField.SPEED, VehicleField.RANGE, VehicleField.ODOMETER,
+                VehicleField.CONSUMPTION,
                 VehicleField.EXTERIOR_TEMPERATURE, VehicleField.ENGINE_TEMPERATURE,
                 VehicleField.GEAR, VehicleField.RPM};
         for (VehicleField field : fields) {

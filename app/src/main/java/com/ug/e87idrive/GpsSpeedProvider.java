@@ -28,6 +28,9 @@ public class GpsSpeedProvider implements LocationListener {
     private long timestamp, locationTimestamp;
     private long lastFixElapsedMs;
     private Location lastLocation;
+    /** Last two GPS fixes used for a stable fallback speed. Network positions are never used. */
+    private Location lastGpsSpeedLocation;
+    private String lastGpsSpeedProvider = "";
     private String lastLoggedState = "";
     private long lastLoggedAt;
     private boolean started;
@@ -190,24 +193,41 @@ public class GpsSpeedProvider implements LocationListener {
             logRejectedLocation(l, "menos fiable que la posición activa");
             return;
         }
-        Location previous = lastLocation;
         lastLocation = new Location(l);
         lastFixElapsedMs = candidateFixElapsed;
         locationTimestamp = Math.max(0L, System.currentTimeMillis() - ageMs);
         if(l.hasSpeed()) {
             kmh=Math.max(0d,(double)l.getSpeed()*3.6);
             timestamp=locationTimestamp;
-        } else if (LocationManager.GPS_PROVIDER.equals(l.getProvider()) && previous != null) {
-            long deltaMs = Math.abs(l.getTime() - previous.getTime());
-            if (deltaMs >= 500L && deltaMs <= 15_000L) {
-                double distance = previous.distanceTo(l);
-                double uncertainty = Math.max(3d, Math.max(
-                        previous.hasAccuracy() ? previous.getAccuracy() : 0f,
-                        l.hasAccuracy() ? l.getAccuracy() : 0f));
-                kmh = distance <= uncertainty ? 0d
-                        : Math.max(0d, distance / (deltaMs / 1000d) * 3.6d);
-                timestamp = locationTimestamp;
+            lastGpsSpeedLocation = null;
+            lastGpsSpeedProvider = "";
+        } else if (LocationManager.GPS_PROVIDER.equals(l.getProvider())) {
+            if (!LocationManager.GPS_PROVIDER.equals(lastGpsSpeedProvider)) {
+                // A network-to-GPS handover is not a valid speed sample: the two positions may
+                // come from different estimators and can be several hundred metres apart.
+                lastGpsSpeedLocation = null;
             }
+            Location speedPrevious = lastGpsSpeedLocation;
+            lastGpsSpeedLocation = new Location(l);
+            lastGpsSpeedProvider = LocationManager.GPS_PROVIDER;
+            if (speedPrevious != null && l.getTime() > speedPrevious.getTime()) {
+                long deltaMs = l.getTime() - speedPrevious.getTime();
+                // GNSS on the radio commonly publishes at 2 Hz. A half-second pair is enough
+                // for a fallback reading, while the accuracy threshold below still rejects
+                // stationary jitter.
+                if (deltaMs >= 500L && deltaMs <= 15_000L) {
+                    double distance = speedPrevious.distanceTo(l);
+                    double uncertainty = Math.max(3d, Math.max(
+                            speedPrevious.hasAccuracy() ? speedPrevious.getAccuracy() : 0f,
+                            l.hasAccuracy() ? l.getAccuracy() : 0f) * .35d);
+                    kmh = distance <= uncertainty ? 0d
+                            : Math.min(300d, Math.max(0d, distance / (deltaMs / 1000d) * 3.6d));
+                    timestamp = locationTimestamp;
+                }
+            }
+        } else {
+            lastGpsSpeedLocation = null;
+            lastGpsSpeedProvider = "";
         }
         if (System.currentTimeMillis() - timestamp > MAX_SPEED_AGE_MS) kmh = null;
         if(listener!=null) listener.onLocation(new Location(l), freshSpeed());

@@ -386,7 +386,9 @@ public final class UsbDiagnosticRecorder {
     }
 
     private String writeRuntimeLog(Uri directory, String timestamp) {
-        java.util.List<File> parts = AppSessionLog.sessionFiles();
+        // Include the few preserved prior sessions too: a crash/restart must not make the
+        // driving evidence disappear before the user can export it to USB.
+        java.util.List<File> parts = AppSessionLog.recoverableSessionFiles();
         if (parts.isEmpty()) return "";
         int exported = 0;
         try {

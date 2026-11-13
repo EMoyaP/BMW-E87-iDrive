@@ -41,7 +41,7 @@ import java.util.TimeZone;
 final class DgtSpeedRepository {
     interface UpdateCallback { void onFinished(UpdateResult result); }
 
-    static final String ENDPOINT = "https://infocar.dgt.es/tnits/limitesVelocidad.xml";
+    static final String ENDPOINT = "https://nap.dgt.es/tnits/limitesVelocidad.xml";
     private static final String XML_ASSET = "e87_dgt_speed_limits_spain.xml";
     private static final String TSV_ASSET = "e87_dgt_speed_limits_weekly_seed.tsv";
     private static final String TAG = "LÍMITES DGT";
@@ -53,8 +53,8 @@ final class DgtSpeedRepository {
     private static final String KEY_LAST_DATASET_CREATED_AT = "last_dataset_created_at";
 
     static boolean shouldApplyChange(long existingChangedAt, long incomingChangedAt) {
-        return existingChangedAt <= 0L || incomingChangedAt <= 0L
-                || incomingChangedAt >= existingChangedAt;
+        if (incomingChangedAt <= 0L) return existingChangedAt <= 0L;
+        return existingChangedAt <= 0L || incomingChangedAt >= existingChangedAt;
     }
 
     private final Context context;
@@ -131,7 +131,7 @@ final class DgtSpeedRepository {
         double bestDistance = Double.MAX_VALUE;
         for (Record record : candidates) {
             if (!road.equals(normalizeRoad(record.roadRef)) || record.speedKmh <= 0) continue;
-            if (!directionApplies(record, location, roadMatch)) continue;
+            if (!directionApplies(record.direction)) continue;
             double distance = nearestDistance(location.getLatitude(), location.getLongitude(), record.geometry);
             if (distance > radius || distance >= bestDistance) continue;
             best = record;
@@ -156,6 +156,11 @@ final class DgtSpeedRepository {
                 + "prioridad=DGT confirmado > OSM maxspeed > recomendación por clase > sin dato\n";
     }
 
+    String inventorySummary() {
+        return "Límites DGT: " + database.count("ACTIVE") + " activos · "
+                + database.count("REMOVED") + " retirados";
+    }
+
     private void download(Network network, UpdateCallback callback) {
         HttpURLConnection connection = null;
         boolean success = false;
@@ -176,6 +181,9 @@ final class DgtSpeedRepository {
             preferences.edit().putLong("last_checked", checked).apply();
             if (response == HttpURLConnection.HTTP_NOT_MODIFIED) {
                 success = true;
+                // A validated 304 is a successful daily check.  Retain the local weekly
+                // history and prevent the automatic updater from retrying every 30 minutes.
+                preferences.edit().putLong("last_success_national", checked).apply();
                 message = "DGT nacional sin cambios (304); se conserva la base local";
             } else {
                 if (response < 200 || response >= 300) throw new IOException("HTTP " + response);
@@ -184,6 +192,9 @@ final class DgtSpeedRepository {
                     dataset = parseXml(input);
                 }
                 if (dataset.records.isEmpty()) throw new IOException("feed DGT vacío");
+                if (dataset.datasetCreatedAt <= 0L) {
+                    throw new IOException("feed DGT sin datasetCreationTime válido");
+                }
                 int applied = database.apply(dataset.records, dataset.datasetCreatedAt,
                         "DGT_WEEKLY_DELTA");
                 SharedPreferences.Editor editor = preferences.edit()
@@ -225,7 +236,9 @@ final class DgtSpeedRepository {
             int imported = 0;
             try (InputStream input = context.getAssets().open(XML_ASSET)) {
                 Dataset dataset = parseXml(input);
-                if (dataset.records.isEmpty()) throw new IOException("semilla XML vacía");
+                if (dataset.records.isEmpty() || dataset.datasetCreatedAt <= 0L) {
+                    throw new IOException("semilla XML sin fecha válida o vacía");
+                }
                 long installedDatasetAt = preferences.getLong(KEY_LAST_DATASET_CREATED_AT, 0L);
                 if (activeBefore > 0 && dataset.datasetCreatedAt > 0L
                         && dataset.datasetCreatedAt <= installedDatasetAt) {
@@ -249,10 +262,15 @@ final class DgtSpeedRepository {
                 }
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                         context.getAssets().open(TSV_ASSET), StandardCharsets.UTF_8))) {
-                    ArrayList<FeatureRecord> records = parseTsv(reader);
-                    if (records.isEmpty()) throw new IOException("semilla TSV vacía");
-                    imported = database.apply(records, 0L, "DGT_WEEKLY_SEED");
+                    Dataset dataset = parseTsv(reader);
+                    if (dataset.records.isEmpty() || dataset.datasetCreatedAt <= 0L) {
+                        throw new IOException("semilla TSV sin fecha o vacía");
+                    }
+                    imported = database.apply(dataset.records, dataset.datasetCreatedAt,
+                            "DGT_WEEKLY_SEED");
                     seedStatus = imported + " cambios DGT fusionados · semilla TSV semanal parcial";
+                    preferences.edit().putLong(KEY_LAST_DATASET_CREATED_AT, Math.max(
+                            dataset.datasetCreatedAt, preferences.getLong(KEY_LAST_DATASET_CREATED_AT, 0L))).apply();
                 } catch (Exception tsvError) {
                     seedStatus = "Sin semilla DGT local · " + tsvError.getClass().getSimpleName();
                     AppSessionLog.event(TAG, "Semilla DGT fallida · XML="
@@ -299,18 +317,16 @@ final class DgtSpeedRepository {
         main.post(() -> { if (callback != null) callback.onFinished(new UpdateResult(success, message)); });
     }
 
-    private static boolean directionApplies(Record record, Location location,
-                                            SpeedLimitRepository.Match roadMatch) {
-        String direction = record.direction == null ? "" : record.direction.toLowerCase(Locale.ROOT);
+    /**
+     * TN-ITS may identify a sign by increasing/decreasing kilometre point.  OSM way order has
+     * no contractual relationship with that kilometre direction, so translating it to an OSM
+     * bearing can select the opposite carriageway.  Until the feed provides a verified PK-to-
+     * geometry relation, keep directional records out of the exact layer.  Bidirectional signs
+     * remain safe to use and OSM is the fallback for the other cases.
+     */
+    static boolean directionApplies(String directionValue) {
+        String direction = directionValue == null ? "" : directionValue.toLowerCase(Locale.ROOT);
         if (direction.isEmpty() || direction.contains("both")) return true;
-        if (direction.contains("unknown")) return false;
-        if (!location.hasBearing()) return false;
-        double roadBearing = roadMatch != null && Double.isFinite(roadMatch.roadBearingDegrees)
-                ? roadMatch.roadBearingDegrees : geometryBearing(record.geometry);
-        if (!Double.isFinite(roadBearing)) return false;
-        double difference = angularDifference(location.getBearing(), roadBearing);
-        if (direction.contains("increasing")) return difference <= 45d;
-        if (direction.contains("decreasing")) return Math.abs(180d - difference) <= 45d;
         return false;
     }
 
@@ -406,21 +422,27 @@ final class DgtSpeedRepository {
         return new Dataset(records, datasetCreatedAt);
     }
 
-    private static ArrayList<FeatureRecord> parseTsv(BufferedReader reader) throws IOException {
+    private static Dataset parseTsv(BufferedReader reader) throws IOException {
         ArrayList<FeatureRecord> result = new ArrayList<>();
+        long datasetCreatedAt = 0L;
         String line;
         while ((line = reader.readLine()) != null) {
-            if (line.trim().isEmpty() || line.charAt(0) == '#') continue;
+            if (line.trim().isEmpty()) continue;
+            if (line.startsWith("# datasetCreationTime=")) {
+                datasetCreatedAt = parseTime(line.substring("# datasetCreationTime=".length()).trim());
+                continue;
+            }
+            if (line.charAt(0) == '#') continue;
             String[] fields = line.split("\\|", -1);
             if (fields.length < 12) continue;
             try {
                 result.add(new FeatureRecord(fields[0], fields[1], fields[2], fields[3], fields[4],
                         fields[5], parseDouble(fields[6]), parseDouble(fields[7]),
                         (int) Math.round(parseDouble(fields[8])), fields[9], fields[10],
-                        fields[11], System.currentTimeMillis()));
+                        fields[11], datasetCreatedAt));
             } catch (Exception ignored) { }
         }
-        return result;
+        return new Dataset(result, datasetCreatedAt);
     }
 
     private static String local(String name) {
