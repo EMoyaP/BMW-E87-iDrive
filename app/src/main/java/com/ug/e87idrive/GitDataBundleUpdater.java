@@ -35,6 +35,9 @@ final class GitDataBundleUpdater {
             + "BMW-E87-iDrive/releases?per_page=12";
     private static final int MAX_MANIFEST_BYTES = 1_000_000;
     private static final int MAX_ROAD_FILE_BYTES = 64 * 1024 * 1024;
+    /** The immediate and periodic Android jobs may become eligible at the same time. Keep their
+     * shared staging directory and the transactional SQLite activation strictly single-writer. */
+    private static final Object INSTALL_LOCK = new Object();
     private final Context context;
     private final SharedPreferences preferences;
 
@@ -44,6 +47,12 @@ final class GitDataBundleUpdater {
     }
 
     Result checkAndInstall(SpeedLimitRepository speedLimits, Progress progress) {
+        synchronized (INSTALL_LOCK) {
+            return checkAndInstallLocked(speedLimits, progress);
+        }
+    }
+
+    private Result checkAndInstallLocked(SpeedLimitRepository speedLimits, Progress progress) {
         File staging = new File(context.getCacheDir(), "e87-data-bundle-staging");
         try {
             progress.update(5, "Consultando publicaciones de datos…");

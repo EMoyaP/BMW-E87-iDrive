@@ -3,9 +3,12 @@ package com.ug.e87idrive;
 import android.app.job.JobParameters;
 import android.app.job.JobService;
 import android.location.Location;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Updates fuel, verified Git cartography and the official DGT feeds without an Activity. */
 public final class AutomaticOnlineUpdateJobService extends JobService {
+    /** NOW_JOB_ID and PERIODIC_JOB_ID can be dispatched together after connectivity returns. */
+    private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private volatile boolean stopped;
     private FuelStationProvider fuel;
     private SpeedLimitRepository speedLimits;
@@ -14,10 +17,7 @@ public final class AutomaticOnlineUpdateJobService extends JobService {
     private InviveRepository invive;
 
     @Override public boolean onStartJob(JobParameters parameters) {
-        if (UpdateProgressStore.isRunning(this)) {
-            jobFinished(parameters, true);
-            return true;
-        }
+        if (UpdateProgressStore.isRunning(this) || !RUNNING.compareAndSet(false, true)) return false;
         stopped = false;
         Location location = LastKnownLocationStore.read(this);
         AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.FUEL,
@@ -117,6 +117,7 @@ public final class AutomaticOnlineUpdateJobService extends JobService {
         if (dgtSpeeds != null) { dgtSpeeds.close(); dgtSpeeds = null; }
         if (radars != null) { radars.close(); radars = null; }
         if (invive != null) { invive.close(); invive = null; }
+        RUNNING.set(false);
         if (!stopped) jobFinished(parameters, retry);
     }
 

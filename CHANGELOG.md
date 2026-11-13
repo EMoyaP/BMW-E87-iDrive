@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 1.28.1 — 13/11/2026
+
+- Los trabajos inmediato y periódico de actualización ya no pueden ejecutar simultáneamente el
+  mismo lote Git ni borrar archivos de la carpeta temporal del otro. La descarga de las cinco
+  provincias queda serializada y conserva la sustitución transaccional de SQLite.
+- Se excluyen explícitamente del control de versiones los archivos locales
+  `updatebmwtoken.txt` y `updategittoken.txt`; ninguna clave se incorpora a la APK ni al repositorio.
+
 ## 1.28.0 — 12/11/2026
 
 - La vista de conducción representa radares con sentido verificado, gasolineras cercanas y el

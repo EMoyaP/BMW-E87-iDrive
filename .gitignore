@@ -16,6 +16,8 @@ captures/
 keystore.properties
 signing.properties
 secrets.properties
+updatebmwtoken.txt
+updategittoken.txt
 .env
 .env.*
 
