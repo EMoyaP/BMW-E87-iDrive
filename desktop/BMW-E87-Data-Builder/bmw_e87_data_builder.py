@@ -18,6 +18,21 @@ def app_dir() -> Path:
     return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 
 
+def discover_local_token(project: Path, executable_dir: Path | None = None) -> str:
+    """Read the user's optional local GitHub token without ever persisting it in settings."""
+    base = executable_dir or app_dir()
+    candidates = [base / "updategittoken.txt", project / "updategittoken.txt",
+                  project.parent / "updategittoken.txt"]
+    for candidate in candidates:
+        try:
+            value = candidate.read_text(encoding="utf-8").strip()
+            if 20 <= len(value) <= 200 and "\n" not in value and "\r" not in value:
+                return value
+        except (OSError, UnicodeError):
+            pass
+    return ""
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -98,9 +113,11 @@ class App(tk.Tk):
             self.lufop.set(data.get("lufop", ""))
             self.publish.set(bool(data.get("publish", True)))
         except Exception:
-            candidate = app_dir().parents[1] if len(app_dir().parents) > 1 else Path.cwd()
+            candidate = app_dir().parent
             if (candidate / "app" / "src" / "main" / "assets").is_dir():
                 self.project.set(str(candidate))
+        if not self.token.get().strip() and self.project.get().strip():
+            self.token.set(discover_local_token(Path(self.project.get().strip())))
 
     def _save_settings(self):
         data = {"project": self.project.get(), "repository": self.repository.get(),

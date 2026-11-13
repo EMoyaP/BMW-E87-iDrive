@@ -84,23 +84,66 @@ class DataBuilder:
         self.stage = settings.project / "build" / "data-builder" / self.version
         self.assets = settings.project / "app" / "src" / "main" / "assets"
         self.files: list[dict] = []
+        self._build_lock = None
 
     def run(self) -> Path:
-        self._phase("Preparación", "RUNNING", "Creando zona de trabajo aislada")
-        if not self.assets.is_dir():
-            raise BuildError("No se encuentra app/src/main/assets en el proyecto seleccionado")
-        self.stage.mkdir(parents=True, exist_ok=False)
-        self._phase("Preparación", "OK", str(self.stage))
-        self._download_dgt()
-        self._build_osm()
-        self._prepare_lufop()
-        manifest = self._write_manifest()
-        self._validate_bundle(manifest)
-        if self.settings.publish:
-            self._publish(manifest)
-        else:
-            self._phase("GitHub", "SKIPPED", "Publicación desactivada; paquete validado localmente")
-        return manifest
+        self._acquire_build_lock()
+        try:
+            self._phase("Preparación", "RUNNING", "Creando zona de trabajo aislada")
+            if not self.assets.is_dir():
+                raise BuildError("No se encuentra app/src/main/assets en el proyecto seleccionado")
+            self.stage.mkdir(parents=True, exist_ok=False)
+            self._phase("Preparación", "OK", str(self.stage))
+            self._download_dgt()
+            self._build_osm()
+            self._prepare_lufop()
+            manifest = self._write_manifest()
+            self._validate_bundle(manifest)
+            if self.settings.publish:
+                self._publish(manifest)
+            else:
+                self._phase("GitHub", "SKIPPED", "Publicación desactivada; paquete validado localmente")
+            return manifest
+        finally:
+            self._release_build_lock()
+
+    def _acquire_build_lock(self) -> None:
+        lock_path = self.settings.project / "build" / "data-builder.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+b")
+        try:
+            if lock_path.stat().st_size == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError) as error:
+            handle.close()
+            raise BuildError("Ya hay otra actualización BMW en ejecución. "
+                             "Espera a que termine antes de volver a pulsar el botón.") from error
+        self._build_lock = handle
+
+    def _release_build_lock(self) -> None:
+        handle, self._build_lock = self._build_lock, None
+        if handle is None:
+            return
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except (OSError, IOError):
+            pass
+        finally:
+            handle.close()
 
     def _phase(self, phase: str, state: str, detail: str) -> None:
         self.status(phase, state, detail)
@@ -221,10 +264,11 @@ out body geom;'''
         self._phase(f"OSM · {label}", "RUNNING",
                     f"Consulta provincial rechazada; recuperando {len(tiles)} teselas")
         merged = {}
-        # Persist each completed tile inside the staging directory. If Windows, the network or
+        # Persist each completed tile in a stable project cache. If Windows, the network or
         # Overpass interrupts a long province, pressing the button again resumes from the last
         # validated tile instead of repeating hours of public API traffic.
-        cache_dir = self.stage / ".overpass-cache" / re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+        cache_dir = (self.settings.project / "build" / "data-builder-cache"
+                     / re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-"))
         cache_dir.mkdir(parents=True, exist_ok=True)
         pending = []
         done = 0
@@ -254,8 +298,16 @@ out body geom;'''
             for future in as_completed(futures):
                 document = future.result()
                 _, cached = futures[future]
-                with gzip.open(cached, "wt", encoding="utf-8") as output:
-                    json.dump(document, output, ensure_ascii=False, separators=(",", ":"))
+                # A process interruption must leave either the previous valid gzip or no file,
+                # never a truncated cache entry that poisons the next run.
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                temporary = cached.with_name(f".{cached.name}.{os.getpid()}.tmp")
+                try:
+                    with gzip.open(temporary, "wt", encoding="utf-8") as output:
+                        json.dump(document, output, ensure_ascii=False, separators=(",", ":"))
+                    os.replace(temporary, cached)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 for element in document["elements"]:
                     key = (element.get("type"), element.get("id"))
                     if key[0] and key[1] is not None:

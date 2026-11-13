@@ -18,6 +18,8 @@ signing.properties
 secrets.properties
 updatebmwtoken.txt
 updategittoken.txt
+BMW-E87-Data-Builder.settings.json
+__pycache__/
 .env
 .env.*
 

@@ -20,5 +20,6 @@ python -m pip install pyinstaller
 El paquete local queda en `build/data-builder/<versión>/`, incluso si GitHub falla. La aplicación
 no modifica las semillas del proyecto ni los datos ya instalados en la radio. Las consultas OSM
 se dividen por teselas y cada respuesta completa se conserva temporalmente en
-`.overpass-cache`; si Overpass, Windows o la red interrumpen una provincia, el siguiente intento
-reanuda las teselas validadas. La caché se elimina automáticamente cuando la provincia termina.
+`build/data-builder-cache`; si Overpass, Windows o la red interrumpen una provincia, el siguiente
+intento reanuda las teselas validadas. La caché se elimina automáticamente cuando la provincia
+termina. Un bloqueo del proyecto impide ejecutar dos constructores simultáneos sobre esa caché.

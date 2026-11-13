@@ -7,6 +7,9 @@
   provincias queda serializada y conserva la sustitución transaccional de SQLite.
 - Se excluyen explícitamente del control de versiones los archivos locales
   `updatebmwtoken.txt` y `updategittoken.txt`; ninguna clave se incorpora a la APK ni al repositorio.
+- El constructor portable conserva una caché Overpass estable entre intentos, escribe cada tesela
+  de forma atómica y bloquea una segunda instancia para impedir que desaparezcan fragmentos en
+  uso. También detecta el token local externo sin guardarlo ni incluirlo en el ejecutable.
 
 ## 1.28.0 — 12/11/2026
 

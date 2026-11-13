@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from builder_core import DataBuilder, OVERPASS_ENDPOINTS
+from builder_core import BuildError, BuildSettings, DataBuilder, OVERPASS_ENDPOINTS
+from bmw_e87_data_builder import discover_local_token
 
 
 class BuilderCoreTest(unittest.TestCase):
@@ -51,9 +52,10 @@ class BuilderCoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             builder = DataBuilder.__new__(DataBuilder)
             builder.stage = Path(folder)
+            builder.settings = BuildSettings(project=Path(folder), repository="test/repo")
             builder.status = lambda *args: None
             builder._tiles = lambda bounds: iter([(0, 0, 1, 1), (1, 1, 2, 2)])
-            cache = builder.stage / ".overpass-cache" / "test"
+            cache = Path(folder) / "build" / "data-builder-cache" / "test"
             cache.mkdir(parents=True)
             with gzip.open(cache / "tile-000.json.gz", "wt", encoding="utf-8") as output:
                 json.dump({"elements": [{"type": "node", "id": 1}]}, output)
@@ -73,6 +75,28 @@ class BuilderCoreTest(unittest.TestCase):
             self.assertEqual([1], calls)
             self.assertEqual({1, 2}, {item["id"] for item in result["elements"]})
             self.assertFalse(cache.exists())
+
+    def test_second_builder_cannot_share_working_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = BuildSettings(project=Path(folder), repository="test/repo")
+            first = DataBuilder(settings)
+            second = DataBuilder(settings)
+            first._acquire_build_lock()
+            try:
+                with self.assertRaises(BuildError):
+                    second._acquire_build_lock()
+            finally:
+                first._release_build_lock()
+            second._acquire_build_lock()
+            second._release_build_lock()
+
+    def test_local_token_is_discovered_outside_project(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder) / "BMW_E87_iDrive_Project"
+            project.mkdir()
+            token = "github_pat_" + "x" * 40
+            (project.parent / "updategittoken.txt").write_text(token, encoding="utf-8")
+            self.assertEqual(token, discover_local_token(project, project / "portable"))
 
 
 if __name__ == "__main__":
