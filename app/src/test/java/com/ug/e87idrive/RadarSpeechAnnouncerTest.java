@@ -44,4 +44,12 @@ public class RadarSpeechAnnouncerTest {
         assertFalse(RadarSpeechAnnouncer.shouldIssueReminder(approaching, true));
         assertFalse(RadarSpeechAnnouncer.shouldIssueReminder(pastPoint, false));
     }
+
+    @Test public void explicitCameraDirectionRejectsOppositeCarriageway() {
+        assertTrue(RadarRepository.wrongExplicitDirection(190f, "11"));
+        assertTrue(RadarRepository.wrongExplicitDirection(190f, "330"));
+        assertFalse(RadarRepository.wrongExplicitDirection(190f, "190"));
+        assertFalse(RadarRepository.wrongExplicitDirection(185f, "S"));
+        assertFalse(RadarRepository.wrongExplicitDirection(190f, "CRECIENTE"));
+    }
 }

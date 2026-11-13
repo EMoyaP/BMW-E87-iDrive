@@ -23,6 +23,13 @@ public class DataUpdatePolicyTest {
                 12f, 5f, 500L));
     }
 
+    @Test public void unreliableNativeBearingIsDerivedInstead() {
+        assertFalse(GpsSpeedProvider.trustNativeBearing(true, true, 30f));
+        assertTrue(GpsSpeedProvider.trustNativeBearing(true, true, 8f));
+        assertTrue(GpsSpeedProvider.trustNativeBearing(true, false, 0f));
+        assertFalse(GpsSpeedProvider.trustNativeBearing(false, false, 0f));
+    }
+
     @Test public void onlyKnownRoadSeedSchemasAreAccepted() {
         assertTrue(SpeedLimitRepository.compatibleSeedHeader(
                 "# schema=e87-road-class-seed-v5 source=OpenStreetMap"));

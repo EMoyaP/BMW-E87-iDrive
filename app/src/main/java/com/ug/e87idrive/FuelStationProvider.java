@@ -214,8 +214,13 @@ public final class FuelStationProvider {
 
     /** Nearby cached stations for the offline driving map. No network request is made here. */
     public synchronized List<Station> mapStations(Location current, int maximum) {
+        return mapStations(current, maximum, Math.min(getRadiusKm(), 12));
+    }
+
+    /** Fixed-radius variant used by driving mode, independent from the resting-screen setting. */
+    public synchronized List<Station> mapStations(Location current, int maximum, int radiusKm) {
         if (cache == null || current == null || maximum <= 0) return Collections.emptyList();
-        int radiusKm = Math.min(getRadiusKm(), 12);
+        radiusKm = Math.max(1, Math.min(radiusKm, 12));
         ArrayList<Station> result = new ArrayList<>();
         for (Station original : cache.stations) {
             Station candidate = atCurrentDistance(original, current);

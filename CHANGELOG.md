@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## 1.28.2 — 13/11/2026
+
+- La gasolinera mostrada en conducción es siempre la más cercana dentro de 7 km y utiliza el
+  precio oficial de diésel. El bloque inferior derecho separa en dos líneas nombre y
+  `DIÉSEL · precio · distancia`; se muestra verde si también es la más barata del radio y rojo
+  si existe otra más económica.
+- Los radares cercanos se pintan en su coordenada. Cuando DGT/OSM/Lufop aportan un sentido
+  inequívoco, un cono rojo translúcido representa a escala unos 100 m desde la cámara en el
+  sentido de circulación controlado;
+  un registro DGT incompleto puede heredar solo límite/sentido de una instalación coincidente.
+  Un rumbo explícito contrario descarta el aviso lateral aunque el vehículo se acerque físicamente
+  al radar de la otra calzada.
+- Se retiran los botones decorativos de zoom del mapa. El rumbo GPS se deriva entre posiciones
+  únicamente cuando Android publica un rumbo ausente o impreciso, conservando intacto el rumbo
+  fiable de la radio.
+- TomTom conserva en una SQLite acotada el conocimiento estático ya consultado de segmentos,
+  nombres/referencias y límites. No caduca por tiempo y se sustituye al recibir un dato nuevo;
+  tráfico, obras, cierres, retenciones e incidencias nunca se guardan como conocimiento estable.
+- La simulación Mercadona Gran Alacant → Carrefour Santa Pola valida 80 km/h, radar N-332 con
+  trayectoria confirmada, cono orientado y el bloque de gasolinera sin recortes.
+
 ## 1.28.1 — 13/11/2026
 
 - Los trabajos inmediato y periódico de actualización ya no pueden ejecutar simultáneamente el

@@ -31,6 +31,10 @@ public class GpsSpeedProvider implements LocationListener {
     /** Last two GPS fixes used for a stable fallback speed. Network positions are never used. */
     private Location lastGpsSpeedLocation;
     private String lastGpsSpeedProvider = "";
+    /** GPS anchor used only when the receiver publishes no usable course/bearing. */
+    private Location lastGpsBearingLocation;
+    private Float derivedBearing;
+    private long derivedBearingAt;
     private String lastLoggedState = "";
     private long lastLoggedAt;
     private boolean started;
@@ -193,33 +197,34 @@ public class GpsSpeedProvider implements LocationListener {
             logRejectedLocation(l, "menos fiable que la posición activa");
             return;
         }
-        lastLocation = new Location(l);
+        Location accepted = withReliableBearing(l);
+        lastLocation = new Location(accepted);
         lastFixElapsedMs = candidateFixElapsed;
         locationTimestamp = Math.max(0L, System.currentTimeMillis() - ageMs);
-        if(l.hasSpeed()) {
-            kmh=Math.max(0d,(double)l.getSpeed()*3.6);
+        if(accepted.hasSpeed()) {
+            kmh=Math.max(0d,(double)accepted.getSpeed()*3.6);
             timestamp=locationTimestamp;
             lastGpsSpeedLocation = null;
             lastGpsSpeedProvider = "";
-        } else if (LocationManager.GPS_PROVIDER.equals(l.getProvider())) {
+        } else if (LocationManager.GPS_PROVIDER.equals(accepted.getProvider())) {
             if (!LocationManager.GPS_PROVIDER.equals(lastGpsSpeedProvider)) {
                 // A network-to-GPS handover is not a valid speed sample: the two positions may
                 // come from different estimators and can be several hundred metres apart.
                 lastGpsSpeedLocation = null;
             }
             Location speedPrevious = lastGpsSpeedLocation;
-            lastGpsSpeedLocation = new Location(l);
+            lastGpsSpeedLocation = new Location(accepted);
             lastGpsSpeedProvider = LocationManager.GPS_PROVIDER;
-            if (speedPrevious != null && l.getTime() > speedPrevious.getTime()) {
-                long deltaMs = l.getTime() - speedPrevious.getTime();
+            if (speedPrevious != null && accepted.getTime() > speedPrevious.getTime()) {
+                long deltaMs = accepted.getTime() - speedPrevious.getTime();
                 // GNSS on the radio commonly publishes at 2 Hz. A half-second pair is enough
                 // for a fallback reading, while the accuracy threshold below still rejects
                 // stationary jitter.
                 if (deltaMs >= 500L && deltaMs <= 15_000L) {
-                    double distance = speedPrevious.distanceTo(l);
+                    double distance = speedPrevious.distanceTo(accepted);
                     double uncertainty = Math.max(3d, Math.max(
                             speedPrevious.hasAccuracy() ? speedPrevious.getAccuracy() : 0f,
-                            l.hasAccuracy() ? l.getAccuracy() : 0f) * .35d);
+                            accepted.hasAccuracy() ? accepted.getAccuracy() : 0f) * .35d);
                     kmh = distance <= uncertainty ? 0d
                             : Math.min(300d, Math.max(0d, distance / (deltaMs / 1000d) * 3.6d));
                     timestamp = locationTimestamp;
@@ -230,8 +235,60 @@ public class GpsSpeedProvider implements LocationListener {
             lastGpsSpeedProvider = "";
         }
         if (System.currentTimeMillis() - timestamp > MAX_SPEED_AGE_MS) kmh = null;
-        if(listener!=null) listener.onLocation(new Location(l), freshSpeed());
-        logLocationState(l, false);
+        if(listener!=null) listener.onLocation(new Location(accepted), freshSpeed());
+        logLocationState(accepted, false);
+    }
+
+    /**
+     * Keep a trustworthy receiver course untouched. If Android reports no useful bearing,
+     * derive it from two consecutive GPS fixes separated by more than their uncertainty.
+     */
+    private Location withReliableBearing(Location source) {
+        Location result = new Location(source);
+        if (!LocationManager.GPS_PROVIDER.equals(source.getProvider())) {
+            lastGpsBearingLocation = null;
+            derivedBearing = null;
+            derivedBearingAt = 0L;
+            return result;
+        }
+        boolean hasBearingAccuracy = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && source.hasBearingAccuracy();
+        float bearingAccuracy = hasBearingAccuracy ? source.getBearingAccuracyDegrees() : 0f;
+        if (trustNativeBearing(source.hasBearing(), hasBearingAccuracy, bearingAccuracy)) {
+            lastGpsBearingLocation = new Location(source);
+            derivedBearing = source.getBearing();
+            derivedBearingAt = SystemClock.elapsedRealtime();
+            return result;
+        }
+        Location previous = lastGpsBearingLocation;
+        lastGpsBearingLocation = new Location(source);
+        long now = SystemClock.elapsedRealtime();
+        if (previous != null && source.getTime() > previous.getTime()) {
+            long deltaMs = source.getTime() - previous.getTime();
+            float accuracy = Math.max(previous.hasAccuracy() ? previous.getAccuracy() : 0f,
+                    source.hasAccuracy() ? source.getAccuracy() : 0f);
+            float distance = previous.distanceTo(source);
+            if (deltaMs >= 300L && deltaMs <= 15_000L
+                    && distance >= Math.max(6f, accuracy * .70f)) {
+                derivedBearing = previous.bearingTo(source);
+                derivedBearingAt = now;
+            }
+        }
+        if (derivedBearing != null && now - derivedBearingAt <= 8_000L) {
+            result.setBearing(derivedBearing);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                result.setBearingAccuracyDegrees(15f);
+            }
+        } else {
+            result.removeBearing();
+        }
+        return result;
+    }
+
+    static boolean trustNativeBearing(boolean hasBearing, boolean hasBearingAccuracy,
+                                      float bearingAccuracyDegrees) {
+        return hasBearing && (!hasBearingAccuracy || Float.isFinite(bearingAccuracyDegrees)
+                && bearingAccuracyDegrees <= 20f);
     }
 
     private Double freshSpeed() {
@@ -243,12 +300,24 @@ public class GpsSpeedProvider implements LocationListener {
         if (lastLocation == null || !isFresh(lastFixElapsedMs, MAX_LOCATION_AGE_MS)) return true;
         long deltaMs = candidateFixElapsed - lastFixElapsedMs;
         if (deltaMs < -1_000L) return false;
+        // Some Android location implementations (and the standard emulator) reuse the same
+        // elapsedRealtime value for injected fixes. A newer wall-clock fix from the very same
+        // provider is still valid when its coordinates really changed. Network-to-GPS handover
+        // remains governed by the stricter provider/accuracy policy below.
+        if (deltaMs <= 0L && safeEquals(candidate.getProvider(), lastLocation.getProvider())
+                && candidate.getTime() > lastLocation.getTime()
+                && (candidate.getLatitude() != lastLocation.getLatitude()
+                || candidate.getLongitude() != lastLocation.getLongitude())) return true;
         float candidateAccuracy = candidate.hasAccuracy() ? candidate.getAccuracy() : Float.MAX_VALUE;
         float currentAccuracy = lastLocation.hasAccuracy() ? lastLocation.getAccuracy() : Float.MAX_VALUE;
         boolean currentGps = LocationManager.GPS_PROVIDER.equals(lastLocation.getProvider());
         boolean candidateGps = LocationManager.GPS_PROVIDER.equals(candidate.getProvider());
         return preferCandidate(deltaMs, currentGps, candidateGps, currentAccuracy,
                 candidateAccuracy, nowElapsed - lastFixElapsedMs);
+    }
+
+    private static boolean safeEquals(String first, String second) {
+        return first == null ? second == null : first.equals(second);
     }
 
     static boolean preferCandidate(long deltaMs, boolean currentGps, boolean candidateGps,

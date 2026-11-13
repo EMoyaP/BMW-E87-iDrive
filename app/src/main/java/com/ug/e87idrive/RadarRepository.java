@@ -220,6 +220,14 @@ final class RadarRepository {
         // Remember all local candidates. On a parallel road the nearest camera may be behind us;
         // the next fix must still be able to confirm another, valid camera ahead.
         rememberCandidates(location, candidates);
+        if (evidence.wrongDirection) {
+            trackedId = null;
+            trackedDistance = Double.NaN;
+            AppSessionLog.sampledEvent("radar-opposite-" + record.id, TAG,
+                    "Candidato descartado por sentido contrario · " + record.road + " · "
+                            + evidence.detail, 5_000L);
+            return null;
+        }
         boolean fixedCameraPassage = isFixedCameraPassage(record, tolerance);
         if (evidence.opening) {
             if (fixedCameraPassage) {
@@ -291,7 +299,8 @@ final class RadarRepository {
         for (Record candidate : candidates) {
             DirectionEvidence evidence = directionEvidence(location, candidate, speedKmh, tolerance);
             boolean passage = isFixedCameraPassage(candidate, tolerance);
-            if (evidence.opening || (!evidence.confirmed && !passage)) continue;
+            if (evidence.wrongDirection || evidence.opening
+                    || (!evidence.confirmed && !passage)) continue;
             if (candidate.id.equals(trackedId)) return candidate;
             selected = candidate;
             break;
@@ -662,6 +671,14 @@ final class RadarRepository {
                 : Math.max(0d, speedKmh);
         if (location.hasSpeed()) effectiveSpeed = Math.max(effectiveSpeed, location.getSpeed() * 3.6d);
         boolean moving = effectiveSpeed >= 9d;
+        Float enforcementBearing = explicitDirectionBearing(record.direction);
+        if (moving && location.hasBearing() && enforcementBearing != null) {
+            double difference = angularDifference(location.getBearing(), enforcementBearing);
+            if (difference > 60d) return new DirectionEvidence(false, false, true,
+                    "rumbo GPS=" + Math.round(location.getBearing()) + "° · radar="
+                            + Math.round(enforcementBearing) + "° · Δ="
+                            + Math.round(difference) + "°");
+        }
         boolean heading = false;
         double headingDifference = Double.NaN;
         Location target = nearestPoint(location, record.points);
@@ -691,7 +708,26 @@ final class RadarRepository {
         else if (Double.isFinite(headingDifference)) detail = "rumbo no coincide ("
                 + Math.round(headingDifference) + "°)";
         else detail = "sin rumbo GPS";
-        return new DirectionEvidence(heading || closing, opening, detail);
+        return new DirectionEvidence(heading || closing, opening, false, detail);
+    }
+
+    static boolean wrongExplicitDirection(float vehicleBearing, String direction) {
+        Float enforcement = explicitDirectionBearing(direction);
+        return enforcement != null && angularDifference(vehicleBearing, enforcement) > 60d;
+    }
+
+    private static Float explicitDirectionBearing(String direction) {
+        String normalized = direction == null ? "" : direction.trim().toUpperCase(Locale.ROOT);
+        try {
+            float numeric = Float.parseFloat(normalized.replace("°", "").trim());
+            return numeric >= 0f && numeric < 360f ? numeric : null;
+        } catch (NumberFormatException ignored) { }
+        switch (normalized) {
+            case "N": return 0f; case "NE": return 45f; case "E": return 90f;
+            case "SE": return 135f; case "S": return 180f; case "SW": case "SO": return 225f;
+            case "W": case "O": return 270f; case "NW": case "NO": return 315f;
+            default: return null;
+        }
     }
 
     private void rememberCandidates(Location location, ArrayList<Record> candidates) {
@@ -906,10 +942,13 @@ final class RadarRepository {
     private static final class DirectionEvidence {
         final boolean confirmed;
         final boolean opening;
+        final boolean wrongDirection;
         final String detail;
-        DirectionEvidence(boolean confirmed, boolean opening, String detail) {
+        DirectionEvidence(boolean confirmed, boolean opening, boolean wrongDirection,
+                          String detail) {
             this.confirmed = confirmed;
             this.opening = opening;
+            this.wrongDirection = wrongDirection;
             this.detail = detail;
         }
     }
@@ -1142,9 +1181,25 @@ final class RadarRepository {
                         if (overlap[0] <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS) {
                             duplicate = true;
                             if (SOURCE_DGT.equals(source) && !SOURCE_DGT.equals(existing.source)) {
+                                Float mergedDirection = directionBearing != null
+                                        ? directionBearing : existing.directionBearing;
+                                Integer mergedLimit = cameraLimit != null
+                                        ? cameraLimit : existing.limitKmh;
                                 result.set(i, new OfflineRoadMapView.Radar(cursor.getString(0),
                                         cursor.getString(1), cursor.getString(2), source,
-                                        point[0], point[1], cameraLimit, directionBearing));
+                                        point[0], point[1], mergedLimit, mergedDirection));
+                            } else if (SOURCE_DGT.equals(existing.source) && overlap[0] <= 100f
+                                    && (existing.directionBearing == null && directionBearing != null
+                                    || existing.limitKmh == null && cameraLimit != null)) {
+                                // DGT is authoritative for the installation but may omit heading
+                                // and limit. A tightly coincident OSM/Lufop record can enrich only
+                                // those missing visual fields without changing the DGT coordinate.
+                                result.set(i, new OfflineRoadMapView.Radar(existing.id,
+                                        existing.type, existing.road, existing.source,
+                                        existing.latitude, existing.longitude,
+                                        existing.limitKmh != null ? existing.limitKmh : cameraLimit,
+                                        existing.directionBearing != null
+                                                ? existing.directionBearing : directionBearing));
                             }
                             break;
                         }
@@ -1196,17 +1251,7 @@ final class RadarRepository {
                     if (found != null) return found;
                 } catch (Exception ignored) { }
             }
-            String normalized = direction == null ? "" : direction.trim().toUpperCase(Locale.ROOT);
-            try {
-                float numeric = Float.parseFloat(normalized.replace("°", "").trim());
-                return numeric >= 0f && numeric < 360f ? numeric : null;
-            } catch (NumberFormatException ignored) { }
-            switch (normalized) {
-                case "N": return 0f; case "NE": return 45f; case "E": return 90f;
-                case "SE": return 135f; case "S": return 180f; case "SW": case "SO": return 225f;
-                case "W": case "O": return 270f; case "NW": case "NO": return 315f;
-                default: return null;
-            }
+            return explicitDirectionBearing(direction);
         }
 
         private static float normalizeBearing(float value) {

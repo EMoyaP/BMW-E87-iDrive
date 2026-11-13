@@ -155,6 +155,12 @@ public class MainActivity extends Activity {
             Location current = gps == null ? null : gps.getLastLocation();
             if (current != null && drivingOverlay != null) requestMapRoads(current, true);
         });
+        // This vehicle is a 118d. Driving mode always compares the official diesel prices;
+        // keeping one product also avoids presenting a petrol price under a diesel label.
+        if (fuelStations.getProductId() != FuelStationProvider.DEFAULT_PRODUCT_ID) {
+            fuelStations.configure(FuelStationProvider.DEFAULT_PRODUCT_ID,
+                    fuelStations.getRadiusKm());
+        }
         speedLimits = new SpeedLimitRepository(this);
         dgtSpeeds = new DgtSpeedRepository(this);
         tomTomRoadData = new TomTomRoadDataRepository(this, () -> runOnUiThread(() -> {
@@ -1180,7 +1186,8 @@ public class MainActivity extends Activity {
                     tomTomRoadData == null ? java.util.Collections.emptyList()
                             : tomTomRoadData.mapFlows();
             java.util.List<FuelStationProvider.Station> fuelMapSource =
-                    fuelStations.mapStations(copy, 18);
+                    fuelStations.mapStations(copy, 18,
+                            (int) DrivingFuelStationPolicy.DRIVING_RADIUS_KM);
             FuelStationProvider.Snapshot fuelSnapshot = fuelStations.getSnapshot();
             FuelStationProvider.Station mapCheapest = null;
             for (FuelStationProvider.Station station : fuelMapSource) {
@@ -1197,7 +1204,7 @@ public class MainActivity extends Activity {
             }
             FuelStationProvider.Station contextual =
                     DrivingFuelStationPolicy.select(copy, fuelMapSource);
-            String fuelLabel = fuelSnapshot == null ? "" : fuelSnapshot.fuelLabel;
+            String fuelLabel = "Diésel";
             boolean stalePrice = fuelSnapshot == null || fuelSnapshot.updatedAt <= 0L
                     || System.currentTimeMillis() - fuelSnapshot.updatedAt
                     > 36L * 60L * 60L * 1000L;

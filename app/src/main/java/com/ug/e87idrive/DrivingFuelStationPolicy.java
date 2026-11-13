@@ -3,50 +3,34 @@ package com.ug.e87idrive;
 import android.location.Location;
 import java.util.List;
 
-/** Chooses the cheapest station among those useful to a moving driver. */
+/** Chooses the nearest station inside the fixed driving radius. */
 final class DrivingFuelStationPolicy {
-    static final double NEARBY_KM = .60d;
-    static final double AHEAD_MAX_KM = 5d;
-    static final float AHEAD_TOLERANCE_DEGREES = 55f;
+    static final double DRIVING_RADIUS_KM = 7d;
 
     private DrivingFuelStationPolicy() { }
 
     static FuelStationProvider.Station select(Location location,
                                                List<FuelStationProvider.Station> stations) {
         if (location == null) return null;
-        return select(location.getLatitude(), location.getLongitude(),
-                location.hasBearing() ? location.getBearing() : null, stations);
+        return select(stations);
     }
 
     static FuelStationProvider.Station select(double latitude, double longitude, Float bearing,
                                                List<FuelStationProvider.Station> stations) {
+        return select(stations);
+    }
+
+    static FuelStationProvider.Station select(List<FuelStationProvider.Station> stations) {
         if (stations == null || stations.isEmpty()) return null;
         FuelStationProvider.Station selected = null;
         for (FuelStationProvider.Station station : stations) {
-            if (station == null || !Double.isFinite(station.distanceKm)) continue;
-            boolean useful = station.distanceKm <= NEARBY_KM;
-            if (!useful && station.distanceKm <= AHEAD_MAX_KM && bearing != null) {
-                useful = angularDifference(bearing,
-                        initialBearing(latitude, longitude, station.latitude, station.longitude))
-                        <= AHEAD_TOLERANCE_DEGREES;
-            }
-            if (!useful) continue;
-            if (selected == null || station.price < selected.price
-                    || (station.price == selected.price
-                    && station.distanceKm < selected.distanceKm)) selected = station;
+            if (station == null || !Double.isFinite(station.distanceKm)
+                    || station.distanceKm > DRIVING_RADIUS_KM) continue;
+            if (selected == null || station.distanceKm < selected.distanceKm
+                    || (station.distanceKm == selected.distanceKm
+                    && station.price < selected.price)) selected = station;
         }
         return selected;
-    }
-
-    private static float initialBearing(double firstLatitude, double firstLongitude,
-                                        double secondLatitude, double secondLongitude) {
-        double first = Math.toRadians(firstLatitude);
-        double second = Math.toRadians(secondLatitude);
-        double longitude = Math.toRadians(secondLongitude - firstLongitude);
-        double y = Math.sin(longitude) * Math.cos(second);
-        double x = Math.cos(first) * Math.sin(second)
-                - Math.sin(first) * Math.cos(second) * Math.cos(longitude);
-        return normalize((float) Math.toDegrees(Math.atan2(y, x)));
     }
 
     static float angularDifference(float first, float second) {

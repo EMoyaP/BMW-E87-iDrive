@@ -45,13 +45,10 @@ final class DrivingDashboardView extends FrameLayout {
     private boolean exact;
     private String range, consumption, temperature;
     private View sign, radar, surveillance, incident, androidAuto, menu;
-    private final TextView zoomIn;
-    private final TextView zoomOut;
     private final FrameLayout whereAmIPanel;
     private final TextView whereAmIAddress;
     private final TextView whereAmICoordinates;
     private final TextView fuelContext;
-    private boolean alertPriority;
     private boolean fuelContextAvailable;
     private static final int WHITE = Color.rgb(242, 246, 250);
     private static final int MUTED = Color.rgb(162, 181, 199);
@@ -65,14 +62,6 @@ final class DrivingDashboardView extends FrameLayout {
         setClickable(true);
         map = new OfflineRoadMapView(context);
         addView(map);
-        zoomIn = zoomButton(context, "+", "Acercar mapa");
-        zoomOut = zoomButton(context, "−", "Alejar mapa");
-        zoomIn.setOnClickListener(view -> map.adjustZoom(1.22f));
-        zoomOut.setOnClickListener(view -> map.adjustZoom(1f / 1.22f));
-        zoomIn.setOnLongClickListener(view -> { map.resetZoom(); return true; });
-        zoomOut.setOnLongClickListener(view -> { map.resetZoom(); return true; });
-        addView(zoomIn);
-        addView(zoomOut);
         whereAmIPanel = new FrameLayout(context);
         whereAmIPanel.setClickable(true);
         whereAmIPanel.setFocusable(true);
@@ -91,10 +80,13 @@ final class DrivingDashboardView extends FrameLayout {
         whereAmIPanel.addView(whereAmICoordinates, panelParams(-1, 19, 24));
         addView(whereAmIPanel);
         fuelContext = new TextView(context);
-        fuelContext.setSingleLine(true);
+        fuelContext.setSingleLine(false);
+        fuelContext.setMaxLines(2);
         fuelContext.setEllipsize(TextUtils.TruncateAt.END);
         fuelContext.setGravity(android.view.Gravity.CENTER);
-        fuelContext.setTextSize(13f);
+        fuelContext.setTextSize(12f);
+        fuelContext.setLineSpacing(0f, .94f);
+        fuelContext.setPadding(8, 2, 8, 2);
         fuelContext.setTextColor(Color.rgb(202, 231, 248));
         fuelContext.setVisibility(GONE);
         addView(fuelContext);
@@ -164,27 +156,34 @@ final class DrivingDashboardView extends FrameLayout {
             updateFuelContextVisibility();
             return;
         }
-        String brand = station.brand == null || station.brand.trim().isEmpty()
+        String fullBrand = station.brand == null || station.brand.trim().isEmpty()
                 ? "GASOLINERA" : station.brand.trim().toUpperCase(Locale.getDefault());
+        String brand = fullBrand.length() > 22 ? fullBrand.substring(0, 21) + "…" : fullBrand;
         String fuel = fuelLabel == null || fuelLabel.trim().isEmpty() ? "COMBUSTIBLE"
                 : fuelLabel.trim().toUpperCase(Locale.getDefault());
         fuelContext.setText(String.format(Locale.getDefault(),
-                "⛽  %s  ·  %s %.3f €/l  ·  %.1f km%s", brand, fuel,
+                "%s\nDIÉSEL %.3f € · %.1f km%s", brand,
                 station.price, station.distanceKm, stale ? "  ·  PRECIO SIN ACTUALIZAR" : ""));
         int priceColor = favorablePrice ? Color.rgb(79, 205, 132) : Color.rgb(238, 72, 66);
         fuelContext.setTextColor(stale ? ORANGE : priceColor);
-        fuelContext.setContentDescription("Gasolinera más cercana en la dirección de marcha: "
-                + fuelContext.getText());
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(Color.rgb(2, 7, 12));
+        background.setCornerRadius(6f * getResources().getDisplayMetrics().density);
+        background.setStroke(Math.max(1, Math.round(getResources().getDisplayMetrics().density)),
+                stale ? ORANGE : priceColor);
+        fuelContext.setBackground(background);
+        fuelContext.setContentDescription("Gasolinera más cercana en siete kilómetros: "
+                + fullBrand + ", " + fuel + ", " + fuelContext.getText());
         updateFuelContextVisibility();
     }
 
     void alertPriority(boolean value) {
-        alertPriority = value;
         updateFuelContextVisibility();
     }
 
     private void updateFuelContextVisibility() {
-        fuelContext.setVisibility(fuelContextAvailable && !alertPriority ? VISIBLE : GONE);
+        // Its dedicated bottom-right slot does not overlap radar, surveillance or incidents.
+        fuelContext.setVisibility(fuelContextAvailable ? VISIBLE : GONE);
     }
 
     void whereAmI(String value) {
@@ -252,22 +251,6 @@ final class DrivingDashboardView extends FrameLayout {
         view.layout(left, top, left + width, top + height);
     }
 
-    private static TextView zoomButton(Context context, String text, String description) {
-        TextView button = new TextView(context);
-        button.setText(text);
-        button.setTextColor(Color.rgb(194, 224, 243));
-        button.setTextSize(19f);
-        button.setGravity(android.view.Gravity.CENTER);
-        button.setContentDescription(description);
-        button.setClickable(true);
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.argb(178, 3, 18, 31));
-        background.setStroke(1, Color.argb(190, 54, 123, 166));
-        background.setCornerRadius(7f);
-        button.setBackground(background);
-        return button;
-    }
-
     private static FrameLayout.LayoutParams panelParams(int width, int height, int top) {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
         params.topMargin = top;
@@ -276,10 +259,7 @@ final class DrivingDashboardView extends FrameLayout {
 
     @Override protected void onLayout(boolean changed, int l, int t, int r, int b) {
         place(map, 348, 146, 605, 403);
-        // Kept inside the map's lower-right corner so it never covers the speed sign or radar.
-        place(zoomIn, 846, 506, 44, 34);
-        place(zoomOut, 896, 506, 44, 34);
-        place(fuelContext, 365, 548, 560, 32);
+        place(fuelContext, 925, 651, 335, 59);
         place(whereAmIPanel, 38, 667, 782, 47);
         if (sign == null) return;
         place(sign, 963, 163, 298, 298);

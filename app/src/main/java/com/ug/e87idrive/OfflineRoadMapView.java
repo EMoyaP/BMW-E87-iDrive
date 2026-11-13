@@ -700,49 +700,61 @@ final class OfflineRoadMapView extends View {
         if (radars.isEmpty()) return;
         final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
         final float metersPerDegreeLon = (float) (111_320d * Math.cos(Math.toRadians(renderLatitude)));
-        float anchorX = vehicleAnchorX(width);
-        float anchorY = vehicleAnchorY(height);
-        canvas.save();
-        if (headingReady) canvas.rotate(-heading, anchorX, anchorY);
         labelPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
         labelPaint.setTextSize(Math.max(8f, Math.min(11f, width / 55f)));
         labelPaint.setTextAlign(Paint.Align.CENTER);
         int drawn = 0;
         for (Radar radar : radars) {
-            float east = (float) ((radar.longitude - renderLongitude) * metersPerDegreeLon);
-            float north = (float) ((radar.latitude - renderLatitude) * 111_320d);
-            float x = anchorX + east * pixelsPerMeter;
-            float y = anchorY - north * pixelsPerMeter;
+            float[] screen = roadPointToScreen(radar.latitude, radar.longitude, width, height,
+                    pixelsPerMeter, metersPerDegreeLon);
+            float x = screen[0];
+            float y = screen[1];
             if (x < 18f || x > width - 18f || y < 22f || y > height - 22f) continue;
-            // Small red camera marker: it is visible on the map without competing with the
-            // vehicle marker or turning the whole map into an alert panel.
+            if (radar.directionBearing != null && Float.isFinite(radar.directionBearing)) {
+                // Convert the true enforcement heading into the heading-up map reference. The
+                // sector extends from the camera in the controlled travel heading. Its 100 m
+                // map length matches the conservative post-camera passage margin.
+                canvas.save();
+                canvas.rotate(normalize(radar.directionBearing
+                        - (headingReady ? heading : 0f)), x, y);
+                float coneLength = Math.max(42f, Math.min(110f, pixelsPerMeter * 100f));
+                float coneHalfWidth = Math.max(14f, Math.min(34f, coneLength * .32f));
+                Path cone = new Path();
+                cone.moveTo(x, y - 5f);
+                cone.lineTo(x - coneHalfWidth, y - coneLength);
+                cone.quadTo(x, y - coneLength - 8f,
+                        x + coneHalfWidth, y - coneLength);
+                cone.close();
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.argb(92, 255, 42, 35));
+                canvas.drawPath(cone, paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(1.4f);
+                paint.setColor(Color.argb(205, 255, 111, 91));
+                canvas.drawPath(cone, paint);
+                paint.setStyle(Paint.Style.FILL);
+                Path headingTip = new Path();
+                headingTip.moveTo(x, y - coneLength - 8f);
+                headingTip.lineTo(x - 4f, y - coneLength);
+                headingTip.lineTo(x + 4f, y - coneLength);
+                headingTip.close();
+                paint.setColor(Color.rgb(255, 214, 199));
+                canvas.drawPath(headingTip, paint);
+                canvas.restore();
+            }
+            // Draw the installation over the cone so the point remains exact and legible.
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(80, 241, 45, 45));
+            paint.setColor(Color.argb(95, 241, 45, 45));
             canvas.drawCircle(x, y, 11f, paint);
             paint.setColor(Color.rgb(224, 42, 42));
             canvas.drawCircle(x, y, 6.5f, paint);
             paint.setColor(Color.WHITE);
             canvas.drawCircle(x, y, 2.2f, paint);
-            if (radar.directionBearing != null && Float.isFinite(radar.directionBearing)) {
-                // The whole map canvas is already rotated by -heading. Drawing a true-bearing
-                // arrow here therefore keeps it aligned with the enforcement direction.
-                canvas.save();
-                canvas.rotate(radar.directionBearing, x, y);
-                Path direction = new Path();
-                direction.moveTo(x, y - 18f);
-                direction.lineTo(x - 4.5f, y - 10f);
-                direction.lineTo(x + 4.5f, y - 10f);
-                direction.close();
-                paint.setColor(Color.rgb(255, 205, 184));
-                canvas.drawPath(direction, paint);
-                canvas.restore();
-            }
             labelPaint.setColor(Color.rgb(255, 173, 104));
             canvas.drawText(radar.limitKmh == null ? "R" : String.valueOf(radar.limitKmh),
                     x, y - 10f, labelPaint);
             if (++drawn >= 24) break;
         }
-        canvas.restore();
     }
 
     private void drawFuelStations(Canvas canvas, int width, int height) {
