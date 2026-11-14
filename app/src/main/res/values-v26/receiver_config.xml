@@ -1,0 +1,4 @@
+<resources>
+    <!-- Android 8+ needs a foreground dynamic receiver for this app-to-app broadcast. -->
+    <bool name="speedplay_manifest_receiver_enabled">false</bool>
+</resources>

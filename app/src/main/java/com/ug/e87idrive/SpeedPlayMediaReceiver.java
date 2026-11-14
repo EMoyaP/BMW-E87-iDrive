@@ -3,6 +3,7 @@ package com.ug.e87idrive;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,6 +19,7 @@ public final class SpeedPlayMediaReceiver extends BroadcastReceiver {
     private static final Object LOCK = new Object();
     private static volatile Snapshot latest;
     private static volatile boolean registered;
+    private static SpeedPlayMediaReceiver foregroundReceiver;
 
     public static final class Snapshot {
         public final String title;
@@ -67,17 +69,54 @@ public final class SpeedPlayMediaReceiver extends BroadcastReceiver {
     }
 
     /**
-     * The receiver is declared in the manifest so the unit can deliver the
-     * implicit SpeedPlay event even when the activity is not foreground. A
-     * dynamic receiver alone was not sufficient on this Android 11 build.
+     * SpeedPlay sends this as an implicit app broadcast. Android 8+ may suppress
+     * implicit broadcasts to manifest receivers, so listen dynamically while the
+     * dashboard is visible. The manifest receiver remains a compatibility path
+     * on older Android releases.
      */
     public static void register(Context context) {
         if (context == null) return;
         synchronized (LOCK) {
             if (registered) return;
-            registered = true;
-            AppSessionLog.event("MULTIMEDIA", "Receptor pasivo SpeedPlay declarado en manifest · "
-                    + ACTION_MEDIA_PLAY_INFO);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                SpeedPlayMediaReceiver receiver = new SpeedPlayMediaReceiver();
+                IntentFilter filter = new IntentFilter(ACTION_MEDIA_PLAY_INFO);
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+                    } else {
+                        context.registerReceiver(receiver, filter);
+                    }
+                    foregroundReceiver = receiver;
+                    registered = true;
+                    AppSessionLog.event("MULTIMEDIA", "Receptor dinámico SpeedPlay activo · "
+                            + ACTION_MEDIA_PLAY_INFO);
+                } catch (Exception error) {
+                    AppSessionLog.event("MULTIMEDIA", "No se pudo registrar receptor SpeedPlay · "
+                            + error.getClass().getSimpleName());
+                }
+            } else {
+                registered = true;
+                AppSessionLog.event("MULTIMEDIA", "Receptor SpeedPlay delegado al manifest · "
+                        + ACTION_MEDIA_PLAY_INFO);
+            }
+        }
+    }
+
+    public static void unregister(Context context) {
+        synchronized (LOCK) {
+            SpeedPlayMediaReceiver receiver = foregroundReceiver;
+            foregroundReceiver = null;
+            registered = false;
+            if (receiver != null && context != null) {
+                try {
+                    context.unregisterReceiver(receiver);
+                    AppSessionLog.event("MULTIMEDIA", "Receptor dinámico SpeedPlay detenido");
+                } catch (Exception error) {
+                    AppSessionLog.event("MULTIMEDIA", "No se pudo detener receptor SpeedPlay · "
+                            + error.getClass().getSimpleName());
+                }
+            }
         }
     }
 
@@ -129,19 +168,65 @@ public final class SpeedPlayMediaReceiver extends BroadcastReceiver {
     private boolean trustedSender(Context context) {
         if (Build.VERSION.SDK_INT < 34) return true;
         String sender = getSentFromPackage();
-        if (sender == null || sender.trim().isEmpty()) {
-            AppSessionLog.sampledEvent("speedplay_sender_missing", "SEGURIDAD",
-                    "SpeedPlay descartado: Android no identificó el emisor", 60_000L);
+        if (sender != null && sender.equals(context.getPackageName())) return true;
+        if (sender != null && !sender.trim().isEmpty()) {
+            if (!"com.suding.speedplay".equals(sender)) {
+                AppSessionLog.sampledEvent("speedplay_sender_rejected_" + sender, "SEGURIDAD",
+                        "SpeedPlay descartado: emisor no esperado " + sender, 60_000L);
+                return false;
+            }
+            return isSystemSpeedPlay(context);
+        }
+
+        // Some vendor Android 15 builds deliver this implicit OEM broadcast without
+        // package attribution. Use the sending UID when available; only accept the
+        // OEM SpeedPlay UID. If the firmware hides both fields, require its installed
+        // system package as a compatibility fallback (this event only updates UI text).
+        int senderUid = getSentFromUid();
+        if (senderUid >= 0) {
+            String[] packages = context.getPackageManager().getPackagesForUid(senderUid);
+            if (packages != null) {
+                for (String packageName : packages) {
+                    if ("com.suding.speedplay".equals(packageName)
+                            && isSystemSpeedPlay(context)) return true;
+                }
+            }
+            if (BuildConfig.DEBUG && senderUid == android.os.Process.SHELL_UID) return true;
+            AppSessionLog.sampledEvent("speedplay_sender_rejected_uid_" + senderUid, "SEGURIDAD",
+                    "SpeedPlay descartado: UID emisor no es el OEM (" + senderUid + ")", 60_000L);
             return false;
         }
-        if (sender.equals(context.getPackageName())) return true;
+        if (BuildConfig.DEBUG && isEmulator()) {
+            AppSessionLog.sampledEvent("speedplay_sender_emulator_test", "MULTIMEDIA",
+                    "SpeedPlay de prueba aceptado en emulador sin identidad de emisor", 60_000L);
+            return true;
+        }
+        if (isSystemSpeedPlay(context)) {
+            AppSessionLog.sampledEvent("speedplay_sender_unattributed", "MULTIMEDIA",
+                    "SpeedPlay aceptado: Android no facilita identidad del broadcast; paquete OEM verificado", 60_000L);
+            return true;
+        }
+        AppSessionLog.sampledEvent("speedplay_sender_missing", "SEGURIDAD",
+                "SpeedPlay descartado: emisor sin identificar y app OEM no verificada", 60_000L);
+        return false;
+    }
+
+    private static boolean isEmulator() {
+        return Build.FINGERPRINT.startsWith("generic")
+                || Build.FINGERPRINT.startsWith("unknown")
+                || Build.FINGERPRINT.toLowerCase(java.util.Locale.ROOT).contains("sdk_phone")
+                || Build.MODEL.toLowerCase(java.util.Locale.ROOT).contains("emulator")
+                || Build.MODEL.toLowerCase(java.util.Locale.ROOT).contains("sdk_gphone")
+                || Build.MODEL.toLowerCase(java.util.Locale.ROOT).contains("sdk built for");
+    }
+
+    private static boolean isSystemSpeedPlay(Context context) {
         try {
-            ApplicationInfo application = context.getPackageManager().getApplicationInfo(sender, 0);
+            ApplicationInfo application = context.getPackageManager()
+                    .getApplicationInfo("com.suding.speedplay", 0);
             int systemFlags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
             if ((application.flags & systemFlags) != 0) return true;
         } catch (Exception ignored) { }
-        AppSessionLog.sampledEvent("speedplay_sender_rejected_" + sender, "SEGURIDAD",
-                "SpeedPlay descartado: emisor no OEM " + sender, 60_000L);
         return false;
     }
 

@@ -1,0 +1,4 @@
+<resources>
+    <!-- Legacy Android delivers this implicit OEM broadcast to the manifest receiver. -->
+    <bool name="speedplay_manifest_receiver_enabled">true</bool>
+</resources>

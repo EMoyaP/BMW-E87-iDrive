@@ -80,6 +80,7 @@
         <!-- Passive SpeedPlay metadata observer. It never sends commands. -->
         <receiver
             android:name=".SpeedPlayMediaReceiver"
+            android:enabled="@bool/speedplay_manifest_receiver_enabled"
             android:exported="true"
             tools:ignore="ExportedReceiver">
             <intent-filter>

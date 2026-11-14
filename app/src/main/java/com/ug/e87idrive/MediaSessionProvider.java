@@ -101,8 +101,21 @@ public final class MediaSessionProvider {
             JancarMediaProvider.Snapshot jancar = jancarMedia.snapshot();
             if (jancar.hasContent()) return last = fromJancar(jancar);
             SpeedPlayMediaReceiver.Snapshot speedPlay = SpeedPlayMediaReceiver.latest();
-            if (isSpeedPlayPackage(packageName) && speedPlay != null && speedPlay.hasContent()) {
-                return last = fromSpeedPlay(speedPlay);
+            // This action is emitted by the verified OEM S-Play app. It is the radio's
+            // copy of Android Auto media metadata even when the configured "auto" app
+            // role points at another package, so don't gate it on that picker value.
+            if (speedPlay != null && speedPlay.hasContent()) {
+                Snapshot broadcast = fromSpeedPlay(speedPlay);
+                Bitmap sessionArtwork = speedPlayArtwork(speedPlay);
+                if (sessionArtwork != null) {
+                    broadcast = new Snapshot(broadcast.title, broadcast.artist, broadcast.album,
+                            broadcast.source, broadcast.state, sessionArtwork,
+                            broadcast.accessGranted, broadcast.listenerConnected,
+                            broadcast.sessionAvailable, broadcast.canPlayPause,
+                            broadcast.canPrevious, broadcast.canNext, broadcast.positionMs,
+                            broadcast.durationMs);
+                }
+                return last = broadcast;
             }
             List<MediaController> controllers = activeSessions();
             MediaController controller = preferredPlaybackController(controllers, packageName);
@@ -321,6 +334,35 @@ public final class MediaSessionProvider {
                 false, false, false, position, speedPlay.duration);
     }
 
+    /** S-Play's broadcast has no bitmap extra; use its local MediaSession art if it publishes it. */
+    private Bitmap speedPlayArtwork(SpeedPlayMediaReceiver.Snapshot speedPlay) {
+        if (!isReadable(speedPlay.title)) return null;
+        try {
+            List<MediaController> controllers = activeSessions();
+            if (controllers == null) return null;
+            for (MediaController controller : controllers) {
+                if (!"com.suding.speedplay".equals(controller.getPackageName())) continue;
+                MediaMetadata metadata = controller.getMetadata();
+                String title = firstText(metadata, "", MediaMetadata.METADATA_KEY_DISPLAY_TITLE,
+                        MediaMetadata.METADATA_KEY_TITLE);
+                if (!speedPlay.title.trim().equalsIgnoreCase(title.trim())) continue;
+                String sessionArtist = firstText(metadata, "", MediaMetadata.METADATA_KEY_ARTIST,
+                        MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
+                if (isReadable(speedPlay.artist) && isReadable(sessionArtist)
+                        && !speedPlay.artist.trim().equalsIgnoreCase(sessionArtist.trim())) continue;
+                Bitmap image = artwork(metadata);
+                if (image != null) return image;
+            }
+        } catch (SecurityException ignored) {
+            // The title broadcast remains useful even if Android's session access is not granted.
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    private static boolean isReadable(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
     private Snapshot fromJancar(JancarMediaProvider.Snapshot jancar) {
         String title = jancar.title.isEmpty() ? "Reproducción Android Auto" : jancar.title;
         String artist = jancar.artist.isEmpty() ? "Detalle no publicado" : jancar.artist;
@@ -407,12 +449,6 @@ public final class MediaSessionProvider {
             if (value != null && !value.toString().trim().isEmpty()) return value.toString().trim();
         }
         return fallback;
-    }
-
-    private static boolean isSpeedPlayPackage(String packageName) {
-        return packageName == null || packageName.trim().isEmpty()
-                || "com.suding.speedplay".equals(packageName)
-                || packageName.toLowerCase(java.util.Locale.ROOT).contains("speedplay");
     }
 
     private Bitmap artwork(MediaMetadata metadata) {

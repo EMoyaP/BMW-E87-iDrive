@@ -236,6 +236,7 @@ public class MainActivity extends Activity {
                     + UpdateProgressStore.currentMessage(getApplicationContext()));
         }
         autoDetectApps();
+        SpeedPlayMediaReceiver.register(this);
         media.requestListenerRebind();
         refreshAll();
         gps.start();
@@ -266,6 +267,7 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         AppSessionLog.event("APP", "Sesión en segundo plano; deteniendo sondeos periódicos");
         foreground = false;
+        SpeedPlayMediaReceiver.unregister(this);
         handler.removeCallbacks(automaticUpdateUiRefresh);
         gps.stop();
         bluetoothState.stop();
@@ -843,7 +845,7 @@ public class MainActivity extends Activity {
     }
 
     private void refreshMedia() {
-        if (mediaTitle == null) return;
+        if (media == null || apps == null) return;
         // When SpeedPlay/Android Auto publishes its standard session, it takes precedence so
         // the card follows the music actually routed through Android Auto (for example Spotify).
         MediaSessionProvider.Snapshot snapshot = media.refreshPreferred(apps.getPackage("auto"));
@@ -860,12 +862,14 @@ public class MainActivity extends Activity {
             lastMediaLog = mediaLog;
             AppSessionLog.event("MULTIMEDIA", mediaLog);
         }
-        mediaTitle.setText(snapshot.title);
         latestMediaSnapshot = snapshot;
-        mediaArtist.setText(snapshot.artist);
-        mediaAlbum.setText(snapshot.album.isEmpty() ? "Álbum no publicado" : snapshot.album);
-        mediaSource.setText(snapshot.source);
-        mediaState.setText(snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
+        if (mediaTitle != null) mediaTitle.setText(snapshot.title);
+        if (mediaArtist != null) mediaArtist.setText(snapshot.artist);
+        if (mediaAlbum != null) mediaAlbum.setText(
+                snapshot.album.isEmpty() ? "Álbum no publicado" : snapshot.album);
+        if (mediaSource != null) mediaSource.setText(snapshot.source);
+        if (mediaState != null) mediaState.setText(
+                snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
         updateMediaControls(snapshot);
         boolean showTrack = snapshot.sessionAvailable && hasRealTrackTitle(snapshot.title)
                 && !"DETENIDO".equals(snapshot.state);
@@ -887,14 +891,16 @@ public class MainActivity extends Activity {
             lastNavigationLog = navLog;
             if (!navLog.isEmpty()) AppSessionLog.event("NAVEGACIÓN AA", navLog);
         }
-        if (snapshot.artwork != null) {
-            mediaArtwork.setColorFilter(null);
-            mediaArtwork.setPadding(0, 0, 0, 0);
-            mediaArtwork.setImageBitmap(snapshot.artwork);
-        } else {
-            mediaArtwork.setImageResource(R.drawable.ic_menu_media);
-            mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
-            mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
+        if (mediaArtwork != null) {
+            if (snapshot.artwork != null) {
+                mediaArtwork.setColorFilter(null);
+                mediaArtwork.setPadding(0, 0, 0, 0);
+                mediaArtwork.setImageBitmap(snapshot.artwork);
+            } else {
+                mediaArtwork.setImageResource(R.drawable.ic_menu_media);
+                mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
+                mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
+            }
         }
     }
 
