@@ -66,4 +66,22 @@ public class TrafficIncidentRepositoryTest {
         assertEquals(3,value.magnitude);
         org.junit.Assert.assertTrue(value.detail.contains("7 min"));
     }
+
+    @Test public void rejectsIncidentOnDifferentRoadEvenWhenItIsAhead() {
+        assertFalse(TrafficIncidentRepository.roadCompatible(
+                "CV-865","","Avinguda de la Vallverda",1_900d));
+        assertFalse(TrafficIncidentRepository.roadCompatible(
+                "CV-865","N-332","",80d));
+    }
+
+    @Test public void acceptsSameRoadOrVeryCloseUnreferencedIncident() {
+        assertTrue(TrafficIncidentRepository.roadCompatible(
+                "CV 865","CV-865","",1_900d));
+        assertTrue(TrafficIncidentRepository.roadCompatible(
+                "VÍA SIN REFERENCIA","","Camí dels Bassars",120d));
+        assertTrue(TrafficIncidentRepository.roadCompatible(
+                "CV-865","","Camí dels Bassars",250d));
+        assertFalse(TrafficIncidentRepository.roadCompatible(
+                "VÍA SIN REFERENCIA","","Camí dels Bassars",500d));
+    }
 }

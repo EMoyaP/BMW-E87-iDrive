@@ -101,6 +101,26 @@ public class SpeedLimitMapMatchingTest {
         assertEquals(50, SpeedLimitRepository.applyContextualAdvisory(numberedRoad).limitKmh);
     }
 
+    @Test public void namedUrbanRoadWithoutExactLimitNeverFallsBackToNinety() {
+        SpeedLimitRepository.Match urbanAvenue = new SpeedLimitRepository.Match(90, 1d, 1L,
+                "ALICANTE", false, "secondary", "avenue", 1d, 20d, 5d,
+                "", "Avenida de Noruega");
+        SpeedLimitRepository.Match urbanRing = new SpeedLimitRepository.Match(90, 1d, 1L,
+                "ALICANTE", false, "tertiary", "ring", 1d, 20d, 5d,
+                "CV-8520", "Ronda Norte");
+        SpeedLimitRepository.Match numbered = new SpeedLimitRepository.Match(90, 1d, 1L,
+                "ALICANTE", false, "secondary", "cv", 1d, 20d, 5d,
+                "CV-851", "Vereda de les Cendres");
+        SpeedLimitRepository.Match exact = new SpeedLimitRepository.Match(50, 1d, 1L,
+                "ALICANTE", true, "secondary", "exact", 1d, 20d, 5d,
+                "", "Avenida de Noruega");
+
+        assertEquals(30, SpeedLimitRepository.applyContextualAdvisory(urbanAvenue).limitKmh);
+        assertEquals(30, SpeedLimitRepository.applyContextualAdvisory(urbanRing).limitKmh);
+        assertEquals(90, SpeedLimitRepository.applyContextualAdvisory(numbered).limitKmh);
+        assertEquals(50, SpeedLimitRepository.applyContextualAdvisory(exact).limitKmh);
+    }
+
     @Test public void aMovingTrajectoryNeedsEvidenceBeforeSwitchingParallelRoads() {
         assertTrue(SpeedLimitRepository.mapMatchScore(8d, false, 4d, true)
                 < SpeedLimitRepository.mapMatchScore(7d, false, 4d, false));

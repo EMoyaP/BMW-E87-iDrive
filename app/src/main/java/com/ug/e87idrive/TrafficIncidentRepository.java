@@ -25,6 +25,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -42,6 +44,9 @@ final class TrafficIncidentRepository {
     private static final String TOMTOM_PREFERENCES = "tomtom_traffic";
     private static final String TOMTOM_KEY = "api_key";
     private static final String TOMTOM_ENABLED = "enabled";
+    private static final String TOMTOM_BUNDLED_IMPORTED = "bundled_key_imported";
+    private static final Pattern ROAD_CODE = Pattern.compile(
+            "(?:^|[^A-Z0-9])([A-Z]{1,4})\\s*-\\s*(\\d{1,4})(?:$|[^A-Z0-9])");
     private final Context context;
     private final ConnectivityManager connectivity;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -119,11 +124,20 @@ final class TrafficIncidentRepository {
         connectivity=(ConnectivityManager)this.context.getSystemService(Context.CONNECTIVITY_SERVICE);
         tomTomPreferences=this.context.getSharedPreferences(TOMTOM_PREFERENCES,
                 Context.MODE_PRIVATE);
+        if(!tomTomPreferences.getBoolean(TOMTOM_BUNDLED_IMPORTED,false)){
+            SharedPreferences.Editor importEdit=tomTomPreferences.edit()
+                    .putBoolean(TOMTOM_BUNDLED_IMPORTED,true);
+            String bundled=BuildConfig.TOMTOM_API_KEY.trim();
+            if(!bundled.isEmpty()&&!tomTomConfigured())
+                importEdit.putString(TOMTOM_KEY,bundled).putBoolean(TOMTOM_ENABLED,true);
+            importEdit.apply();
+        }
         lastTomTomSuccess=tomTomPreferences.getLong("last_success",0L);
     }
 
     boolean tomTomConfigured(){return !tomTomPreferences.getString(TOMTOM_KEY,"").trim().isEmpty();}
     boolean tomTomEnabled(){return tomTomConfigured()&&tomTomPreferences.getBoolean(TOMTOM_ENABLED,false);}
+    String tomTomKeyForEditing(){return tomTomPreferences.getString(TOMTOM_KEY,"").trim();}
     String tomTomStatus(){
         if(!tomTomConfigured())return "TomTom: sin configurar";
         if(!tomTomEnabled())return "TomTom: configurado · desactivado";
@@ -156,7 +170,9 @@ final class TrafficIncidentRepository {
         refreshIfNeeded(false);
     }
 
-    Alert alert(Location current) {
+    Alert alert(Location current) { return alert(current, "", ""); }
+
+    Alert alert(Location current, String currentRoadRef, String currentRoadName) {
         if(current==null)return null;
         long now=System.currentTimeMillis();
         Incident selected=null; double best=Double.MAX_VALUE; double bestScore=Double.MAX_VALUE;
@@ -164,7 +180,8 @@ final class TrafficIncidentRepository {
             if(incident.validUntil<now)continue;
             double distance=nearestDistance(current,incident.points);
             if(distance>5_000d)continue;
-            boolean close=distance<=650d;
+            if(!roadCompatible(incident.road,currentRoadRef,currentRoadName,distance))continue;
+            boolean close=distance<=120d;
             boolean ahead=true;
             if(!close && current.hasBearing()) {
                 Location target=nearestPoint(current,incident.points);
@@ -179,6 +196,40 @@ final class TrafficIncidentRepository {
             }
         }
         return selected==null?null:new Alert(selected,best);
+    }
+
+    /**
+     * A nearby incident on a crossing or parallel road must not occupy the driving alert. A
+     * matching road code is authoritative; without one, only a very close geometry is accepted.
+     */
+    static boolean roadCompatible(String incidentRoad, String currentRoadRef,
+                                  String currentRoadName, double distanceMeters) {
+        String incidentCode=roadCode(incidentRoad);
+        String currentCode=roadCode(first(currentRoadRef,currentRoadName));
+        if(!incidentCode.isEmpty()) {
+            if(!currentCode.isEmpty())return incidentCode.equals(currentCode);
+            // The local OSM segment may temporarily lack a ref while approaching a junction.
+            // Admit only a short, heading-checked adjacency window; alert() applies the heading.
+            return distanceMeters<=300d;
+        }
+        String incidentName=roadName(incidentRoad);
+        String currentName=roadName(first(currentRoadName,currentRoadRef));
+        if(!incidentName.isEmpty()&&!currentName.isEmpty()
+                &&(incidentName.contains(currentName)||currentName.contains(incidentName)))return true;
+        return distanceMeters<=300d;
+    }
+
+    private static String roadCode(String value) {
+        String normalized=value==null?"":value.trim().toUpperCase(Locale.ROOT);
+        Matcher matcher=ROAD_CODE.matcher(' '+normalized+' ');
+        return matcher.find()?matcher.group(1)+'-'+matcher.group(2):"";
+    }
+
+    private static String roadName(String value) {
+        String normalized=value==null?"":value.trim().toUpperCase(Locale.ROOT)
+                .replaceAll("[^A-Z0-9ÁÉÍÓÚÜÑ]+"," ").trim();
+        if(normalized.equals("VÍA SIN REFERENCIA")||normalized.equals("VIA SIN REFERENCIA"))return "";
+        return normalized;
     }
 
     List<OfflineRoadMapView.Incident> mapIncidents(Location current) {

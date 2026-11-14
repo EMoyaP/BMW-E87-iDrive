@@ -1445,10 +1445,11 @@ public class MainActivity extends Activity {
                 : speed != null && speed.isAvailable() && speed.value() instanceof Number
                 ? ((Number) speed.value()).doubleValue() : null;
         RadarRepository.Alert alert = radars.alert(currentLocation, speedValue);
-        TrafficIncidentRepository.Alert trafficAlert = alert==null
-                ?trafficIncidents.alert(currentLocation):null;
         SpeedResolutionCoordinator.Result resolved = speedResolver.resolve(currentLocation);
         SpeedLimitRepository.Match limit = resolved.match;
+        TrafficIncidentRepository.Alert trafficAlert = alert==null
+                ?trafficIncidents.alert(currentLocation,limit==null?"":limit.roadRef,
+                limit==null?"":limit.roadName):null;
         InviveRepository.Alert surveillance = alert == null && trafficAlert == null
                 ? invive.alert(currentLocation, limit, speedValue) : null;
         drivingContext.alerts(alert, surveillance);
@@ -1933,29 +1934,13 @@ public class MainActivity extends Activity {
         description.setPadding(dp(8), dp(4), dp(8), dp(12));
         box.addView(description);
 
-        Button updateAll = dialogButton("ACTUALIZAR TODO");
+        Button updateAll = dialogButton("FORZAR TODAS LAS ACTUALIZACIONES");
         box.addView(updateAll, lp(-1, dp(56)));
 
-        TextView unitTitle = txt("ACTUALIZACIONES UNITARIAS", 11, BLUE, true);
-        unitTitle.setPadding(dp(8), dp(10), dp(8), dp(2));
-        box.addView(unitTitle, lp(-1, dp(30)));
-        LinearLayout firstUnitRow = new LinearLayout(this);
-        firstUnitRow.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout secondUnitRow = new LinearLayout(this);
-        secondUnitRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button osm = dialogButton("OSM · ALICANTE");
-        Button fuel = dialogButton("GASOLINERAS");
-        Button radar = dialogButton("RADARES DGT");
-        Button dgt = dialogButton("LÍMITES DGT");
-        Button inviveButton = dialogButton("INVIVE");
-        Button tomTomButton = dialogButton("TOMTOM · DATOS CONECTADOS");
-        firstUnitRow.addView(osm, lp(0, dp(48), 1));
-        firstUnitRow.addView(fuel, lp(0, dp(48), 1));
-        secondUnitRow.addView(radar, lp(0, dp(48), 1));
-        secondUnitRow.addView(dgt, lp(0, dp(48), 1));
-        secondUnitRow.addView(inviveButton, lp(0, dp(48), 1));
-        box.addView(firstUnitRow, lp(-1, dp(48)));
-        box.addView(secondUnitRow, lp(-1, dp(48)));
+        Button individualUpdates = dialogButton("DESCARGAS INDIVIDUALES…");
+        box.addView(individualUpdates, lp(-1, dp(48)));
+
+        Button tomTomButton = dialogButton("CONFIGURAR DATOS CONECTADOS TOMTOM");
         box.addView(tomTomButton, lp(-1, dp(44)));
 
         LinearLayout voiceRow = horizontal();
@@ -2006,11 +1991,10 @@ public class MainActivity extends Activity {
             dialog.dismiss();
             updateAllSources();
         });
-        osm.setOnClickListener(v -> { dialog.dismiss(); updateSingleOsm(); });
-        fuel.setOnClickListener(v -> { dialog.dismiss(); updateSingleFuel(); });
-        radar.setOnClickListener(v -> { dialog.dismiss(); updateSingleRadars(); });
-        dgt.setOnClickListener(v -> { dialog.dismiss(); updateSingleDgt(); });
-        inviveButton.setOnClickListener(v -> { dialog.dismiss(); updateSingleInvive(); });
+        individualUpdates.setOnClickListener(v -> {
+            dialog.dismiss();
+            individualUpdatesModal();
+        });
         tomTomButton.setOnClickListener(v -> { dialog.dismiss(); tomTomTrafficModal(); });
         radarVoice.setOnCheckedChangeListener((button, enabled) -> {
             uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
@@ -2021,6 +2005,44 @@ public class MainActivity extends Activity {
             toast("Prueba de locución: radar fijo, límite 50");
         });
         showSized(dialog, .88f, .86f);
+    }
+
+    private void individualUpdatesModal() {
+        LinearLayout box = vertical();
+        box.setBackgroundColor(PANEL);
+        box.setPadding(dp(12), dp(10), dp(12), dp(10));
+        TextView note = txt("Utiliza estas acciones sólo para repetir una fuente concreta. "
+                + "La actualización completa sigue siendo la opción recomendada.",
+                11, TEXT, false);
+        note.setPadding(dp(8), dp(2), dp(8), dp(10));
+        box.addView(note, lp(-1, dp(54)));
+
+        LinearLayout firstRow = horizontal();
+        LinearLayout secondRow = horizontal();
+        Button osm = dialogButton("OSM · ALICANTE");
+        Button fuel = dialogButton("GASOLINERAS");
+        Button radar = dialogButton("RADARES DGT");
+        Button dgt = dialogButton("LÍMITES DGT");
+        Button inviveButton = dialogButton("INVIVE");
+        firstRow.addView(osm, lp(0, dp(52), 1));
+        firstRow.addView(fuel, lp(0, dp(52), 1));
+        secondRow.addView(radar, lp(0, dp(52), 1));
+        secondRow.addView(dgt, lp(0, dp(52), 1));
+        secondRow.addView(inviveButton, lp(0, dp(52), 1));
+        box.addView(firstRow, lp(-1, dp(52)));
+        box.addView(secondRow, lp(-1, dp(52)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Descargas individuales")
+                .setView(box)
+                .setNegativeButton("VOLVER", (ignored, which) -> updatesModal())
+                .create();
+        osm.setOnClickListener(v -> { dialog.dismiss(); updateSingleOsm(); });
+        fuel.setOnClickListener(v -> { dialog.dismiss(); updateSingleFuel(); });
+        radar.setOnClickListener(v -> { dialog.dismiss(); updateSingleRadars(); });
+        dgt.setOnClickListener(v -> { dialog.dismiss(); updateSingleDgt(); });
+        inviveButton.setOnClickListener(v -> { dialog.dismiss(); updateSingleInvive(); });
+        showSized(dialog, .72f, .46f);
     }
 
     private void tomTomTrafficModal() {
@@ -2041,7 +2063,19 @@ public class MainActivity extends Activity {
         key.setHintTextColor(MUTED);
         key.setSingleLine(true);
         key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setText(trafficIncidents.tomTomKeyForEditing());
+        key.setSelection(key.length());
         box.addView(key, lp(-1, dp(52)));
+        CheckBox showKey = new CheckBox(this);
+        showKey.setText("MOSTRAR CLAVE TOMTOM");
+        showKey.setTextColor(TEXT);
+        showKey.setOnCheckedChangeListener((button, visible) -> {
+            key.setInputType(InputType.TYPE_CLASS_TEXT | (visible
+                    ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    : InputType.TYPE_TEXT_VARIATION_PASSWORD));
+            key.setSelection(key.length());
+        });
+        box.addView(showKey, lp(-1, dp(40)));
         CheckBox enabled = new CheckBox(this);
         enabled.setText("ACTIVAR DATOS CONECTADOS TOMTOM");
         enabled.setTextColor(TEXT);
@@ -2123,19 +2157,22 @@ public class MainActivity extends Activity {
     }
 
     private void updateAllSources() {
-        if (speedLimits == null || dgtSpeeds == null || radars == null || invive == null
-                || fuelStations == null) return;
-        if (!speedLimits.isInternetAvailable() && !dgtSpeeds.isInternetAvailable()
-                && !radars.isInternetAvailable() && !fuelStations.isInternetAvailable()) {
-            toast("No hay una conexión a Internet validada");
-            return;
+        AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.FUEL,
+                "Actualización manual solicitada");
+        AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.GIT,
+                "Preparando lote completo…");
+        if (AutomaticOnlineUpdateScheduler.forceNow(this)) {
+            refreshAutomaticUpdateProgress();
+            toast("Actualización completa programada; continuará en segundo plano");
+            AppSessionLog.event("AUTO ACTUALIZACIÓN", "Lote completo solicitado por el usuario");
+        } else {
+            AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.FUEL,
+                    "Pendiente; se reintentará con Internet");
+            AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.GIT,
+                    "Pendiente; se reintentará con Internet");
+            refreshAutomaticUpdateProgress();
+            toast("No se pudo iniciar ahora; se reintentará automáticamente");
         }
-        if (!beginBackgroundUpdate("Todas las fuentes")) return;
-        UpdatesProgressDialog progress = new UpdatesProgressDialog(new String[]{
-                "OSM · Alicante", "Gasolineras", "Radares DGT", "Límites DGT nacionales",
-                "INVIVE nacional", "Consolidación local"});
-        progress.show();
-        updateCoordinator.all(gps == null ? null : gps.getLastLocation(), updateListener(progress));
     }
 
     private void updateSingleOsm() {

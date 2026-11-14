@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## 2.0 — 14/11/2026
+
+- Se integran las semillas completas y validadas del constructor de datos para Alicante, Murcia,
+  Valencia, Albacete y Almería (lote 13/11), y la compilación vuelve a descargar hoy los
+  inventarios nacionales DGT. La migración de semilla sube de versión para aplicarlas también al
+  instalar sobre una versión anterior sin eliminar datos descargados más recientes.
+- Las incidencias en directo se muestran únicamente si pertenecen a la vía actual. Un segmento
+  inmediatamente enlazado sin referencia todavía puede avisar hasta 300 m y con rumbo compatible;
+  una incidencia de otra carretera conocida, como CV-865 desde Valverde, se descarta incluso si
+  está cerca o aproximadamente delante.
+- Las avenidas, calles y rondas urbanas sin `maxspeed` ni referencia de carretera ya no reciben la
+  recomendación genérica interurbana de 90 km/h. Se muestra una referencia azul conservadora de
+  30 km/h hasta que OSM, DGT o TomTom aporten un límite explícito.
+- La simulación Valverde → Mercadona Gran Alacant → Carrefour Santa Pola → Valverde valida los
+  cambios de segmento, N-332 a 80 km/h, descarte del radar de sentido contrario, aviso del radar
+  en sentido Santa Pola y actualización en directo de incidencias DGT.
+- Las señales V16 conectadas publicadas por DGT 3.0 se interpretan dentro de la categoría
+  `VEHÍCULO PARADO`; conservan la misma caducidad y filtro de trayectoria que el resto de avisos
+  en directo y nunca se almacenan como conocimiento estático.
+- La pantalla de actualizaciones sustituye los botones unitarios por una sola acción para forzar
+  el lote completo: precios MITECO, paquete cartográfico Git, límites/radares/INVIVE DGT y una
+  posible APK nueva. Un segundo botón abre las descargas individuales sólo cuando se necesita
+  repetir una fuente concreta. TomTom permanece como configuración independiente.
+- Configuración incorpora un botón TomTom que permite mostrar, ocultar o sustituir la clave. Una
+  clave local `updatebmwtoken.txt` puede integrarse sólo en una APK privada y se importa una vez
+  a las preferencias de la radio con TomTom activado; el archivo continúa excluido de Git.
+
 ## 1.28.2 — 13/11/2026
 
 - La gasolinera mostrada en conducción es siempre la más cercana dentro de 7 km y utiliza el

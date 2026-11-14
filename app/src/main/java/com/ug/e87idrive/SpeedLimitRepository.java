@@ -86,7 +86,7 @@ final class SpeedLimitRepository {
     /** Bump when a bundled provincial seed must be checked on top of an older installation. */
     /** v3 replaces the old maxspeed-only Alicante cache with the full road-class seed. */
     // v10 adds the fully validated 13/11/2026 five-province bundle, including Almería.
-    private static final int BUNDLED_SEED_VERSION = 10;
+    private static final int BUNDLED_SEED_VERSION = 11;
     private static final long RECENT_EXPLICIT_LIMIT_MAX_AGE_MS = 8L * 60L * 1_000L;
     private static final float RECENT_EXPLICIT_LIMIT_MAX_DISTANCE_METERS = 6_000f;
     /** The GPS listener may deliver up to two fixes per second. Local map work is throttled by
@@ -1376,7 +1376,24 @@ final class SpeedLimitRepository {
                 && match.roadRef.trim().isEmpty()) {
             return match.withAdvisoryLimit(30);
         }
+        // A numbered secondary/tertiary way can reasonably use the generic interurban
+        // reference above. The same OSM classes are also used for urban avenues and ring
+        // streets, where displaying 90 would be dangerously misleading. Without an explicit
+        // maxspeed (or a connected TomTom result) keep those named urban streets at the
+        // conservative Spanish single-lane urban reference. It remains a blue advisory value.
+        if (isUrbanStreetName(match.roadName)) {
+            return match.withAdvisoryLimit(Math.min(match.limitKmh, 30));
+        }
         return match;
+    }
+
+    private static boolean isUrbanStreetName(String roadName) {
+        String value = roadName == null ? "" : roadName.trim().toLowerCase(Locale.ROOT);
+        return value.startsWith("calle ") || value.startsWith("carrer ")
+                || value.startsWith("avenida ") || value.startsWith("avinguda ")
+                || value.startsWith("ronda ") || value.startsWith("paseo ")
+                || value.startsWith("passeig ") || value.startsWith("plaza ")
+                || value.startsWith("plaça ");
     }
 
     static String roadClassLabel(String roadClass) {

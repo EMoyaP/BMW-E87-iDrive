@@ -34,6 +34,26 @@ final class AutomaticOnlineUpdateScheduler {
         }
     }
 
+    /** User-requested complete refresh. Uses the same durable pipeline as connectivity recovery. */
+    static boolean forceNow(Context context) {
+        JobScheduler scheduler = context.getSystemService(JobScheduler.class);
+        if (scheduler == null) return false;
+        ComponentName service = new ComponentName(context, AutomaticOnlineUpdateJobService.class);
+        try {
+            scheduler.cancel(NOW_JOB_ID);
+            int result = scheduler.schedule(new JobInfo.Builder(NOW_JOB_ID, service)
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setBackoffCriteria(60_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
+                    .setPersisted(true).build());
+            ensure(context);
+            return result == JobScheduler.RESULT_SUCCESS;
+        } catch (Exception error) {
+            AppSessionLog.event("AUTO ACTUALIZACIÓN", "No se pudo forzar el lote completo · "
+                    + error.getClass().getSimpleName());
+            return false;
+        }
+    }
+
     private static boolean hasJob(JobScheduler scheduler, int id) {
         for (JobInfo job : scheduler.getAllPendingJobs()) if (job.getId() == id) return true;
         return false;

@@ -1,5 +1,10 @@
 plugins { id 'com.android.application' }
 
+def tomTomTokenFile = [rootProject.file('updatebmwtoken.txt'),
+        rootProject.file('../updatebmwtoken.txt')].find { it.isFile() }
+def tomTomBundledKey = tomTomTokenFile == null ? '' : tomTomTokenFile.getText('UTF-8').trim()
+def tomTomBundledKeyJava = tomTomBundledKey.replace('\\', '\\\\').replace('"', '\\"')
+
 def dgtRadarAssetDir = layout.buildDirectory.dir('generated/dgtRadarAssets')
 def dgtRadarAsset = dgtRadarAssetDir.map { it.file('e87_dgt_radars_spain.xml') }
 def dgtInviveAssetDir = layout.buildDirectory.dir('generated/dgtInviveAssets')
@@ -89,9 +94,12 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 78
-        versionName "1.28.2"
+        versionCode 80
+        versionName "2.0"
+        buildConfigField "String", "TOMTOM_API_KEY", "\"${tomTomBundledKeyJava}\""
     }
+
+    buildFeatures { buildConfig true }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
