@@ -71,6 +71,27 @@ final class InviveRepository {
 
     void close() { database.close(); }
 
+    boolean installGitBundle(java.io.File xmlFile) {
+        if (xmlFile == null || !xmlFile.isFile()) return false;
+        try (InputStream input = new BufferedInputStream(new java.io.FileInputStream(xmlFile))) {
+            ArrayList<Record> records = parseDgt(input, "TODAS");
+            if (records.isEmpty()) throw new IOException("Semilla INVIVE vacía");
+            int imported = database.replaceAll(records);
+            if (imported <= 0 || imported != records.size()) {
+                throw new IOException("Recuento INVIVE distinto: " + imported + "/" + records.size());
+            }
+            preferences.edit().putInt("bundled_seed_version", BUNDLED_SEED_VERSION).apply();
+            seedStatus = imported + " zonas INVIVE · paquete Git";
+            lastResult = "Paquete de datos instalado";
+            AppSessionLog.event("DATOS GIT", "INVIVE sustituido desde paquete · " + imported + " zonas");
+            return true;
+        } catch (Exception error) {
+            AppSessionLog.event("DATOS GIT", "INVIVE rechazado; se conserva la base previa · "
+                    + error.getMessage());
+            return false;
+        }
+    }
+
     Alert alert(Location location, SpeedLimitRepository.Match roadMatch, Double speedKmh) {
         if (location == null || location.getLatitude() == 0d && location.getLongitude() == 0d) return null;
         String currentRoad = canonicalRoad(roadMatch == null ? "" : roadMatch.roadRef);

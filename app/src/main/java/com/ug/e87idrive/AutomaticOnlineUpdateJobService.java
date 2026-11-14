@@ -25,6 +25,11 @@ public final class AutomaticOnlineUpdateJobService extends JobService {
         AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.GIT,
                 "Comprobando cartografía…");
         speedLimits = new SpeedLimitRepository(this);
+        // Start the local radar store while the bundle downloads so packaged seed imports finish
+        // before its validated OSM/Lufop replacement is committed.
+        radars = new RadarRepository(this, () -> "TODAS");
+        dgtSpeeds = new DgtSpeedRepository(this);
+        invive = new InviveRepository(this);
         fuel = new FuelStationProvider(this, snapshot -> { });
         if (location == null) {
             AutomaticUpdateStateStore.pending(this, AutomaticUpdateStateStore.FUEL,
@@ -53,7 +58,8 @@ public final class AutomaticOnlineUpdateJobService extends JobService {
     private void updateGit(JobParameters parameters, boolean retryAlreadyNeeded) {
         new Thread(() -> {
             GitDataBundleUpdater.Result result = new GitDataBundleUpdater(this)
-                    .checkAndInstall(speedLimits, (percent, message) ->
+                    .checkAndInstall(speedLimits, radars, dgtSpeeds, invive,
+                            (percent, message) ->
                             AutomaticUpdateStateStore.progress(this,
                                     AutomaticUpdateStateStore.GIT, percent, message));
             updateOfficialFeeds(parameters, retryAlreadyNeeded || !result.success,
@@ -64,9 +70,9 @@ public final class AutomaticOnlineUpdateJobService extends JobService {
     private void updateOfficialFeeds(JobParameters parameters, boolean retry,
             boolean gitSuccess, String gitMessage) {
         if (stopped) { finish(parameters, true); return; }
-        dgtSpeeds = new DgtSpeedRepository(this);
-        radars = new RadarRepository(this, () -> "TODAS");
-        invive = new InviveRepository(this);
+        if (radars == null) radars = new RadarRepository(this, () -> "TODAS");
+        if (dgtSpeeds == null) dgtSpeeds = new DgtSpeedRepository(this);
+        if (invive == null) invive = new InviveRepository(this);
         AutomaticUpdateStateStore.progress(this, AutomaticUpdateStateStore.GIT, 86,
                 "Actualizando límites DGT…");
         dgtSpeeds.refreshFromInternet(dgt -> {

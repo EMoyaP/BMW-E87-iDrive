@@ -16,6 +16,7 @@ import android.util.Xml;
 
 import org.xmlpull.v1.XmlPullParser;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -86,6 +87,36 @@ final class DgtSpeedRepository {
     void close() {
         stop();
         database.close();
+    }
+
+    UpdateResult installGitBundle(java.io.File xmlFile) {
+        if (xmlFile == null || !xmlFile.isFile()) return new UpdateResult(false, "Falta semilla XML DGT");
+        try (InputStream input = new BufferedInputStream(new java.io.FileInputStream(xmlFile))) {
+            Dataset dataset = parseXml(input);
+            if (dataset.records.isEmpty() || dataset.datasetCreatedAt <= 0L) {
+                throw new IOException("Semilla DGT sin registros o sin fecha de publicación válida");
+            }
+            long installedAt = preferences.getLong(KEY_LAST_DATASET_CREATED_AT, 0L);
+            if (dataset.datasetCreatedAt <= installedAt) {
+                seedStatus = "Límites DGT conservados · paquete ya aplicado";
+                AppSessionLog.event("DATOS GIT", "Semilla TN-ITS anterior o igual a la SQLite actual; no se revierte historial");
+                return new UpdateResult(true, seedStatus);
+            }
+            int imported = database.apply(dataset.records, dataset.datasetCreatedAt,
+                    "DGT_WEEKLY_SEED");
+            preferences.edit().putLong(KEY_LAST_DATASET_CREATED_AT, dataset.datasetCreatedAt)
+                    .putInt("bundled_seed_version", BUNDLED_SEED_VERSION)
+                    .putString("seed_mode", "weekly_delta_partial").apply();
+            seedStatus = imported + " cambios DGT fusionados desde Git · delta parcial";
+            AppSessionLog.event("DATOS GIT", "TN-ITS fusionado preservando historial · " + imported
+                    + " cambios · fecha=" + dataset.datasetCreatedAt);
+            return new UpdateResult(true, seedStatus);
+        } catch (Exception error) {
+            AppSessionLog.event("DATOS GIT", "TN-ITS rechazado; se conserva el historial SQLite · "
+                    + error.getMessage());
+            return new UpdateResult(false, "Semilla DGT rechazada: "
+                    + error.getClass().getSimpleName());
+        }
     }
 
     /** National update. Province is only a presentation/filter concern, never a download scope. */

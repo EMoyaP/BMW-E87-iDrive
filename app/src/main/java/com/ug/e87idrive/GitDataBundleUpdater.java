@@ -35,6 +35,7 @@ final class GitDataBundleUpdater {
             + "BMW-E87-iDrive/releases?per_page=12";
     private static final int MAX_MANIFEST_BYTES = 1_000_000;
     private static final int MAX_ROAD_FILE_BYTES = 64 * 1024 * 1024;
+    private static final int INSTALLER_REVISION = 3;
     /** The immediate and periodic Android jobs may become eligible at the same time. Keep their
      * shared staging directory and the transactional SQLite activation strictly single-writer. */
     private static final Object INSTALL_LOCK = new Object();
@@ -46,13 +47,17 @@ final class GitDataBundleUpdater {
         preferences = this.context.getSharedPreferences("e87_git_data_bundle", Context.MODE_PRIVATE);
     }
 
-    Result checkAndInstall(SpeedLimitRepository speedLimits, Progress progress) {
+    Result checkAndInstall(SpeedLimitRepository speedLimits, RadarRepository radars,
+                           DgtSpeedRepository dgtSpeeds, InviveRepository invive,
+                           Progress progress) {
         synchronized (INSTALL_LOCK) {
-            return checkAndInstallLocked(speedLimits, progress);
+            return checkAndInstallLocked(speedLimits, radars, dgtSpeeds, invive, progress);
         }
     }
 
-    private Result checkAndInstallLocked(SpeedLimitRepository speedLimits, Progress progress) {
+    private Result checkAndInstallLocked(SpeedLimitRepository speedLimits, RadarRepository radars,
+                                         DgtSpeedRepository dgtSpeeds, InviveRepository invive,
+                                         Progress progress) {
         File staging = new File(context.getCacheDir(), "e87-data-bundle-staging");
         try {
             progress.update(5, "Consultando publicaciones de datos…");
@@ -60,7 +65,8 @@ final class GitDataBundleUpdater {
             JSONObject release = latestDataRelease(releases);
             if (release == null) return new Result(true, false, "Sin paquete Git publicado");
             String version = release.optString("tag_name", "");
-            if (version.equals(preferences.getString("installed_version", ""))) {
+            if (version.equals(preferences.getString("installed_version", ""))
+                    && preferences.getInt("installer_revision", 0) >= INSTALLER_REVISION) {
                 return new Result(true, false, "Cartografía Git ya actualizada");
             }
             Map<String, String> assets = releaseAssets(release.optJSONArray("assets"));
@@ -74,31 +80,72 @@ final class GitDataBundleUpdater {
             if (!staging.mkdirs() && !staging.isDirectory()) throw new IOException("Sin carpeta temporal");
             JSONArray files = manifest.getJSONArray("files");
             Map<String, File> provincial = new HashMap<>();
+            Map<String, File> osmRadars = new HashMap<>();
             Map<String, Integer> expectedRows = new HashMap<>();
             int expectedProvinceFiles = 0;
+            File lufopFile = null;
+            File dgtRadarFile = null, inviveFile = null, dgtSpeedFile = null;
+            int expectedLufopRecords = 0;
             for (int i = 0; i < files.length(); i++) {
                 JSONObject entry = files.getJSONObject(i);
                 String name = entry.getString("name");
                 String code = provinceCode(name);
-                if (code == null) continue;
-                expectedProvinceFiles++;
+                String osmCode = osmRadarProvinceCode(name);
+                boolean lufop = "e87_lufop_radars_es.dat".equals(name);
+                boolean dgtRadar = "e87_dgt_radars_spain.xml".equals(name);
+                boolean dgtInvive = "e87_dgt_invive_spain.xml".equals(name);
+                boolean dgtSpeed = "e87_dgt_speed_limits_spain.xml".equals(name);
+                if (code == null && osmCode == null && !lufop
+                        && !dgtRadar && !dgtInvive && !dgtSpeed) continue;
+                if (code != null) expectedProvinceFiles++;
                 String url = assets.get(name);
                 if (url == null) throw new IOException("Asset ausente: " + name);
                 progress.update(12 + i * 63 / Math.max(1, files.length()),
-                        "Descargando " + code.toLowerCase(Locale.ROOT) + "…");
+                        "Descargando " + (code != null ? code : osmCode != null
+                                ? "radares " + osmCode : lufop ? "Lufop"
+                                : dgtRadar ? "radares DGT" : dgtInvive ? "INVIVE" : "límites DGT") + "…");
                 File target = new File(staging, name);
                 download(url, target, entry.getLong("bytes"), entry.getString("sha256"));
-                provincial.put(code, target);
-                expectedRows.put(code, entry.getInt("records"));
+                if (code != null) {
+                    provincial.put(code, target);
+                    expectedRows.put(code, entry.getInt("records"));
+                } else if (osmCode != null) {
+                    osmRadars.put(osmCode, target);
+                } else {
+                    if (lufop) {
+                        lufopFile = target;
+                        expectedLufopRecords = entry.getInt("records");
+                    } else if (dgtRadar) dgtRadarFile = target;
+                    else if (dgtInvive) inviveFile = target;
+                    else if (dgtSpeed) dgtSpeedFile = target;
+                }
             }
             if (expectedProvinceFiles != 5 || provincial.size() != 5) {
                 throw new IOException("Cobertura incompleta; se requieren cinco provincias");
             }
-            progress.update(82, "Validando e instalando cartografía…");
+            if (osmRadars.size() != 5 || lufopFile == null || radars == null
+                    || dgtRadarFile == null || inviveFile == null || dgtSpeedFile == null
+                    || dgtSpeeds == null || invive == null) {
+                throw new IOException("El paquete no incluye todas las capas OSM/DGT/Lufop");
+            }
+            progress.update(78, "Validando e instalando carreteras…");
             SpeedLimitRepository.UpdateResult installed = speedLimits.installBundleRoadSeeds(
                     provincial, expectedRows, System.currentTimeMillis());
             if (!installed.success) throw new IOException(installed.message);
+            progress.update(86, "Sustituyendo radares OSM, DGT y Lufop…");
+            if (!radars.installGitRadarBundle(osmRadars, lufopFile, expectedLufopRecords,
+                    dgtRadarFile, System.currentTimeMillis())) {
+                throw new IOException("No se pudo activar la base de radares del paquete");
+            }
+            progress.update(90, "Fusionando límites DGT…");
+            DgtSpeedRepository.UpdateResult dgtResult = dgtSpeeds.installGitBundle(dgtSpeedFile);
+            if (!dgtResult.success) throw new IOException(dgtResult.message);
+            progress.update(94, "Sustituyendo zonas INVIVE…");
+            if (!invive.installGitBundle(inviveFile)) {
+                throw new IOException("No se pudo activar la base INVIVE del paquete");
+            }
             preferences.edit().putString("installed_version", version)
+                    .putInt("installer_revision", INSTALLER_REVISION)
                     .putLong("installed_at", System.currentTimeMillis()).apply();
             progress.update(100, installed.message);
             deleteTree(staging);
@@ -135,6 +182,16 @@ final class GitDataBundleUpdater {
     private static String provinceCode(String name) {
         if (name == null || !name.startsWith("e87_speed_limits_") || !name.endsWith(".tsv.gz")) return null;
         String value = name.substring("e87_speed_limits_".length(), name.length() - ".tsv.gz".length());
+        switch (value) {
+            case "alicante": return "ALICANTE"; case "murcia": return "MURCIA";
+            case "valencia": return "VALENCIA"; case "albacete": return "ALBACETE";
+            case "almeria": return "ALMERIA"; default: return null;
+        }
+    }
+
+    private static String osmRadarProvinceCode(String name) {
+        if (name == null || !name.startsWith("e87_osm_radars_") || !name.endsWith(".json.gz")) return null;
+        String value = name.substring("e87_osm_radars_".length(), name.length() - ".json.gz".length());
         switch (value) {
             case "alicante": return "ALICANTE"; case "murcia": return "MURCIA";
             case "valencia": return "VALENCIA"; case "albacete": return "ALBACETE";

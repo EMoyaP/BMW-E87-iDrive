@@ -13,6 +13,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from builder_core import BuildSettings, DataBuilder
 
+BUILDER_VERSION = "1.1.0"
+
 
 def app_dir() -> Path:
     return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
@@ -36,7 +38,7 @@ def discover_local_token(project: Path, executable_dir: Path | None = None) -> s
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("BMW E87 Data Builder")
+        self.title(f"BMW E87 Data Builder {BUILDER_VERSION}")
         self.geometry("980x700")
         self.minsize(860, 620)
         self.configure(bg="#050b12")
@@ -58,7 +60,8 @@ class App(tk.Tk):
         style.configure("Treeview.Heading", background="#12304a", foreground="white")
         root = ttk.Frame(self, padding=18)
         root.pack(fill="both", expand=True)
-        ttk.Label(root, text="BMW E87 · ACTUALIZADOR DE DATOS", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(root, text=f"BMW E87 · ACTUALIZADOR DE DATOS {BUILDER_VERSION}",
+                  style="Header.TLabel").pack(anchor="w")
         ttk.Label(root, text="Prepara, valida y publica cartografía, límites, radares e INVIVE. Los precios de gasolineras no se incluyen.").pack(anchor="w", pady=(0, 14))
 
         form = ttk.Frame(root)

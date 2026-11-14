@@ -167,7 +167,7 @@ final class SpeedLimitRepository {
                 .getSystemService(Context.CONNECTIVITY_SERVICE);
         this.updatePreferences = this.context.getSharedPreferences("speed_limit_updates",
                 Context.MODE_PRIVATE);
-        this.database = new Database(this.context);
+        this.database = Database.shared(this.context);
         seedFromAssetsAsync();
     }
 
@@ -1630,8 +1630,28 @@ final class SpeedLimitRepository {
     private static final class Database extends SQLiteOpenHelper {
         private static final String NAME = "e87_speed_limits.db";
         private static final int VERSION = 9;
+        private static volatile Database sharedInstance;
 
         Database(Context context) { super(context, NAME, null, VERSION); }
+
+        /**
+         * Activities and durable update jobs can construct repositories at the same time.
+         * Separate SQLiteOpenHelper instances race while opening the same database and Android
+         * may fail in PRAGMA journal_mode before any transaction/locking code runs. Share one
+         * helper process-wide so schema initialization and seed imports have a single opener.
+         */
+        static Database shared(Context context) {
+            Database current = sharedInstance;
+            if (current != null) return current;
+            synchronized (Database.class) {
+                current = sharedInstance;
+                if (current == null) {
+                    current = new Database(context.getApplicationContext());
+                    sharedInstance = current;
+                }
+            }
+            return current;
+        }
 
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE speed_limits (osm_id TEXT PRIMARY KEY, maxspeed INTEGER NOT NULL, "

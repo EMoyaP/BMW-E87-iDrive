@@ -23,6 +23,8 @@ public final class MediaSessionProvider {
     public static final class Snapshot {
         public final String title, artist, album, source, state;
         public final Bitmap artwork;
+        public final long positionMs, durationMs;
+        public final long positionCapturedAtElapsedMs;
         public final boolean accessGranted, listenerConnected, sessionAvailable;
         public final boolean canPlayPause, canPrevious, canNext;
 
@@ -31,13 +33,21 @@ public final class MediaSessionProvider {
                  boolean canPlayPause,
                  boolean canPrevious, boolean canNext) {
             this(title, artist, "", source, state, artwork, accessGranted, listenerConnected,
-                    sessionAvailable, canPlayPause, canPrevious, canNext);
+                    sessionAvailable, canPlayPause, canPrevious, canNext, -1L, -1L);
         }
 
         Snapshot(String title, String artist, String album, String source, String state,
                  Bitmap artwork, boolean accessGranted, boolean listenerConnected,
                  boolean sessionAvailable, boolean canPlayPause,
                  boolean canPrevious, boolean canNext) {
+            this(title, artist, album, source, state, artwork, accessGranted, listenerConnected,
+                    sessionAvailable, canPlayPause, canPrevious, canNext, -1L, -1L);
+        }
+
+        Snapshot(String title, String artist, String album, String source, String state,
+                 Bitmap artwork, boolean accessGranted, boolean listenerConnected,
+                 boolean sessionAvailable, boolean canPlayPause,
+                 boolean canPrevious, boolean canNext, long positionMs, long durationMs) {
             this.title = title;
             this.artist = artist;
             this.album = album;
@@ -50,6 +60,9 @@ public final class MediaSessionProvider {
             this.canPlayPause = canPlayPause;
             this.canPrevious = canPrevious;
             this.canNext = canNext;
+            this.positionMs = positionMs;
+            this.durationMs = durationMs;
+            this.positionCapturedAtElapsedMs = android.os.SystemClock.elapsedRealtime();
         }
     }
 
@@ -92,7 +105,7 @@ public final class MediaSessionProvider {
                 return last = fromSpeedPlay(speedPlay);
             }
             List<MediaController> controllers = activeSessions();
-            MediaController controller = findController(controllers, packageName);
+            MediaController controller = preferredPlaybackController(controllers, packageName);
             if (controller == null) {
                 MediaNotificationListener.Snapshot notification =
                         MediaNotificationListener.latestForPackage(packageName);
@@ -164,6 +177,11 @@ public final class MediaSessionProvider {
         out.append("acceso configurado=").append(isAccessConfigured()).append('\n');
         out.append(MediaNotificationListener.diagnosticSummary());
         out.append(SpeedPlayMediaReceiver.diagnosticSummary()).append('\n');
+        MediaNotificationListener.NavigationSnapshot navigation =
+                MediaNotificationListener.latestNavigation();
+        out.append("Google Maps NavigationNotification=")
+                .append(navigation == null ? "sin maniobra activa" : navigation.raw)
+                .append('\n');
         out.append(jancarMedia.diagnosticReport());
         try {
             List<MediaController> controllers = activeSessions();
@@ -172,6 +190,9 @@ public final class MediaSessionProvider {
                 PlaybackState playback = controller.getPlaybackState();
                 out.append("- ").append(controller.getPackageName())
                         .append(" · estado=").append(playback == null ? "sin estado" : playback.getState())
+                        .append(" · título=").append(firstText(controller.getMetadata(), "", MediaMetadata.METADATA_KEY_TITLE, MediaMetadata.METADATA_KEY_DISPLAY_TITLE))
+                        .append(" · artista=").append(firstText(controller.getMetadata(), "", MediaMetadata.METADATA_KEY_ARTIST, MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE))
+                        .append(" · álbum=").append(firstText(controller.getMetadata(), "", MediaMetadata.METADATA_KEY_ALBUM))
                         .append(" · acciones=0x")
                         .append(Long.toHexString(playback == null ? 0L : playback.getActions()))
                         .append('\n');
@@ -272,29 +293,46 @@ public final class MediaSessionProvider {
         long actions = playback == null ? 0L : playback.getActions();
         boolean canPlayPause = (actions & (PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE)) != 0L;
+        long durationMs = metadata == null ? -1L
+                : metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+        long positionMs = playback == null ? -1L : playback.getPosition();
+        if (playback != null && playback.getState() == PlaybackState.STATE_PLAYING
+                && positionMs >= 0 && playback.getLastPositionUpdateTime() > 0) {
+            positionMs += Math.max(0L, android.os.SystemClock.elapsedRealtime()
+                    - playback.getLastPositionUpdateTime());
+        }
         return new Snapshot(title, artist, album, controller.getPackageName(), state(controller),
                 artwork(metadata), true, MediaNotificationListener.isConnected(), true,
                 canPlayPause,
                 (actions & PlaybackState.ACTION_SKIP_TO_PREVIOUS) != 0L,
-                (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L);
+                (actions & PlaybackState.ACTION_SKIP_TO_NEXT) != 0L, positionMs, durationMs);
     }
 
     private Snapshot fromSpeedPlay(SpeedPlayMediaReceiver.Snapshot speedPlay) {
         String title = speedPlay.title.isEmpty() ? "Reproducción SpeedPlay" : speedPlay.title;
         String artist = speedPlay.artist.isEmpty() ? "Artista no publicado" : speedPlay.artist;
+        long position = speedPlay.position;
+        if (position >= 0 && "REPRODUCIENDO".equals(speedPlay.stateLabel())) {
+            position += Math.max(0L, System.currentTimeMillis() - speedPlay.receivedAt);
+        }
         return new Snapshot(title, artist, speedPlay.album,
                 "SpeedPlay · broadcast", speedPlay.stateLabel(), null,
                 true, MediaNotificationListener.isConnected(), true,
-                false, false, false);
+                false, false, false, position, speedPlay.duration);
     }
 
     private Snapshot fromJancar(JancarMediaProvider.Snapshot jancar) {
         String title = jancar.title.isEmpty() ? "Reproducción Android Auto" : jancar.title;
         String artist = jancar.artist.isEmpty() ? "Detalle no publicado" : jancar.artist;
+        long position = jancar.position;
+        if (position >= 0 && "REPRODUCIENDO".equals(jancar.stateLabel()) && jancar.updatedAt > 0) {
+            position += Math.max(0L, System.currentTimeMillis() - jancar.updatedAt);
+        }
         return new Snapshot(title, artist, "",
                 "Jancar MediaService · Android Auto", jancar.stateLabel(), null,
                 true, MediaNotificationListener.isConnected(), true,
-                jancar.canControl(), jancar.canControl(), jancar.canControl());
+                jancar.canControl(), jancar.canControl(), jancar.canControl(),
+                position, jancar.duration);
     }
 
     private Snapshot fromNotification(MediaNotificationListener.Snapshot notification) {
@@ -312,15 +350,55 @@ public final class MediaSessionProvider {
     }
 
     private static MediaController findKnownMediaController(List<MediaController> controllers) {
-        if (controllers == null) return null;
+        return preferredPlaybackController(controllers, null);
+    }
+
+    /** Prefer a live session with actual track metadata; Android Auto can publish an empty
+     * projection session alongside the music session. */
+    private static MediaController preferredPlaybackController(List<MediaController> controllers,
+                                                               String preferredPackage) {
+        if (controllers == null || controllers.isEmpty()) return null;
+        MediaController best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (MediaController controller : controllers) {
+            MediaMetadata metadata = controller.getMetadata();
+            if (!hasReadableMetadata(metadata)) continue;
+            PlaybackState playback = controller.getPlaybackState();
+            int state = playback == null ? 0 : playback.getState();
+            int score = state == PlaybackState.STATE_PLAYING ? 100
+                    : state == PlaybackState.STATE_PAUSED ? 60 : 0;
+            String packageName = controller.getPackageName();
+            if (packageName != null) {
+                String lower = packageName.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("speedplay")) score += 35;
+                else if (lower.contains("spotify")) score += 25;
+            }
+            if (preferredPackage != null && preferredPackage.equals(packageName)) score += 15;
+            if (score > bestScore) {
+                best = controller;
+                bestScore = score;
+            }
+        }
+        if (best != null) return best;
+        if (preferredPackage != null && !preferredPackage.trim().isEmpty()) {
+            return findController(controllers, preferredPackage);
+        }
         for (MediaController controller : controllers) {
             String packageName = controller.getPackageName();
-            if (packageName != null && (packageName.contains("spotify")
-                    || packageName.contains("speedplay") || packageName.contains("music"))) {
-                return controller;
+            if (packageName != null) {
+                String lower = packageName.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("spotify") || lower.contains("speedplay")
+                        || lower.contains("music")) return controller;
             }
         }
         return null;
+    }
+
+    private static boolean hasReadableMetadata(MediaMetadata metadata) {
+        if (metadata == null) return false;
+        return !firstText(metadata, "", MediaMetadata.METADATA_KEY_TITLE,
+                MediaMetadata.METADATA_KEY_DISPLAY_TITLE, MediaMetadata.METADATA_KEY_ARTIST,
+                MediaMetadata.METADATA_KEY_ALBUM).trim().isEmpty();
     }
 
     private static String firstText(MediaMetadata metadata, String fallback, String... keys) {

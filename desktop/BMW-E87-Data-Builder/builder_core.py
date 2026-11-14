@@ -377,12 +377,6 @@ out body geom;'''
             self._write_gzip_json(radar_target, radar_document)
             self._record(radar_target, ["radar", "routing"], len(radar_elements), "OpenStreetMap")
 
-            navigation_target = self.stage / f"e87_osm_navigation_{code}.json.gz"
-            clean_document = {key: value for key, value in document.items()
-                              if not key.startswith("_")}
-            self._write_gzip_json(navigation_target, clean_document)
-            self._record(navigation_target, ["routing", "map_matching"],
-                         len(clean_document["elements"]), "OpenStreetMap")
             self._phase(phase, "OK", f"{len(rows):,} vías · {len(radar_elements):,} radares/relaciones")
 
     def _prepare_lufop(self) -> None:
@@ -504,6 +498,14 @@ out body geom;'''
                  for item in manifest["files"] if item["name"].startswith("e87_speed_limits_")}
         if roads != expected:
             raise BuildError(f"Cobertura provincial incompleta: {sorted(roads)}")
+        radar_provinces = {item["name"].removeprefix("e87_osm_radars_").removesuffix(".json.gz")
+                           for item in manifest["files"] if item["name"].startswith("e87_osm_radars_")}
+        if radar_provinces != expected:
+            raise BuildError(f"Cobertura provincial de radares OSM incompleta: {sorted(radar_provinces)}")
+        required_static = set(DGT_SOURCES) | {"e87_lufop_radars_es.dat"}
+        included = {item["name"] for item in manifest["files"]}
+        if not required_static.issubset(included):
+            raise BuildError(f"Faltan fuentes estáticas para la radio: {sorted(required_static - included)}")
         for item in manifest["files"]:
             path = self.stage / item["name"]
             if not path.is_file() or path.stat().st_size != item["bytes"]:

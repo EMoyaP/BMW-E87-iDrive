@@ -1,5 +1,6 @@
 package com.ug.e87idrive;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -11,15 +12,31 @@ import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ServiceInfo;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.os.Environment;
+import android.os.StatFs;
 import android.os.Build;
+import android.provider.Settings;
+import android.view.Display;
+import android.view.WindowManager;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Read-only inventory of the OEM packages observed on the physical RK3326 unit.
@@ -146,6 +163,7 @@ final class OemPackageInspector {
         List<ExportArtifact> artifacts = new ArrayList<>();
         StringBuilder out = new StringBuilder(Math.max(64_000, packages.size() * 1_200));
         appendFirmwareProfile(out);
+        appendHardwareProfile(out);
         out.append("\nAPLICACIONES INSTALADAS Y COMPONENTES\n");
         for (PackageInfo info : packages) {
             appendPackageInfo(out, info.packageName, info);
@@ -350,6 +368,186 @@ final class OemPackageInspector {
         if (libraries != null) {
             java.util.Arrays.sort(libraries, String.CASE_INSENSITIVE_ORDER);
             for (String library : libraries) out.append(library).append('\n');
+        }
+    }
+
+    /** Adds read-only hardware and transport evidence useful for firmware compatibility work. */
+    private void appendHardwareProfile(StringBuilder out) {
+        out.append("\nPERFIL DE HARDWARE Y CONECTIVIDAD · SOLO LECTURA\n");
+        out.append("Los valores de propiedades del fabricante no sustituyen una comprobación del bootloader.\n");
+        appendProperty(out, "ro.board.platform");
+        appendProperty(out, "ro.hardware");
+        appendProperty(out, "ro.boot.hardware");
+        appendProperty(out, "ro.product.board");
+        appendProperty(out, "ro.boot.flash.locked");
+        appendProperty(out, "ro.oem_unlock_supported");
+        appendProperty(out, "ro.boot.verifiedbootstate");
+        out.append("device_tree.model=").append(readDeviceTree("/sys/firmware/devicetree/base/model"))
+                .append('\n');
+        out.append("device_tree.compatible=").append(readDeviceTree("/sys/firmware/devicetree/base/compatible"))
+                .append('\n');
+        appendCpuSummary(out);
+        appendMemoryAndDisplay(out);
+        appendNetworkAndAdb(out);
+        appendUsbHostDevices(out);
+        out.append("Nota: detectar un USB en modo host no significa que Windows tenga una sesión ADB con la radio.\n");
+    }
+
+    private static void appendProperty(StringBuilder out, String key) {
+        out.append(key).append('=').append(readSystemProperty(key)).append('\n');
+    }
+
+    private static String readSystemProperty(String key) {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("/system/bin/getprop", key).redirectErrorStream(true).start();
+            String value;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                value = reader.readLine();
+            }
+            process.waitFor();
+            return value == null || value.trim().isEmpty() ? "(no definida/no legible)" : compact(value.trim());
+        } catch (Exception error) {
+            return "(no accesible: " + error.getClass().getSimpleName() + ")";
+        } finally {
+            if (process != null) process.destroy();
+        }
+    }
+
+    private static String readDeviceTree(String path) {
+        File file = new File(path);
+        if (!file.isFile() || !file.canRead()) return "(no legible por una APK normal)";
+        byte[] bytes = new byte[2_048];
+        try (FileInputStream input = new FileInputStream(file)) {
+            int count = input.read(bytes);
+            if (count <= 0) return "(vacío)";
+            String value = new String(bytes, 0, count, StandardCharsets.UTF_8)
+                    .replace('\u0000', ',').replaceAll(",+$", "").trim();
+            return value.isEmpty() ? "(vacío)" : compact(value);
+        } catch (Exception error) {
+            return "(no accesible: " + error.getClass().getSimpleName() + ")";
+        }
+    }
+
+    /** Never exports the raw cpuinfo file because it can contain a hardware serial number. */
+    private static void appendCpuSummary(StringBuilder out) {
+        File file = new File("/proc/cpuinfo");
+        if (!file.isFile() || !file.canRead()) {
+            out.append("CPU=/proc/cpuinfo no legible\n");
+            return;
+        }
+        int processors = 0;
+        Set<String> values = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(file), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                int split = line.indexOf(':');
+                if (split < 0) continue;
+                String key = line.substring(0, split).trim().toLowerCase(Locale.ROOT);
+                String value = compact(line.substring(split + 1));
+                if ("processor".equals(key)) processors++;
+                if ("model name".equals(key) || "hardware".equals(key)
+                        || "cpu architecture".equals(key) || "cpu part".equals(key)
+                        || "cpu implementer".equals(key)) {
+                    values.add(key + "=" + value);
+                }
+            }
+            out.append("CPU.logical_processors=").append(processors).append('\n');
+            for (String value : values) out.append("CPU.").append(value).append('\n');
+        } catch (Exception error) {
+            out.append("CPU=/proc/cpuinfo no legible: ").append(error.getClass().getSimpleName()).append('\n');
+        }
+    }
+
+    private void appendMemoryAndDisplay(StringBuilder out) {
+        try {
+            ActivityManager activityManager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
+            if (activityManager != null) {
+                activityManager.getMemoryInfo(memory);
+                out.append("RAM.total_bytes=").append(memory.totalMem).append('\n');
+                out.append("RAM.available_bytes=").append(memory.availMem).append('\n');
+            } else out.append("RAM=(servicio no disponible)\n");
+        } catch (Exception error) {
+            out.append("RAM=(no legible: ").append(error.getClass().getSimpleName()).append(")\n");
+        }
+        try {
+            WindowManager manager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+            Display display = manager == null ? null : manager.getDefaultDisplay();
+            if (display != null) {
+                android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
+                display.getRealMetrics(metrics);
+                out.append("DISPLAY=").append(metrics.widthPixels).append('x').append(metrics.heightPixels)
+                        .append(" · densityDpi=").append(metrics.densityDpi)
+                        .append(" · refreshHz=").append(display.getRefreshRate()).append('\n');
+            } else out.append("DISPLAY=(no disponible)\n");
+        } catch (Exception error) {
+            out.append("DISPLAY=(no legible: ").append(error.getClass().getSimpleName()).append(")\n");
+        }
+        try {
+            StatFs data = new StatFs(Environment.getDataDirectory().getAbsolutePath());
+            out.append("DATA.total_bytes=").append(data.getTotalBytes()).append('\n');
+            out.append("DATA.available_bytes=").append(data.getAvailableBytes()).append('\n');
+        } catch (Exception error) {
+            out.append("DATA=(no legible: ").append(error.getClass().getSimpleName()).append(")\n");
+        }
+    }
+
+    private void appendNetworkAndAdb(StringBuilder out) {
+        try {
+            ConnectivityManager manager = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            Network network = manager == null ? null : manager.getActiveNetwork();
+            NetworkCapabilities caps = network == null || manager == null ? null : manager.getNetworkCapabilities(network);
+            out.append("NETWORK.connected=").append(caps != null).append('\n');
+            out.append("NETWORK.wifi=").append(caps != null
+                    && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)).append('\n');
+            out.append("NETWORK.validated=").append(caps != null
+                    && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)).append('\n');
+            LinkProperties links = network == null || manager == null ? null : manager.getLinkProperties(network);
+            if (links != null) {
+                out.append("NETWORK.interface=").append(value(links.getInterfaceName())).append('\n');
+                for (android.net.LinkAddress address : links.getLinkAddresses()) {
+                    if (!address.getAddress().isLoopbackAddress() && !address.getAddress().isLinkLocalAddress()) {
+                        out.append("NETWORK.local_address=").append(address.getAddress().getHostAddress()).append('\n');
+                    }
+                }
+            } else out.append("NETWORK.link_properties=(no disponibles)\n");
+        } catch (Exception error) {
+            out.append("NETWORK=(no legible: ").append(error.getClass().getSimpleName()).append(")\n");
+        }
+        try {
+            out.append("ADB.usb_enabled=").append(Settings.Global.getInt(context.getContentResolver(),
+                    Settings.Global.ADB_ENABLED, 0) == 1).append('\n');
+        } catch (Exception error) {
+            out.append("ADB.usb_enabled=(no legible por la app)\n");
+        }
+        try {
+            out.append("ADB.wireless_enabled=").append(Settings.Global.getInt(context.getContentResolver(),
+                    "adb_wifi_enabled", 0) == 1).append('\n');
+        } catch (Exception error) {
+            out.append("ADB.wireless_enabled=(no legible por la app)\n");
+        }
+        out.append("ADB.host_authorized=(no consultable desde una APK normal)\n");
+    }
+
+    private void appendUsbHostDevices(StringBuilder out) {
+        try {
+            UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+            if (manager == null || manager.getDeviceList().isEmpty()) {
+                out.append("USB.host_devices=(ninguno detectado)\n");
+                return;
+            }
+            for (UsbDevice device : manager.getDeviceList().values()) {
+                out.append("USB.host_device=").append(value(device.getManufacturerName())).append(' ')
+                        .append(value(device.getProductName())).append(" · VID=0x")
+                        .append(String.format(Locale.ROOT, "%04X", device.getVendorId()))
+                        .append(" · PID=0x").append(String.format(Locale.ROOT, "%04X", device.getProductId()))
+                        .append(" · class=").append(device.getDeviceClass()).append('\n');
+            }
+        } catch (Exception error) {
+            out.append("USB.host_devices=(no legibles: ").append(error.getClass().getSimpleName()).append(")\n");
         }
     }
 

@@ -75,6 +75,9 @@ public class MainActivity extends Activity {
     private final DrivingViewPolicy drivingViewPolicy = new DrivingViewPolicy();
     private final DrivingContext drivingContext = new DrivingContext();
     private DrivingDashboardView drivingOverlay;
+    private HeaderBrandView headerBrand;
+    private TextView modeShortcut;
+    private Boolean manualDrivingOverride;
     private SpeedLimitView drivingSign;
     private RadarNoticeView drivingRadar;
     private InviveNoticeView drivingInvive;
@@ -82,6 +85,10 @@ public class MainActivity extends Activity {
     private LinearLayout gaugeHome;
     private boolean drivingViewActive;
     private GridLayout quickGrid;
+    private MediaSessionProvider.Snapshot latestMediaSnapshot;
+    private String homeTrackSignature;
+    private ProgressBar homeMediaProgress;
+    private TextView homeMediaTime;
     private TextView clock, date, mediaTitle, mediaArtist, mediaAlbum, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
     private TextView mediaPrevious, mediaPlayPause, mediaNext;
     private TextView phoneDevice, phoneConnection;
@@ -191,7 +198,12 @@ public class MainActivity extends Activity {
             if (fixMs <= 0L || fixMs > nowElapsed + 1_000L) fixMs = nowElapsed;
             boolean reliable = kmh != null && Double.isFinite(kmh) && location.hasAccuracy()
                     && location.getAccuracy() <= 25f && nowElapsed - fixMs <= 5_000L;
-            setDrivingView(drivingViewPolicy.accept(fixMs, kmh == null ? 0d : kmh, reliable));
+            boolean automaticMode = drivingViewPolicy.accept(fixMs, kmh == null ? 0d : kmh, reliable);
+            if (manualDrivingOverride != null) {
+                if (automaticMode == manualDrivingOverride) manualDrivingOverride = null;
+            } else if (uiPreferences.getBoolean("automatic_driving_view", true)) {
+                setDrivingView(automaticMode);
+            }
             if (drivingOverlay != null) {
                 drivingOverlay.mapLocation(location, kmh);
                 requestMapRoads(location);
@@ -426,6 +438,20 @@ public class MainActivity extends Activity {
                 drivingMenu);
         drivingOverlay.setVisibility(View.GONE);
         screen.addView(drivingOverlay, frameLp(-1, -1, Gravity.CENTER));
+        modeShortcut = txt("⇄", 20, TEXT, true);
+        modeShortcut.setGravity(Gravity.CENTER);
+        modeShortcut.setBackground(slotBg());
+        modeShortcut.setContentDescription("Cambiar entre reposo y modo conducción");
+        modeShortcut.setOnClickListener(v -> {
+            manualDrivingOverride = !drivingViewActive;
+            setDrivingView(manualDrivingOverride);
+            modeShortcut.setText(drivingViewActive ? "⌂" : "▶");
+            modeShortcut.setContentDescription(drivingViewActive
+                    ? "Volver a pantalla de reposo" : "Abrir modo conducción");
+        });
+        FrameLayout.LayoutParams modeParams = frameLp(dp(38), dp(38), Gravity.TOP | Gravity.END);
+        modeParams.setMargins(0, dp(10), dp(72), 0);
+        screen.addView(modeShortcut, modeParams);
     }
 
     private LinearLayout buildAutomaticUpdatePanel() {
@@ -487,9 +513,9 @@ public class MainActivity extends Activity {
         bar.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout brand = horizontal();
         brand.setGravity(Gravity.CENTER_VERTICAL);
-        HeaderBrandView logo = new HeaderBrandView(this);
-        logo.setContentDescription("BMW iDrive");
-        brand.addView(logo, lp(-1, -1));
+        headerBrand = new HeaderBrandView(this);
+        headerBrand.setContentDescription("BMW iDrive");
+        brand.addView(headerBrand, lp(-1, -1));
         brand.setContentDescription("BMW iDrive · abrir menú");
         brand.setOnClickListener(v -> mainMenuModal());
         bar.setBackground(headerBg());
@@ -827,17 +853,40 @@ public class MainActivity extends Activity {
                 + " · sesión=" + snapshot.sessionAvailable
                 + " · fuente=" + snapshot.source
                 + " · estado=" + snapshot.state
-                + " · título=" + snapshot.title;
+                + " · título=" + snapshot.title
+                + " · artista=" + snapshot.artist
+                + " · álbum=" + snapshot.album;
         if (!mediaLog.equals(lastMediaLog)) {
             lastMediaLog = mediaLog;
             AppSessionLog.event("MULTIMEDIA", mediaLog);
         }
         mediaTitle.setText(snapshot.title);
+        latestMediaSnapshot = snapshot;
         mediaArtist.setText(snapshot.artist);
         mediaAlbum.setText(snapshot.album.isEmpty() ? "Álbum no publicado" : snapshot.album);
         mediaSource.setText(snapshot.source);
         mediaState.setText(snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
         updateMediaControls(snapshot);
+        boolean showTrack = snapshot.sessionAvailable && hasRealTrackTitle(snapshot.title)
+                && !"DETENIDO".equals(snapshot.state);
+        String trackTitle = showTrack ? snapshot.title : null;
+        String trackArtist = showTrack && snapshot.artist != null ? snapshot.artist : null;
+        // The home header keeps the BMW/iDrive identity. Music uses the driving header
+        // slot while moving and the otherwise empty shortcut grid while parked.
+        if (headerBrand != null) headerBrand.setTrack(null, null);
+        if (drivingOverlay != null) drivingOverlay.mediaTrack(trackTitle, trackArtist,
+                showTrack ? remainingTrackTime(snapshot) : null,
+                showTrack ? snapshot.artwork : null);
+        refreshQuick();
+        MediaNotificationListener.NavigationSnapshot instruction =
+                MediaNotificationListener.latestNavigation();
+        if (drivingOverlay != null) drivingOverlay.navigationInstruction(instruction);
+        String navLog = instruction == null ? "" : instruction.maneuver + " · "
+                + instruction.distance + " · " + instruction.raw;
+        if (!navLog.equals(lastNavigationLog)) {
+            lastNavigationLog = navLog;
+            if (!navLog.isEmpty()) AppSessionLog.event("NAVEGACIÓN AA", navLog);
+        }
         if (snapshot.artwork != null) {
             mediaArtwork.setColorFilter(null);
             mediaArtwork.setPadding(0, 0, 0, 0);
@@ -847,6 +896,30 @@ public class MainActivity extends Activity {
             mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
             mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
         }
+    }
+
+    private String lastNavigationLog = "";
+
+    private static boolean hasRealTrackTitle(String title) {
+        if (title == null) return false;
+        String value = title.trim();
+        return !value.isEmpty() && !"Emisora sin identificar".equalsIgnoreCase(value)
+                && !"Reproducción SpeedPlay".equalsIgnoreCase(value)
+                && !"Reproducción Android Auto".equalsIgnoreCase(value)
+                && !"No hay reproducción expuesta".equalsIgnoreCase(value)
+                && !"Acceso multimedia pendiente".equalsIgnoreCase(value);
+    }
+
+    private static String remainingTrackTime(MediaSessionProvider.Snapshot snapshot) {
+        if (snapshot == null || snapshot.durationMs <= 0 || snapshot.positionMs < 0) return null;
+        long position = snapshot.positionMs;
+        if ("REPRODUCIENDO".equals(snapshot.state)) {
+            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
+                    - snapshot.positionCapturedAtElapsedMs);
+        }
+        long seconds = Math.max(0L, (snapshot.durationMs - Math.min(position,
+                snapshot.durationMs) + 999L) / 1000L);
+        return String.format(Locale.ROOT, "−%d:%02d", seconds / 60L, seconds % 60L);
     }
 
     private TextView mediaControlButton(String glyph, String description, MediaSessionProvider.Command command) {
@@ -1083,6 +1156,7 @@ public class MainActivity extends Activity {
 
     private void refreshQuick() {
         if (quickGrid == null) return;
+        if (renderHomeTrackCard()) return;
         quickGrid.removeAllViews();
         for (int i = 0; i < 6; i++) {
             String key = "quick_" + i;
@@ -1118,6 +1192,128 @@ public class MainActivity extends Activity {
             params.setMargins(dp(2), dp(2), dp(2), dp(2));
             quickGrid.addView(slot, params);
         }
+    }
+
+    private boolean renderHomeTrackCard() {
+        MediaSessionProvider.Snapshot snapshot = latestMediaSnapshot;
+        boolean show = snapshot != null && snapshot.sessionAvailable
+                && hasRealTrackTitle(snapshot.title) && !"DETENIDO".equals(snapshot.state);
+        String signature = show ? snapshot.title + "\u0000" + snapshot.artist + "\u0000"
+                + snapshot.album + "\u0000" + snapshot.state + "\u0000"
+                + (snapshot.artwork == null ? -1 : snapshot.artwork.getGenerationId()) : null;
+        if (java.util.Objects.equals(signature, homeTrackSignature)) {
+            if (show) updateHomeTrackProgress(snapshot);
+            return show;
+        }
+        boolean hadTrack = homeTrackSignature != null;
+        homeTrackSignature = signature;
+        if (!show && !hadTrack) return false;
+        quickGrid.removeAllViews();
+        homeMediaProgress = null;
+        homeMediaTime = null;
+        if (!show) return false;
+
+        LinearLayout panel = card();
+        panel.setOrientation(LinearLayout.HORIZONTAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(dp(8), dp(6), dp(8), dp(6));
+        ImageView artwork = new ImageView(this);
+        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        if (snapshot.artwork != null) artwork.setImageBitmap(snapshot.artwork);
+        else {
+            artwork.setImageResource(R.drawable.ic_menu_media);
+            artwork.setColorFilter(Color.rgb(90, 170, 225));
+            artwork.setPadding(dp(12), dp(12), dp(12), dp(12));
+        }
+        artwork.setBackground(slotBg());
+        panel.addView(artwork, lp(dp(58), dp(58)));
+
+        LinearLayout details = vertical();
+        details.setGravity(Gravity.CENTER_VERTICAL);
+        details.setPadding(dp(9), 0, 0, 0);
+        TextView title = txt(snapshot.title, 13, TEXT, true);
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        TextView artist = txt(snapshot.artist, 11, MUTED, false);
+        artist.setSingleLine(true);
+        artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        TextView album = txt((snapshot.album.isEmpty() ? "ÁLBUM NO PUBLICADO" : snapshot.album)
+                + " · " + snapshot.state, 10, BLUE, false);
+        album.setSingleLine(true);
+        album.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        details.addView(title, lp(-1, dp(19)));
+        details.addView(artist, lp(-1, dp(17)));
+        details.addView(album, lp(-1, dp(16)));
+
+        LinearLayout playbackRow = horizontal();
+        playbackRow.setGravity(Gravity.CENTER_VERTICAL);
+        ProgressBar progress = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(1000);
+        boolean hasDuration = snapshot.durationMs > 0;
+        long position = snapshot.positionMs;
+        if (position >= 0 && "REPRODUCIENDO".equals(snapshot.state)) {
+            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
+                    - snapshot.positionCapturedAtElapsedMs);
+        }
+        progress.setProgress(hasDuration && position >= 0
+                ? (int) Math.min(1000d, (double) position * 1000d / snapshot.durationMs) : 0);
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(BLUE));
+        progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(
+                Color.rgb(36, 54, 68)));
+        playbackRow.addView(progress, lp(0, dp(7), 1));
+        String remaining = remainingTrackTime(snapshot);
+        TextView time = txt(remaining == null ? "—" : remaining, 9, MUTED, true);
+        time.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        playbackRow.addView(time, lp(dp(48), dp(18)));
+        details.addView(playbackRow, lp(-1, dp(18)));
+        homeMediaProgress = progress;
+        homeMediaTime = time;
+
+        LinearLayout controls = horizontal();
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        TextView previous = mediaControlButton("◀", "Canción anterior",
+                MediaSessionProvider.Command.PREVIOUS);
+        TextView toggle = mediaControlButton("REPRODUCIENDO".equals(snapshot.state)
+                        ? "Ⅱ" : "▶", "Reproducir o pausar",
+                MediaSessionProvider.Command.TOGGLE);
+        TextView next = mediaControlButton("▶|", "Canción siguiente",
+                MediaSessionProvider.Command.NEXT);
+        setMediaControl(previous, snapshot.canPrevious, "◀");
+        setMediaControl(toggle, snapshot.canPlayPause,
+                "REPRODUCIENDO".equals(snapshot.state) ? "Ⅱ" : "▶");
+        setMediaControl(next, snapshot.canNext, "▶|");
+        controls.addView(previous, lp(dp(32), dp(24)));
+        controls.addView(toggle, lp(dp(32), dp(24)));
+        controls.addView(next, lp(dp(32), dp(24)));
+        details.addView(controls, lp(-1, dp(25)));
+        panel.addView(details, lp(0, -1, 1));
+        panel.setContentDescription("Reproduciendo " + snapshot.title + " · "
+                + snapshot.artist + (snapshot.album.isEmpty() ? "" : " · " + snapshot.album)
+                + " · " + snapshot.state);
+        panel.setOnClickListener(v -> launchRole("media"));
+        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+        params.width = 0;
+        params.height = 0;
+        params.columnSpec = GridLayout.spec(0, 3, 1f);
+        params.rowSpec = GridLayout.spec(0, 2, 1f);
+        params.setMargins(dp(2), dp(2), dp(2), dp(2));
+        quickGrid.addView(panel, params);
+        return true;
+    }
+
+    private void updateHomeTrackProgress(MediaSessionProvider.Snapshot snapshot) {
+        if (homeMediaProgress == null || homeMediaTime == null || snapshot == null) return;
+        long position = snapshot.positionMs;
+        if (position >= 0 && "REPRODUCIENDO".equals(snapshot.state)) {
+            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
+                    - snapshot.positionCapturedAtElapsedMs);
+        }
+        int progress = snapshot.durationMs > 0 && position >= 0
+                ? (int) Math.min(1000d, (double) position * 1000d / snapshot.durationMs) : 0;
+        homeMediaProgress.setProgress(progress);
+        String remaining = remainingTrackTime(snapshot);
+        homeMediaTime.setText(remaining == null ? "—" : remaining);
     }
 
     private void refreshVehicle() {
@@ -1529,10 +1725,14 @@ public class MainActivity extends Activity {
     }
 
     private void setDrivingView(boolean enabled) {
-        enabled = enabled && uiPreferences.getBoolean("automatic_driving_view", true);
         if (drivingOverlay == null || vehicleNoticeContent == null || gaugeHome == null
                 || drivingViewActive == enabled) return;
         drivingViewActive = enabled;
+        if (modeShortcut != null) {
+            modeShortcut.setText(enabled ? "⌂" : "▶");
+            modeShortcut.setContentDescription(enabled
+                    ? "Volver a pantalla de reposo" : "Abrir modo conducción");
+        }
         refreshAutomaticUpdateProgress();
         drivingOverlay.animate().cancel();
         root.animate().cancel();
@@ -3558,16 +3758,59 @@ public class MainActivity extends Activity {
         private final Bitmap bitmap;
         private final Rect source = new Rect(16, 23, 590, 114);
         private final Rect destination = new Rect();
+        private String trackTitle, trackArtist;
 
         HeaderBrandView(Context context) {
             super(context);
             bitmap = BitmapFactory.decodeResource(context.getResources(), R.drawable.bmw_idrive_header_reference);
         }
 
+        void setTrack(String title, String artist) {
+            trackTitle = title;
+            trackArtist = artist;
+            setContentDescription(title == null ? "BMW iDrive" : "Reproduciendo " + title
+                    + (artist == null || artist.isEmpty() ? "" : " · " + artist));
+            invalidate();
+        }
+
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
+            if (trackTitle != null && !trackTitle.trim().isEmpty()) {
+                float width = getWidth(), height = getHeight();
+                paint.setShader(new android.graphics.LinearGradient(0, 0, width, height,
+                        new int[]{Color.rgb(5, 20, 35), Color.rgb(2, 8, 15)}, null,
+                        android.graphics.Shader.TileMode.CLAMP));
+                canvas.drawRect(0, 0, width, height, paint);
+                paint.setShader(null);
+                paint.setColor(Color.rgb(40, 112, 164));
+                paint.setStrokeWidth(Math.max(1f, height * .018f));
+                canvas.drawLine(width * .03f, height * .91f, width * .97f, height * .91f, paint);
+                paint.setColor(Color.rgb(242, 246, 250));
+                paint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+                float titleSize = Math.min(height * .36f, width * .065f);
+                paint.setTextSize(titleSize);
+                String title = fitText(trackTitle, width * .92f, titleSize, paint);
+                paint.setTextAlign(Paint.Align.CENTER);
+                canvas.drawText(title, width / 2f, height * .52f, paint);
+                if (trackArtist != null && !trackArtist.trim().isEmpty()) {
+                    paint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+                    paint.setTextSize(height * .19f);
+                    canvas.drawText(fitText(trackArtist, width * .90f, height * .19f, paint),
+                            width / 2f, height * .77f, paint);
+                }
+                return;
+            }
             destination.set(0, 0, getWidth(), getHeight());
             if (bitmap != null) canvas.drawBitmap(bitmap, source, destination, paint);
+        }
+
+        private static String fitText(String text, float maxWidth, float size, Paint paint) {
+            String value = text == null ? "" : text.replace('\n', ' ').replace('\r', ' ').trim();
+            paint.setTextSize(size);
+            while (value.length() > 1 && paint.measureText(value) > maxWidth) {
+                value = value.substring(0, value.length() - 2).trim() + "…";
+            }
+            return value;
         }
     }
 

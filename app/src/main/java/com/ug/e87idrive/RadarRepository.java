@@ -63,6 +63,69 @@ final class RadarRepository {
         }
         try (Database db = new Database(context)) { db.replaceOsmProvince(province, rows, now); }
     }
+
+    /** Replaces the static Git radar layers only after every province and the Lufop file parse. */
+    boolean installGitRadarBundle(Map<String, java.io.File> osmFiles,
+                                  java.io.File lufopFile, int expectedLufopRecords,
+                                  java.io.File dgtFile, long generatedAt) {
+        if (osmFiles == null || osmFiles.size() != OSM_SEED_PROVINCES.length
+                || lufopFile == null || !lufopFile.isFile()
+                || dgtFile == null || !dgtFile.isFile()) return false;
+        try {
+            Map<String, ArrayList<RawRecord>> osmRows = new HashMap<>();
+            int expectedOsmRows = 0;
+            for (String province : OSM_SEED_PROVINCES) {
+                java.io.File file = osmFiles.get(province);
+                if (file == null || !file.isFile()) throw new IOException("Falta radar OSM " + province);
+                org.json.JSONObject document;
+                try (InputStream raw = new java.io.FileInputStream(file);
+                     InputStream gzip = new GZIPInputStream(new BufferedInputStream(raw))) {
+                    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192]; int count;
+                    while ((count = gzip.read(buffer)) != -1) bytes.write(buffer, 0, count);
+                    document = new org.json.JSONObject(bytes.toString("UTF-8"));
+                }
+                ArrayList<OsmRadarData.Camera> cameras = OsmRadarData.parse(document);
+                if (cameras.isEmpty()) throw new IOException("Capa OSM vacía " + province);
+                ArrayList<RawRecord> records = new ArrayList<>();
+                for (OsmRadarData.Camera camera : cameras) {
+                    RawRecord row = new RawRecord(camera.id, "FIJO", camera.road,
+                            camera.direction, camera.point, province, SOURCE_OSM);
+                    row.osmMetadata = camera.metadata;
+                    records.add(row);
+                }
+                expectedOsmRows += records.size();
+                osmRows.put(province, records);
+            }
+            ArrayList<RawRecord> lufopRecords;
+            try (InputStream raw = new java.io.FileInputStream(lufopFile);
+                 InputStream gzip = new GZIPInputStream(new BufferedInputStream(raw))) {
+                lufopRecords = parseLufop(gzip);
+            }
+            if (lufopRecords.size() < 500 || lufopRecords.size() != expectedLufopRecords) {
+                throw new IOException("Recuento Lufop distinto: " + lufopRecords.size()
+                        + "/" + expectedLufopRecords);
+            }
+            ArrayList<RawRecord> dgtRecords;
+            try (InputStream input = new BufferedInputStream(new java.io.FileInputStream(dgtFile))) {
+                dgtRecords = parseDgt(input, "TODAS");
+            }
+            if (dgtRecords.isEmpty()) throw new IOException("Semilla DGT de radares vacía");
+            int count = database.replaceGitRadarSources(osmRows, lufopRecords, dgtRecords,
+                    expectedOsmRows + lufopRecords.size() + dgtRecords.size(),
+                    generatedAt > 0L ? generatedAt : System.currentTimeMillis());
+            preferences.edit().putString("supplemental_seed_revision",
+                    SUPPLEMENTAL_SEED_REVISION)
+                    .putInt("bundled_seed_version", BUNDLED_DGT_SEED_VERSION).apply();
+            AppSessionLog.event("DATOS GIT", "Capas OSM y Lufop sustituidas · "
+                    + (count - lufopRecords.size()) + " OSM · " + lufopRecords.size() + " Lufop");
+            return true;
+        } catch (Exception error) {
+            AppSessionLog.event("DATOS GIT", "Capas de radares rechazadas; se conserva la base previa · "
+                    + error.getMessage());
+            return false;
+        }
+    }
     /** Versioned so an upgrade replaces any legacy downloaded supplemental cache with the APK seed. */
     private static final String SUPPLEMENTAL_SEED_REVISION = "20260920-asc-fixed-1219-bb1e34bf";
     private static final long REFRESH_INTERVAL_MS = 24L * 60L * 60L * 1_000L;
@@ -1073,6 +1136,29 @@ final class RadarRepository {
             try {
                 db.delete("radars", "source = ?", new String[]{source});
                 int imported = insertRecords(db, records, now);
+                db.setTransactionSuccessful();
+                return imported;
+            } finally { db.endTransaction(); }
+        }
+
+        synchronized int replaceGitRadarSources(Map<String, ArrayList<RawRecord>> osmByProvince,
+                                                 ArrayList<RawRecord> lufop,
+                                                 ArrayList<RawRecord> dgt, int expectedCount, long now) {
+            SQLiteDatabase db = getWritableDatabase();
+            db.beginTransaction();
+            try {
+                db.delete("radars", "source = ? OR source = ? OR source = ?",
+                        new String[]{SOURCE_OSM, SOURCE_LUFOP, SOURCE_DGT});
+                int imported = 0;
+                for (ArrayList<RawRecord> records : osmByProvince.values()) {
+                    imported += insertRecords(db, records, now);
+                }
+                imported += insertRecords(db, lufop, now);
+                imported += insertRecords(db, dgt, now);
+                if (imported != expectedCount) {
+                    throw new IllegalStateException("Recuento de radares importados distinto: "
+                            + imported + "/" + expectedCount);
+                }
                 db.setTransactionSuccessful();
                 return imported;
             } finally { db.endTransaction(); }

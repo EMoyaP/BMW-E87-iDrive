@@ -19,6 +19,7 @@ import java.io.FileWriter;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
@@ -261,10 +262,11 @@ public final class UsbDiagnosticRecorder {
                     try {
                         target = createDocument(directory, artifact.mimeType, filename);
                         if (target == null) throw new IllegalStateException("el proveedor no creó el archivo");
-                        copyDocument(source, target);
+                        String sha256 = copyDocumentVerified(source, target);
                         copied++;
                         totalBytes += length;
-                        details.append("COPIADO ").append(filename).append(" · ").append(length).append(" bytes\n");
+                        details.append("COPIADO Y VERIFICADO ").append(filename).append(" · ")
+                                .append(length).append(" bytes · SHA-256=").append(sha256).append('\n');
                     } catch (Exception fileError) {
                         skipped++;
                         details.append("OMITIDO ").append(filename).append(" · ")
@@ -277,15 +279,22 @@ public final class UsbDiagnosticRecorder {
                 }
                 String resultName = "e87_" + prefix + "_export_result_" + timestamp + ".txt";
                 Uri resultDocument = createDocument(directory, "text/plain", resultName);
-                if (resultDocument != null) {
+                if (resultDocument == null) throw new IllegalStateException("No se pudo crear el resultado de exportación");
+                try {
                     writeDocument(resultDocument, displayName.toUpperCase(Locale.ROOT) + " · EXPORTACIÓN PASIVA\nArchivos copiados=" + copied
                             + " · omitidos=" + skipped + " · bytes=" + totalBytes
+                            + " · integridad=SHA-256 verificada"
                             + (runtimeName.isEmpty() ? "" : "\nRegistro de sesión=" + runtimeName)
                             + "\n\n" + details);
+                } catch (Exception resultError) {
+                    try { DocumentsContract.deleteDocument(context.getContentResolver(), resultDocument); }
+                    catch (Exception ignored) { }
+                    throw resultError;
                 }
                 lastError = "";
-                notifyCallback(callback, true, displayName + " exportado: inventario + " + copied + " archivos"
-                        + (skipped == 0 ? "" : " · " + skipped + " omitidos"));
+                boolean complete = skipped == 0;
+                notifyCallback(callback, complete, displayName + " exportado: inventario + " + copied
+                        + " archivos verificados" + (skipped == 0 ? "" : " · " + skipped + " omitidos/fallidos"));
             } catch (Exception error) {
                 lastError = shortError(error);
                 notifyCallback(callback, false, "No se pudo completar " + displayName.toLowerCase(Locale.ROOT)
@@ -411,16 +420,60 @@ public final class UsbDiagnosticRecorder {
         }
     }
 
-    private void copyDocument(File source, Uri document) throws Exception {
+    private String copyDocumentVerified(File source, Uri document) throws Exception {
         ContentResolver resolver = context.getContentResolver();
         byte[] buffer = new byte[64 * 1024];
-        try (FileInputStream input = new FileInputStream(source);
-             OutputStream output = resolver.openOutputStream(document, "w")) {
-            if (output == null) throw new IllegalStateException("No se pudo abrir el destino USB");
-            int count;
-            while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
-            output.flush();
+        Exception failure = null;
+        long expectedLength = source.length();
+        for (String mode : new String[]{"rwt", "w"}) {
+            try {
+                MessageDigest sourceDigest = MessageDigest.getInstance("SHA-256");
+                long copiedBytes = 0L;
+                try (FileInputStream input = new FileInputStream(source);
+                     OutputStream output = resolver.openOutputStream(document, mode)) {
+                    if (output == null) throw new IllegalStateException("No se pudo abrir el destino USB en modo " + mode);
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (count == 0) continue;
+                        output.write(buffer, 0, count);
+                        sourceDigest.update(buffer, 0, count);
+                        copiedBytes += count;
+                    }
+                    output.flush();
+                }
+                if (copiedBytes != expectedLength) {
+                    throw new IllegalStateException("Lectura incompleta del origen: " + copiedBytes + "/" + expectedLength);
+                }
+                byte[] destinationDigest = digestDocument(resolver, document, buffer);
+                byte[] expectedDigest = sourceDigest.digest();
+                if (!MessageDigest.isEqual(expectedDigest, destinationDigest)) {
+                    throw new IllegalStateException("El SHA-256 del archivo USB no coincide con el APK original");
+                }
+                return toHex(expectedDigest);
+            } catch (Exception error) {
+                failure = error;
+            }
         }
+        throw failure == null ? new IllegalStateException("No se pudo verificar la copia") : failure;
+    }
+
+    private static byte[] digestDocument(ContentResolver resolver, Uri document, byte[] buffer) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = resolver.openInputStream(document)) {
+            if (input == null) throw new IllegalStateException("El proveedor USB no permite releer el archivo para verificarlo");
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (count == 0) continue;
+                digest.update(buffer, 0, count);
+            }
+        }
+        return digest.digest();
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) out.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return out.toString();
     }
 
     private void writeRecovery(String report) {
