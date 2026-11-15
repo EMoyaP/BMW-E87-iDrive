@@ -1103,8 +1103,11 @@ public class MainActivity extends Activity {
         mapExecutor.execute(() -> {
             java.util.List<OfflineRoadMapView.Road> roads = speedLimits.nearbyMapRoads(copy);
             java.util.List<OfflineRoadMapView.Radar> mapRadars = radars.nearbyMapRadars(copy);
+            SpeedLimitRepository.Match mapRoad = speedLimits.lookup(copy);
             java.util.List<OfflineRoadMapView.Incident> mapIncidents =
-                    trafficIncidents.mapIncidents(copy);
+                    trafficIncidents.mapIncidents(copy,
+                            mapRoad == null ? "" : mapRoad.roadRef,
+                            mapRoad == null ? "" : mapRoad.roadName);
             java.util.List<OfflineRoadMapView.TrafficFlow> mapTrafficFlows =
                     tomTomRoadData == null ? java.util.Collections.emptyList()
                             : tomTomRoadData.mapFlows();
@@ -1151,10 +1154,19 @@ public class MainActivity extends Activity {
         SpeedResolutionCoordinator.Result resolved = speedResolver.resolve(currentLocation);
         SpeedLimitRepository.Match match = resolved.match;
         RadarRepository.Alert radarFallback = activeRadarAlert;
-        boolean radarLimitFallback = (match == null || !match.exact)
-                && radarFallback != null && radarFallback.trajectoryConfirmed
+        boolean radarRoadConfirmed = radarFallback != null
+                && radarFallback.trajectoryConfirmed
                 && radarFallback.cameraLimitKmh != null
-                && radarFallback.distanceMeters <= 300d;
+                && radarFallback.distanceMeters <= RadarRepository.alertDistanceForSpeed(
+                currentLocation == null || !currentLocation.hasSpeed() ? null
+                        : currentLocation.getSpeed() * 3.6d)
+                && radarRoadMatches(radarFallback.road, match);
+        // A confirmed camera on this carriageway is a direct, local observation of the
+        // enforced speed. Do not leave a contradictory OSM/DGT/TomTom value on the main sign.
+        // Keep the override tied to the same road code and active approach window.
+        boolean radarLimitFallback = radarRoadConfirmed && (match == null
+                || !match.exact || !java.util.Objects.equals(match.limitKmh,
+                radarFallback.cameraLimitKmh));
         if (radarLimitFallback) {
             String roadRef = radarFallback.road == null ? "" : radarFallback.road;
             match = new SpeedLimitRepository.Match(radarFallback.cameraLimitKmh,
@@ -1227,6 +1239,25 @@ public class MainActivity extends Activity {
                 speedLimitUpdateInfo.setTextColor(BLUE);
             }
         }
+    }
+
+    private static boolean radarRoadMatches(String radarRoad, SpeedLimitRepository.Match road) {
+        if (road == null) return true;
+        String radarCode = roadCodeForComparison(radarRoad);
+        String roadCode = roadCodeForComparison(road.roadRef);
+        if (!radarCode.isEmpty() && !roadCode.isEmpty()) return radarCode.equals(roadCode);
+        String radarName = radarRoad == null ? "" : radarRoad.toLowerCase(Locale.ROOT).trim();
+        String currentName = road.roadName == null ? "" : road.roadName.toLowerCase(Locale.ROOT).trim();
+        return radarName.isEmpty() || currentName.isEmpty()
+                || radarName.contains(currentName) || currentName.contains(radarName);
+    }
+
+    private static String roadCodeForComparison(String value) {
+        if (value == null) return "";
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?:^|[^A-Z0-9])([A-Z]{1,4})\\s*-?\\s*(\\d{1,4})(?:$|[^A-Z0-9])")
+                .matcher(value.toUpperCase(Locale.ROOT));
+        return matcher.find() ? matcher.group(1) + "-" + matcher.group(2) : "";
     }
 
     /**

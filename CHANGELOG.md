@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## 2.0.24 — 15/11/2026
+
+- Para incidencias puntuales, el mapa busca una cadena corta de vías OSM conectadas entre la
+  carretera actual y la carretera afectada. Colorea ese enlace junto con el tramo del obstáculo;
+  evita colorear calles próximas que no estén conectadas. La regla vale también cuando la
+  incidencia está en una avenida vecina a la que conduce el usuario.
+- La cadena se limita a cinco enlaces de carretera y solo se calcula una vez por combinación de
+  vías mientras no cambie el mapa, para evitar trabajo repetido durante el dibujo.
+- Se conserva la prioridad DGT y la corrección TomTom de discrepancias OSM solo en carreteras con
+  identidad coincidente, incorporada en 2.0.23.
+
+## 2.0.23 — 15/11/2026
+
+- Si TomTom devuelve un límite con confianza suficiente y la vía ajustada coincide por referencia
+  o nombre con la vía OSM exacta, prevalece TomTom cuando ambos límites discrepan. Se conserva OSM
+  si no se puede confirmar la identidad de la carretera; una coincidencia DGT mantiene prioridad.
+- El conflicto OSM/TomTom queda registrado para poder revisar los puntos donde sus datos difieren.
+- Verificado en el emulador Android 11: N-332 devuelve 80 km/h en varias posiciones de TomTom;
+  la tarjeta de obstáculo DGT colorea en rojo el segmento activo hasta el punto del incidente.
+
+## 2.0.22 — 15/11/2026
+
+- Un radar con velocidad conocida y trayectoria confirmada prevalece sobre un límite de vía
+  contradictorio si la carretera coincide; el panel indica `LÍMITE RADAR` durante la aproximación.
+- Las incidencias DGT DATEX II se filtran a un radio local de 50 km; TomTom consulta una caja de
+  49 km por lado (dentro del máximo documentado) y registra las coincidencias DGT/TomTom próximas
+  en la misma carretera. El aviso y el mapa exigen carretera compatible y trayectoria hacia delante.
+- El mapa resalta en ámbar la circulación lenta y en rojo los atascos, cortes, accidentes y
+  obstáculos; los eventos puntuales colorean el tramo actual y el tramo OSM donde cae el evento,
+  con un símbolo visible separado del coche.
+- Validado en el emulador API 30 a 1280×720: radar N-332 confirmado a 80 km/h, incidencia DGT de
+  obstáculo mostrada a 170 m en Avenida de Denia y tramo rojo visible entre el coche y el aviso.
+  La consulta TomTom independiente encontró la misma incidencia N-332 a 4 m del punto DGT.
+
 ## 2.0 — 14/11/2026
 
 - Se integran las semillas completas y validadas del constructor de datos para Alicante, Murcia,

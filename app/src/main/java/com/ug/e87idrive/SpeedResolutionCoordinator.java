@@ -52,19 +52,45 @@ final class SpeedResolutionCoordinator {
         SpeedLimitRepository.Match tomTom = tomTomRoadData == null
                 ? null : tomTomRoadData.speedMatch(location, osm);
         if (osm != null && osm.exact) {
-            if (tomTom != null && osm.limitKmh != tomTom.limitKmh) {
-                AppSessionLog.sampledEvent("tomtom-limit-conflict-" + osm.osmId,
-                        "CONFLICTO DE LÍMITE", "OSM " + osm.limitKmh + " km/h · TomTom "
-                                + tomTom.limitKmh + " km/h · " + osm.roadRef,
-                        30L * 60L * 1_000L);
+            if (tomTom != null && sameRoad(osm, tomTom)) {
+                if (osm.limitKmh != tomTom.limitKmh) {
+                    AppSessionLog.sampledEvent("tomtom-limit-conflict-" + roadKey(osm),
+                            "CONFLICTO DE LÍMITE", "OSM " + osm.limitKmh + " km/h · TomTom "
+                                    + tomTom.limitKmh + " km/h · " + roadKey(osm)
+                                    + " · se usa TomTom con confianza alta",
+                            30L * 60L * 1_000L);
+                    return new Result(tomTom, false, true);
+                }
             }
-            // The verified DGT/OSM posted limit stays authoritative when sources disagree.
+            // A connected TomTom sign value may correct stale/directionally wrong OSM only
+            // when its snapped road identity matches. Otherwise keep the exact local value.
             return new Result(osm, false, false);
         }
         if (tomTom != null) {
             return new Result(tomTom, false, true);
         }
         return new Result(osm, false, false);
+    }
+
+    private static boolean sameRoad(SpeedLimitRepository.Match osm,
+                                    SpeedLimitRepository.Match tomTom) {
+        String osmRef = normalizeRoad(osm.roadRef);
+        String tomTomRef = normalizeRoad(tomTom.roadRef);
+        if (!osmRef.isEmpty() && !tomTomRef.isEmpty()) return osmRef.equals(tomTomRef);
+        String osmName = normalizeRoad(osm.roadName);
+        String tomTomName = normalizeRoad(tomTom.roadName);
+        return !osmName.isEmpty() && osmName.equals(tomTomName);
+    }
+
+    private static String roadKey(SpeedLimitRepository.Match match) {
+        String ref = normalizeRoad(match == null ? "" : match.roadRef);
+        return ref.isEmpty() ? normalizeRoad(match == null ? "" : match.roadName) : ref;
+    }
+
+    private static String normalizeRoad(String road) {
+        if (road == null) return "";
+        String value = road.trim().toUpperCase(java.util.Locale.ROOT);
+        return value.replaceAll("[^A-Z0-9]", "");
     }
 
     private static long fixToken(Location location) {

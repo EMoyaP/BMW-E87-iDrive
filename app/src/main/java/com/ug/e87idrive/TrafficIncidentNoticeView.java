@@ -26,7 +26,8 @@ final class TrafficIncidentNoticeView extends View {
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setColor(tone);
         canvas.drawRoundRect(card,9,9,paint);
         paint.setStyle(Paint.Style.FILL);paint.setColor(tone);canvas.drawCircle(31,h/2,18,paint);
-        paint.setColor(Color.WHITE);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(23);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);canvas.drawText("!",31,h/2+8,paint);
+        paint.setColor(Color.WHITE);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(22);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        canvas.drawText(glyph(alert.incident.title),31,h/2+8,paint);
         paint.setTextAlign(Paint.Align.LEFT);paint.setColor(tone);paint.setTextSize(15);canvas.drawText(alert.incident.title,60,28,paint);
         paint.setColor(Color.WHITE);paint.setTextSize(18);canvas.drawText(alert.incident.road,60,55,paint);
         paint.setTextSize(25);canvas.drawText(distance(alert.distanceMeters),60,87,paint);
@@ -34,6 +35,14 @@ final class TrafficIncidentNoticeView extends View {
         String detail=alert.incident.source+" · EN DIRECTO"
                 +(alert.incident.detail.isEmpty()?"":" · "+alert.incident.detail);
         canvas.drawText(fit(detail,Math.max(20f,w-70f),paint),60,111,paint);
+    }
+    private static String glyph(String title){
+        String value=title==null?"":title.toUpperCase(Locale.ROOT);
+        if(value.contains("CORTADA"))return "×";
+        if(value.contains("ATASCO"))return "≋";
+        if(value.contains("LENTA"))return "≈";
+        if(value.contains("AVERIA"))return "A";
+        return "!";
     }
     private static String fit(String value,float width,Paint paint){
         if(value==null||paint.measureText(value)<=width)return value==null?"":value;

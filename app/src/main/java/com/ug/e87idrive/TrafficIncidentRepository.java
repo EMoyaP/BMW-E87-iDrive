@@ -56,6 +56,7 @@ final class TrafficIncidentRepository {
     private volatile List<Incident> incidents = Collections.emptyList();
     private volatile List<Incident> dgtIncidents = Collections.emptyList();
     private volatile List<Incident> tomTomIncidents = Collections.emptyList();
+    private volatile java.util.Set<String> tomTomConfirmedDgtIds = Collections.emptySet();
     private volatile boolean active, loading;
     private volatile long lastSuccess, lastAttempt, lastTomTomSuccess;
     private Location location;
@@ -100,15 +101,25 @@ final class TrafficIncidentRepository {
     static Classification classify(String raw) {
         String value=raw==null?"":raw.toLowerCase(Locale.ROOT);
         if(containsToken(value,"vehicleonfire"))
-            return new Classification(RED,"INCIDENCIA EN LA VÍA");
+            return new Classification(RED,"VEHÍCULO INCENDIADO");
+        if(containsToken(value,"brokendown","breakdownvehicle","vehiclebreakdown"))
+            return new Classification(RED,"VEHÍCULO AVERIADO");
         if(containsToken(value,"stationaryvehicle","vehicleobstruction","vehiclestuck",
-                "brokendown","vehicleonroad"))
+                "vehicleonroad"))
             return new Classification(RED,"VEHÍCULO PARADO");
-        if(containsToken(value,"slowtraffic","heavytraffic","queuingtraffic","congestion",
+        if(containsToken(value,"heavytraffic","queuingtraffic","congestion","trafficjam",
                 "trafficbuildingup"))
+            return new Classification(RED,"ATASCO");
+        if(containsToken(value,"slowtraffic","trafficflow"))
             return new Classification(AMBER,"CIRCULACIÓN LENTA");
-        if(containsToken(value,"accident","roadclosed","obstruction","blocked"))
-            return new Classification(RED,"INCIDENCIA EN LA VÍA");
+        if(containsToken(value,"roadworks","roadmaintenance","maintenancework"))
+            return new Classification(AMBER,"OBRAS EN LA VÍA");
+        if(containsToken(value,"roadclosed","carriagewayclosure","roadclosure","blocked"))
+            return new Classification(RED,"CARRETERA CORTADA");
+        if(containsToken(value,"accident","collision"))
+            return new Classification(RED,"ACCIDENTE");
+        if(containsToken(value,"obstruction","objectontheroad"))
+            return new Classification(RED,"OBSTÁCULO EN LA VÍA");
         return null;
     }
 
@@ -233,13 +244,26 @@ final class TrafficIncidentRepository {
     }
 
     List<OfflineRoadMapView.Incident> mapIncidents(Location current) {
+        return mapIncidents(current, "", "");
+    }
+
+    /** Map only incidents on the current road or its immediately nearby, same-ref continuation. */
+    List<OfflineRoadMapView.Incident> mapIncidents(Location current, String currentRoadRef,
+                                                    String currentRoadName) {
         if(current==null)return Collections.emptyList();
         long now=System.currentTimeMillis();
         ArrayList<OfflineRoadMapView.Incident> result=new ArrayList<>();
-        for(Incident incident:incidents) if(incident.validUntil>=now
-                && nearestDistance(current,incident.points)<=10_000d) {
-            result.add(new OfflineRoadMapView.Incident(incident.id,incident.severity,
-                    incident.points));
+        for(Incident incident:incidents) if(incident.validUntil>=now) {
+            double distance=nearestDistance(current,incident.points);
+            if(distance>10_000d || !roadCompatible(incident.road,currentRoadRef,
+                    currentRoadName,distance))continue;
+            if(distance>120d && current.hasBearing()) {
+                Location target=nearestPoint(current,incident.points);
+                if(target==null || DrivingFuelStationPolicy.angularDifference(
+                        current.getBearing(),current.bearingTo(target))>60f)continue;
+            }
+            result.add(new OfflineRoadMapView.Incident(incident.id,incident.title,
+                    incident.road,incident.severity,incident.points));
         }
         return result;
     }
@@ -265,6 +289,7 @@ final class TrafficIncidentRepository {
             try(InputStream input=new LimitedInputStream(connection.getInputStream(),MAX_BYTES)){
                 parsed=parse(input,requestedAt);
             }
+            parsed=withinRadius(parsed,requestedLocation,50_000d);
             dgtIncidents=Collections.unmodifiableList(parsed);
             lastSuccess=System.currentTimeMillis();
             AppSessionLog.event("INCIDENCIAS DGT",parsed.size()+" incidencias activas útiles");
@@ -287,8 +312,14 @@ final class TrafficIncidentRepository {
             String key=tomTomPreferences.getString(TOMTOM_KEY,"").trim();
             if(key.isEmpty())return;
             double lat=center.getLatitude(),lon=center.getLongitude();
+            // TomTom limits this endpoint to 10,000 km² per request. A 49 km half-width
+            // keeps the approximately 98 x 98 km box inside that limit while covering
+            // almost a 50 km radius around the vehicle.
+            double latDelta=49_000d/111_320d;
+            double lonDelta=49_000d/(111_320d*Math.max(.2d,
+                    Math.cos(Math.toRadians(lat))));
             String bbox=String.format(Locale.ROOT,"%.6f,%.6f,%.6f,%.6f",
-                    lon-.075d,lat-.055d,lon+.075d,lat+.055d);
+                    lon-lonDelta,lat-latDelta,lon+lonDelta,lat+latDelta);
             Uri uri=Uri.parse("https://api.tomtom.com/traffic/services/5/incidentDetails")
                     .buildUpon().appendQueryParameter("key",key).appendQueryParameter("bbox",bbox)
                     .appendQueryParameter("fields","{incidents{type,geometry{type,coordinates},properties{id,iconCategory,magnitudeOfDelay,delay,length,probabilityOfOccurrence,numberOfReports,lastReportTime,events{description},from,to,roadNumbers}}}")
@@ -299,7 +330,7 @@ final class TrafficIncidentRepository {
             connection.setRequestProperty("User-Agent","BMW-E87-iDrive/1.28 (TomTom Traffic)");
             int status=connection.getResponseCode();if(status!=200)throw new IOException("HTTP "+status);
             String json=readText(connection.getInputStream(),2*1024*1024);
-            ArrayList<Incident> parsed=parseTomTom(json,requestedAt);
+            ArrayList<Incident> parsed=withinRadius(parseTomTom(json,requestedAt),center,50_000d);
             tomTomIncidents=Collections.unmodifiableList(parsed);
             lastTomTomSuccess=System.currentTimeMillis();
             tomTomPreferences.edit().putLong("last_success",lastTomTomSuccess).apply();
@@ -313,15 +344,43 @@ final class TrafficIncidentRepository {
     private synchronized void combineIncidents(){
         ArrayList<Incident> combined=new ArrayList<>(dgtIncidents.size()+tomTomIncidents.size());
         combined.addAll(dgtIncidents);
+        java.util.HashSet<String> confirmedIds=new java.util.HashSet<>();
         for(Incident candidate:tomTomIncidents){
             boolean duplicate=false;
             for(Incident official:dgtIncidents){
-                if(candidate.severity==official.severity
-                        &&incidentDistance(candidate,official)<=180d){duplicate=true;break;}
+                if(incidentDistance(candidate,official)<=250d
+                        &&incidentRoadCompatible(candidate.road,official.road)){
+                    duplicate=true;
+                    confirmedIds.add(official.id);
+                    break;
+                }
             }
             if(!duplicate)combined.add(candidate);
         }
+        for(String id:confirmedIds) if(!tomTomConfirmedDgtIds.contains(id))
+            AppSessionLog.event("INCIDENCIAS DGT/TOMTOM",
+                    "TomTom confirma incidencia DGT · " + safeIncidentId(id));
+        tomTomConfirmedDgtIds=Collections.unmodifiableSet(confirmedIds);
         incidents=Collections.unmodifiableList(combined);
+    }
+
+    private static String safeIncidentId(String value){
+        if(value==null)return "sin id";
+        return value.length()>48?value.substring(0,48):value;
+    }
+
+    private static boolean incidentRoadCompatible(String first,String second){
+        String firstCode=roadCode(first),secondCode=roadCode(second);
+        return firstCode.isEmpty()||secondCode.isEmpty()||firstCode.equals(secondCode);
+    }
+
+    private static ArrayList<Incident> withinRadius(List<Incident> source,Location center,
+                                                     double radiusMeters){
+        ArrayList<Incident> result=new ArrayList<>();
+        if(center==null)return result;
+        for(Incident incident:source) if(nearestDistance(center,incident.points)<=radiusMeters)
+            result.add(incident);
+        return result;
     }
 
     private static double incidentDistance(Incident first,Incident second){
@@ -363,13 +422,16 @@ final class TrafficIncidentRepository {
 
     private static Classification classifyTomTom(Object raw){
         String value=raw==null?"":String.valueOf(raw).toLowerCase(Locale.ROOT);
-        if(value.equals("1")||value.contains("accident")||value.equals("7")
-                ||value.contains("laneclosed")||value.equals("8")||value.contains("roadclosed"))
-            return new Classification(RED,"INCIDENCIA EN LA VÍA");
+        if(value.equals("1")||value.contains("accident"))
+            return new Classification(RED,"ACCIDENTE");
+        if(value.equals("7")||value.contains("laneclosed")||value.equals("8")
+                ||value.contains("roadclosed"))
+            return new Classification(RED,"CARRETERA CORTADA");
         if(value.equals("14")||value.contains("brokendown"))
-            return new Classification(RED,"VEHÍCULO PARADO");
-        if(value.equals("6")||value.contains("jam")||value.contains("traffic"))
-            return new Classification(AMBER,"CIRCULACIÓN LENTA");
+            return new Classification(RED,"VEHÍCULO AVERIADO");
+        if(value.equals("6")||value.contains("jam"))
+            return new Classification(RED,"ATASCO");
+        if(value.contains("traffic"))return new Classification(AMBER,"CIRCULACIÓN LENTA");
         if(value.equals("9")||value.contains("roadwork"))
             return new Classification(AMBER,"OBRAS EN LA VÍA");
         return null;

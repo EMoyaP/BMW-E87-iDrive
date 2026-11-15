@@ -16,9 +16,12 @@ import android.view.View;
 
 import java.util.Collections;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -116,10 +119,13 @@ final class OfflineRoadMapView extends View {
 
     static final class Incident {
         final String id;
+        final String title;
+        final String road;
         final int severity;
         final double[] points;
-        Incident(String id, int severity, double[] points) {
-            this.id=id==null?"":id; this.severity=severity;
+        Incident(String id, String title, String road, int severity, double[] points) {
+            this.id=id==null?"":id; this.title=title==null?"":title;
+            this.road=road==null?"":road; this.severity=severity;
             this.points=points==null?new double[0]:points;
         }
     }
@@ -180,6 +186,8 @@ final class OfflineRoadMapView extends View {
     private List<FuelStation> fuelStations = Collections.emptyList();
     private List<Incident> incidents = Collections.emptyList();
     private List<TrafficFlow> trafficFlows = Collections.emptyList();
+    private final Map<String, List<Road>> roadConnections = new HashMap<>();
+    private final Map<String, List<Road>> incidentRoadPaths = new HashMap<>();
     private double latitude;
     private double longitude;
     private double renderLatitude;
@@ -213,6 +221,8 @@ final class OfflineRoadMapView extends View {
 
     void setRoads(List<Road> value) {
         roads = value == null ? Collections.emptyList() : value;
+        roadConnections.clear();
+        incidentRoadPaths.clear();
         if (currentRoadName.isEmpty()) updateCurrentRoadName();
         invalidate();
     }
@@ -261,7 +271,9 @@ final class OfflineRoadMapView extends View {
 
     void setCurrentRoad(String osmId, String roadRef, String roadName, double roadBearing,
                         Float vehicleBearing) {
-        currentRoadId = osmId == null ? "" : osmId;
+        String nextRoadId = osmId == null ? "" : osmId;
+        if (!nextRoadId.equals(currentRoadId)) incidentRoadPaths.clear();
+        currentRoadId = nextRoadId;
         currentRoadRef = roadRef == null ? "" : roadRef;
         currentRoadName = roadName == null ? "" : roadName.trim();
         if (currentRoadName.isEmpty()) updateCurrentRoadName();
@@ -598,20 +610,210 @@ final class OfflineRoadMapView extends View {
         roadPaint.setStyle(Paint.Style.STROKE);roadPaint.setStrokeCap(Paint.Cap.ROUND);
         roadPaint.setStrokeJoin(Paint.Join.ROUND);
         for(Incident incident:incidents){
-            if(incident.points.length<2)continue;path.reset();boolean first=true;
+            if(incident.points.length<2)continue;
+            int tone=incident.severity==TrafficIncidentRepository.RED
+                    ?Color.rgb(226,48,48):Color.rgb(247,151,30);
+            if(incident.points.length==2){
+                float east=(float)((incident.points[1]-renderLongitude)*metersPerDegreeLon);
+                float north=(float)((incident.points[0]-renderLatitude)*111_320d);
+                float x=anchorX+east*pixelsPerMeter,y=anchorY-north*pixelsPerMeter;
+                Road affected=nearestRoad(incident.points[0],incident.points[1],90d,incident.road);
+                Road active=roadById(currentRoadId);
+                roadPaint.setStyle(Paint.Style.STROKE);
+                roadPaint.setColor(Color.argb(200,Color.red(tone),Color.green(tone),Color.blue(tone)));
+                roadPaint.setStrokeWidth(10f);
+                // Follow the connected OSM road chain from the car's road to the incident road.
+                // This colors the approach through a junction even when the obstacle is on a
+                // neighboring street, while leaving nearby but disconnected roads untouched.
+                List<Road> approach=connectedIncidentApproach(active,affected);
+                if(!approach.isEmpty()) {
+                    for(Road road:approach)drawRoadGeometry(canvas,road,anchorX,anchorY,
+                            pixelsPerMeter,metersPerDegreeLon);
+                } else {
+                    if(active!=null)drawRoadGeometry(canvas,active,anchorX,anchorY,
+                            pixelsPerMeter,metersPerDegreeLon);
+                    if(affected!=null&&(active==null||!affected.osmId.equals(active.osmId)))
+                        drawRoadGeometry(canvas,affected,anchorX,anchorY,pixelsPerMeter,
+                                metersPerDegreeLon);
+                }
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.argb(80,Color.red(tone),Color.green(tone),Color.blue(tone)));
+                canvas.drawCircle(x,y,18f,paint);
+                paint.setColor(tone);canvas.drawCircle(x,y,10f,paint);
+                labelPaint.setStyle(Paint.Style.FILL);labelPaint.setColor(Color.WHITE);
+                labelPaint.setTextAlign(Paint.Align.CENTER);
+                labelPaint.setTypeface(android.graphics.Typeface.create("sans-serif",
+                        android.graphics.Typeface.BOLD));
+                labelPaint.setTextSize(13f);
+                String title=incident.title.toUpperCase(Locale.ROOT);
+                String glyph=title.contains("CORTADA")?"×":title.contains("ATASCO")?"≋"
+                        :title.contains("LENTA")?"≈":title.contains("AVERIA")?"A":"!";
+                canvas.drawText(glyph,x,y+4.5f,labelPaint);
+                continue;
+            }
+            path.reset();boolean first=true;
             for(int i=0;i+1<incident.points.length;i+=2){
                 float east=(float)((incident.points[i+1]-renderLongitude)*metersPerDegreeLon);
                 float north=(float)((incident.points[i]-renderLatitude)*111_320d);
                 float x=anchorX+east*pixelsPerMeter,y=anchorY-north*pixelsPerMeter;
                 if(first){path.moveTo(x,y);first=false;}else path.lineTo(x,y);
             }
-            int tone=incident.severity==TrafficIncidentRepository.RED
-                    ?Color.rgb(226,48,48):Color.rgb(247,151,30);
             roadPaint.setColor(Color.argb(75,Color.red(tone),Color.green(tone),Color.blue(tone)));
             roadPaint.setStrokeWidth(14f);canvas.drawPath(path,roadPaint);
             roadPaint.setColor(tone);roadPaint.setStrokeWidth(5.5f);canvas.drawPath(path,roadPaint);
         }
         canvas.restore();
+    }
+
+    private Road nearestRoad(double latitude,double longitude,double maxDistanceMeters){
+        return nearestRoad(latitude,longitude,maxDistanceMeters,"");
+    }
+
+    private Road nearestRoad(double latitude,double longitude,double maxDistanceMeters,
+                             String roadIdentity){
+        Road best=null;double bestDistance=maxDistanceMeters;
+        double metersLon=111_320d*Math.cos(Math.toRadians(latitude));
+        String wanted=normalizeRoadIdentity(roadIdentity);
+        for(Road road:roads){
+            String identity=normalizeRoadIdentity(road.roadRef);
+            if(identity.isEmpty())identity=normalizeRoadIdentity(road.roadName);
+            if(!wanted.isEmpty()&&!identity.equals(wanted))continue;
+            for(int i=0;i+3<road.points.length;i+=2){
+                double ax=(road.points[i+1]-longitude)*metersLon;
+                double ay=(road.points[i]-latitude)*111_320d;
+                double bx=(road.points[i+3]-longitude)*metersLon;
+                double by=(road.points[i+2]-latitude)*111_320d;
+                double dx=bx-ax,dy=by-ay,len=dx*dx+dy*dy;
+                double t=len<=.0001d?0d:Math.max(0d,Math.min(1d,-(ax*dx+ay*dy)/len));
+                double distance=Math.hypot(ax+t*dx,ay+t*dy);
+                if(distance<bestDistance){bestDistance=distance;best=road;}
+            }
+        }
+        return best;
+    }
+
+    private List<Road> connectedIncidentApproach(Road start,Road goal){
+        if(start==null)return goal==null?Collections.emptyList():Collections.singletonList(goal);
+        if(goal==null)return Collections.singletonList(start);
+        String cacheKey=start.osmId+'|'+goal.osmId;
+        List<Road> cached=incidentRoadPaths.get(cacheKey);
+        if(cached!=null)return cached;
+        if(start.osmId.equals(goal.osmId)) {
+            List<Road> same=Collections.singletonList(start);incidentRoadPaths.put(cacheKey,same);
+            return same;
+        }
+        ensureRoadConnections();
+        ArrayDeque<Road> queue=new ArrayDeque<>();
+        HashMap<String,Road> previous=new HashMap<>();
+        HashMap<String,Integer> depth=new HashMap<>();
+        queue.add(start);previous.put(start.osmId,null);depth.put(start.osmId,0);
+        boolean found=false;
+        while(!queue.isEmpty()&&!found){
+            Road road=queue.removeFirst();int nextDepth=depth.get(road.osmId)+1;
+            if(nextDepth>5)continue;
+            List<Road> neighbors=roadConnections.get(road.osmId);
+            if(neighbors==null)continue;
+            for(Road neighbor:neighbors){
+                if(previous.containsKey(neighbor.osmId))continue;
+                previous.put(neighbor.osmId,road);depth.put(neighbor.osmId,nextDepth);
+                if(neighbor.osmId.equals(goal.osmId)){found=true;break;}
+                queue.addLast(neighbor);
+            }
+        }
+        ArrayList<Road> result=new ArrayList<>();
+        if(found){
+            for(Road road=goal;road!=null;road=previous.get(road.osmId))result.add(road);
+            Collections.reverse(result);
+        }
+        List<Road> immutable=Collections.unmodifiableList(result);
+        incidentRoadPaths.put(cacheKey,immutable);
+        return immutable;
+    }
+
+    private void ensureRoadConnections(){
+        if(!roadConnections.isEmpty()||roads.isEmpty())return;
+        HashMap<String,ArrayList<Road>> endpointBuckets=new HashMap<>();
+        for(Road road:roads){
+            if(road.points.length<4)continue;
+            addEndpointBucket(endpointBuckets,road,0);
+            addEndpointBucket(endpointBuckets,road,road.points.length-2);
+            roadConnections.put(road.osmId,new ArrayList<>());
+        }
+        for(Road road:roads){
+            if(road.points.length<4)continue;
+            connectEndpointNeighbors(road,0,endpointBuckets);
+            connectEndpointNeighbors(road,road.points.length-2,endpointBuckets);
+        }
+    }
+
+    private static void addEndpointBucket(Map<String,ArrayList<Road>> buckets,Road road,int point){
+        String key=endpointCell(road.points[point],road.points[point+1]);
+        ArrayList<Road> values=buckets.get(key);
+        if(values==null){values=new ArrayList<>();buckets.put(key,values);}
+        if(!values.contains(road))values.add(road);
+    }
+
+    private void connectEndpointNeighbors(Road road,int point,
+                                           Map<String,ArrayList<Road>> buckets){
+        double lat=road.points[point],lon=road.points[point+1];
+        int latCell=(int)Math.floor(lat/0.00025d),lonCell=(int)Math.floor(lon/0.00032d);
+        for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++){
+            List<Road> candidates=buckets.get((latCell+dy)+":"+(lonCell+dx));
+            if(candidates==null)continue;
+            for(Road candidate:candidates){
+                if(candidate.osmId.equals(road.osmId))continue;
+                if(endpointDistanceMeters(road,point,candidate)<=35d){
+                    addRoadConnection(road,candidate);addRoadConnection(candidate,road);
+                }
+            }
+        }
+    }
+
+    private void addRoadConnection(Road from,Road to){
+        List<Road> neighbors=roadConnections.get(from.osmId);
+        if(neighbors!=null&&!neighbors.contains(to))neighbors.add(to);
+    }
+
+    private static double endpointDistanceMeters(Road first,int firstPoint,Road second){
+        double lat=first.points[firstPoint],lon=first.points[firstPoint+1];
+        double best=Double.MAX_VALUE;
+        int[] points={0,second.points.length-2};
+        for(int point:points){
+            double dy=(second.points[point]-lat)*111_320d;
+            double dx=(second.points[point+1]-lon)*111_320d
+                    *Math.cos(Math.toRadians(lat));
+            best=Math.min(best,Math.hypot(dx,dy));
+        }
+        return best;
+    }
+
+    private static String endpointCell(double latitude,double longitude){
+        return (int)Math.floor(latitude/0.00025d)+":"
+                +(int)Math.floor(longitude/0.00032d);
+    }
+
+    private static String normalizeRoadIdentity(String value){
+        if(value==null)return "";
+        return value.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
+    }
+
+    private Road roadById(String id){
+        if(id==null||id.isEmpty())return null;
+        for(Road road:roads)if(id.equals(road.osmId))return road;
+        return null;
+    }
+
+    private void drawRoadGeometry(Canvas canvas,Road road,float anchorX,float anchorY,
+                                  float pixelsPerMeter,float metersPerDegreeLon){
+        if(road.points.length<4)return;
+        path.reset();boolean first=true;
+        for(int i=0;i+1<road.points.length;i+=2){
+            float east=(float)((road.points[i+1]-renderLongitude)*metersPerDegreeLon);
+            float north=(float)((road.points[i]-renderLatitude)*111_320d);
+            float x=anchorX+east*pixelsPerMeter,y=anchorY-north*pixelsPerMeter;
+            if(first){path.moveTo(x,y);first=false;}else path.lineTo(x,y);
+        }
+        canvas.drawPath(path,roadPaint);
     }
 
     private void drawTrafficFlows(Canvas canvas, int width, int height) {
