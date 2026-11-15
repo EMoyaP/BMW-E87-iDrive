@@ -164,7 +164,12 @@ public class MainActivity extends Activity {
             fuelStations.configure(FuelStationProvider.DEFAULT_PRODUCT_ID,
                     fuelStations.getRadiusKm());
         }
-        speedLimits = new SpeedLimitRepository(this);
+        speedLimits = new SpeedLimitRepository(this, () -> {
+            // A GPS fix can arrive before the provincial SQLite seed finishes. Refresh the
+            // visual map once its transaction commits, even if the vehicle is stationary.
+            Location current = gps == null ? null : gps.getLastLocation();
+            if (current != null && drivingOverlay != null) requestMapRoads(current, true);
+        });
         dgtSpeeds = new DgtSpeedRepository(this);
         tomTomRoadData = new TomTomRoadDataRepository(this, () -> runOnUiThread(() -> {
             Location current = gps == null ? null : gps.getLastLocation();

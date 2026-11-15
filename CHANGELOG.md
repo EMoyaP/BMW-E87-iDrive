@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 2.0.25 — 15/11/2026
+
+- El mapa ya no descarta las consultas de calles durante la importación inicial de semillas; la
+  lectura SQLite permanece en segundo plano mientras se serializa con la importación.
+- Al terminar la importación local se fuerza una nueva lectura del mapa con la última posición GPS,
+  también si el coche está parado y no llega otra posición.
+
 ## 2.0.24 — 15/11/2026
 
 - Para incidencias puntuales, el mapa busca una cadena corta de vías OSM conectadas entre la

@@ -150,6 +150,7 @@ final class SpeedLimitRepository {
     private volatile boolean active;
     private volatile boolean updateRunning;
     private volatile boolean seedImportRunning;
+    private final Runnable seedReadyListener;
     private boolean networkCallbackRegistered;
 
     private final ConnectivityManager.NetworkCallback networkCallback =
@@ -162,7 +163,12 @@ final class SpeedLimitRepository {
             };
 
     SpeedLimitRepository(Context context) {
+        this(context, null);
+    }
+
+    SpeedLimitRepository(Context context, Runnable seedReadyListener) {
         this.context = context.getApplicationContext();
+        this.seedReadyListener = seedReadyListener;
         this.connectivity = (ConnectivityManager) this.context
                 .getSystemService(Context.CONNECTIVITY_SERVICE);
         this.updatePreferences = this.context.getSharedPreferences("speed_limit_updates",
@@ -280,7 +286,9 @@ final class SpeedLimitRepository {
      */
     List<OfflineRoadMapView.Road> nearbyMapRoads(Location location) {
         if (location == null) return new ArrayList<>();
-        if (seedImportRunning) return new ArrayList<>();
+        // This runs on MainActivity's map executor, never on the UI thread. Let SQLite
+        // serialize this read against the seed transaction instead of returning an empty map
+        // for the whole duration of a potentially slow first import.
         return database.mapRoads(location.getLatitude(), location.getLongitude(), 1_150, 520);
     }
 
@@ -909,6 +917,7 @@ final class SpeedLimitRepository {
               }
             } finally {
                 seedImportRunning = false;
+                if (seedReadyListener != null) main.post(seedReadyListener);
             }
         }, "e87-speed-limit-seed");
         worker.setPriority(Thread.MIN_PRIORITY);
