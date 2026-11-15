@@ -16,7 +16,6 @@ final class DrivingRouteLogRecorder {
     private long lastMovingMs;
     private long lastSampleMs;
     private long previousSampleMs;
-    private double minSpeed = Double.POSITIVE_INFINITY;
     private double maxSpeed = Double.NEGATIVE_INFINITY;
     private double weightedSpeedSeconds;
     private double measuredSeconds;
@@ -49,7 +48,6 @@ final class DrivingRouteLogRecorder {
         lastMovingMs = timestampMs;
         lastSampleMs = 0L;
         previousSampleMs = 0L;
-        minSpeed = Double.POSITIVE_INFINITY;
         maxSpeed = Double.NEGATIVE_INFINITY;
         weightedSpeedSeconds = 0d;
         measuredSeconds = 0d;
@@ -62,7 +60,6 @@ final class DrivingRouteLogRecorder {
 
     private void recordSample(Location location, double speedKmh, long timestampMs) {
         if (Double.isFinite(speedKmh)) {
-            minSpeed = Math.min(minSpeed, speedKmh);
             maxSpeed = Math.max(maxSpeed, speedKmh);
             if (previousSampleMs > 0L) {
                 double elapsed = (timestampMs - previousSampleMs) / 1_000d;
@@ -98,7 +95,6 @@ final class DrivingRouteLogRecorder {
                 + " · fin=" + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(new Date(lastMovingMs))
                 + " · tiempo=" + formatDuration(durationMs)
                 + " · distancia=" + String.format(Locale.ROOT, "%.2f km", distanceMeters / 1_000d)
-                + " · velocidad mínima=" + formatSpeed(minSpeed)
                 + " · velocidad media=" + (measuredSeconds > 0d
                 ? String.format(Locale.ROOT, "%.1f km/h", weightedSpeedSeconds / measuredSeconds) : "sin dato")
                 + " · velocidad máxima=" + formatSpeed(maxSpeed);

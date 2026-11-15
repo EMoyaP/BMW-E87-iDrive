@@ -158,7 +158,7 @@
       if(!points.length)return null;
       let weighted=0,elapsed=0;
       for(let i=1;i<points.length;i++){const dt=(points[i].time-points[i-1].time)/1000;if(dt<=0||dt>60)continue;weighted+=(points[i].speed+points[i-1].speed)*.5*dt;elapsed+=dt;}
-      return {min:Math.min(...points.map(p=>p.speed)),max:Math.max(...points.map(p=>p.speed)),mean:elapsed?weighted/elapsed:points.reduce((s,p)=>s+p.speed,0)/points.length};
+      return {max:Math.max(...points.map(p=>p.speed)),mean:elapsed?weighted/elapsed:points.reduce((s,p)=>s+p.speed,0)/points.length};
     }
     function renderRouteCards(selected){
       routeListEl.replaceChildren();
@@ -167,7 +167,7 @@
         const speeds=routeSpeeds(track);
         const first=track.points[0],last=track.points[track.points.length-1];
         const card=document.createElement('article');card.className='routeCard'+(track.id===selectedTrackId?' active':'');
-        card.innerHTML=`<div class="routeTitle">${new Date(track.day+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'2-digit',month:'short'})} · RECORRIDO ${index+1}</div><div class="routeTime">${clock(first.time)} – ${clock(last.time)}</div><div class="routeStats"><span>Tiempo<b>${duration(last.time-first.time)}</b></span><span>Distancia<b>${routeDistance(track).toFixed(1)} km</b></span><span>Vel. mínima<b>${speeds?Math.round(speeds.min)+' km/h':'Sin registro'}</b></span><span>Media GPS<b>${speeds?speeds.mean.toFixed(1)+' km/h':'Sin registro'}</b></span><span>Vel. máxima<b>${speeds?Math.round(speeds.max)+' km/h':'Sin registro'}</b></span></div>`;
+        card.innerHTML=`<div class="routeTitle">${new Date(track.day+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'2-digit',month:'short'})} · RECORRIDO ${index+1}</div><div class="routeTime">${clock(first.time)} – ${clock(last.time)}</div><div class="routeStats"><span>Tiempo<b>${duration(last.time-first.time)}</b></span><span>Distancia<b>${routeDistance(track).toFixed(1)} km</b></span><span>Media GPS<b>${speeds?speeds.mean.toFixed(1)+' km/h':'Sin registro'}</b></span><span>Vel. máxima<b>${speeds?Math.round(speeds.max)+' km/h':'Sin registro'}</b></span></div>`;
         card.addEventListener('click',()=>{selectedTrackId=selectedTrackId===track.id?null:track.id;render();});
         routeListEl.appendChild(card);
       });
