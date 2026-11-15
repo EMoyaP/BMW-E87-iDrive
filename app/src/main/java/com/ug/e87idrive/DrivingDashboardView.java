@@ -43,6 +43,7 @@ final class DrivingDashboardView extends FrameLayout {
     private Integer cameraLimit;
     void radarLimit(Integer value) { cameraLimit = value; invalidate(); }
     private boolean exact;
+    private boolean radarLimit;
     private String range, consumption, temperature;
     private View sign, radar, surveillance, incident, androidAuto, menu;
     private final FrameLayout whereAmIPanel;
@@ -139,6 +140,10 @@ final class DrivingDashboardView extends FrameLayout {
         map.setRadars(radars);
     }
 
+    void mapRadarAlert(String radarId) {
+        map.setRadarAlertId(radarId);
+    }
+
     void mapFuelStations(java.util.List<OfflineRoadMapView.FuelStation> stations) {
         map.setFuelStations(stations);
     }
@@ -224,7 +229,14 @@ final class DrivingDashboardView extends FrameLayout {
         map.setCurrentRoad(osmId, roadRef, roadName, roadBearing, vehicleBearing);
     }
 
-    void road(Integer limit, boolean exact) { this.limit = limit; this.exact = exact; invalidate(); }
+    void road(Integer limit, boolean exact) { road(limit, exact, false); }
+
+    void road(Integer limit, boolean exact, boolean radarLimit) {
+        this.limit = limit;
+        this.exact = exact;
+        this.radarLimit = radarLimit;
+        invalidate();
+    }
 
     void animateInstruments(boolean entering) {
         View[] instruments={sign,radar,surveillance,incident,androidAuto,menu};
@@ -280,7 +292,10 @@ final class DrivingDashboardView extends FrameLayout {
         canvas.translate((getWidth() - 1280 * scale) / 2, (getHeight() - 720 * scale) / 2);
         canvas.scale(scale, scale);
         drawBrand(canvas);
-        text(canvas, limit != null && !exact ? "VELOCIDAD ACONSEJADA" : "LÍMITE DE LA VÍA", 1110, 155, 19, WHITE, false);
+        String limitHeading = radarLimit ? "LÍMITE RADAR"
+                : limit == null ? "LÍMITE SIN DATO FIABLE"
+                : !exact ? "VELOCIDAD ACONSEJADA" : "LÍMITE DE LA VÍA";
+        text(canvas, limitHeading, 1110, 155, 19, WHITE, false);
         // Shaped base, two luminous contours and a shaded inner track, like the approved image.
         paint.setShader(bandShader);
         stroke(canvas, band, Color.WHITE, 32);

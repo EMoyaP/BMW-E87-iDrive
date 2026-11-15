@@ -45,15 +45,23 @@ final class SpeedResolutionCoordinator {
             DgtSpeedRepository.Match dgt = roadConfirmed ? dgtSpeeds.lookup(location, osm) : null;
             if (dgt != null) return new Result(dgt.asSpeedMatch(osm), true, false);
         }
-        SpeedLimitRepository.Match tomTom = roadConfirmed && tomTomRoadData != null
-                ? tomTomRoadData.speedMatch(location, osm) : null;
-        if (tomTom != null) {
-            if (osm != null && osm.exact && osm.limitKmh != tomTom.limitKmh) {
+        // Ask/use TomTom for a road where no exact local limit is known, including when
+        // the offline road layer has no matching segment at all. A confident TomTom snap
+        // is itself a road match; requiring an OSM id here made it unusable precisely on
+        // the gaps it is meant to fill.
+        SpeedLimitRepository.Match tomTom = tomTomRoadData == null
+                ? null : tomTomRoadData.speedMatch(location, osm);
+        if (osm != null && osm.exact) {
+            if (tomTom != null && osm.limitKmh != tomTom.limitKmh) {
                 AppSessionLog.sampledEvent("tomtom-limit-conflict-" + osm.osmId,
                         "CONFLICTO DE LÍMITE", "OSM " + osm.limitKmh + " km/h · TomTom "
                                 + tomTom.limitKmh + " km/h · " + osm.roadRef,
                         30L * 60L * 1_000L);
             }
+            // The verified DGT/OSM posted limit stays authoritative when sources disagree.
+            return new Result(osm, false, false);
+        }
+        if (tomTom != null) {
             return new Result(tomTom, false, true);
         }
         return new Result(osm, false, false);

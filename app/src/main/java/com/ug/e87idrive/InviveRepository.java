@@ -187,7 +187,7 @@ final class InviveRepository {
         }
         long last = preferences.getLong("success_" + province, 0L);
         if (last > 0L && System.currentTimeMillis() - last < UPDATE_INTERVAL_MS) {
-            finish(callback, false, provinceLabel(province) + " ya tiene INVIVE actualizado hace menos de 24 h");
+            finish(callback, true, provinceLabel(province) + " ya tiene INVIVE actualizado hace menos de 24 h");
             return;
         }
         Network network = validatedNetwork();

@@ -133,7 +133,9 @@ final class DgtSpeedRepository {
         }
         long last = preferences.getLong("last_success_national", 0L);
         if (last > 0L && now - last < UPDATE_INTERVAL_MS) {
-            finish(callback, false, "DGT nacional ya se descargó correctamente hace menos de 24 h");
+            // Fresh local data is a successful no-op, not an update failure. Durable update jobs
+            // combine this result with the other feeds and otherwise keep retrying forever.
+            finish(callback, true, "DGT nacional actualizado · comprobado hace menos de 24 h");
             return;
         }
         updateRunning = true;

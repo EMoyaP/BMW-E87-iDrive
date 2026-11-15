@@ -27,4 +27,13 @@ public class TomTomRoadDataRepositoryTest {
                 +"{\"latitude\":38.2,\"longitude\":-0.6},{\"latitude\":38.21,\"longitude\":-0.61}]}}}";
         assertNull(TomTomRoadDataRepository.parseFlow(json,1234L));
     }
+
+    @Test public void tomTomCacheRequiresAnExplicitPositiveServerMaxAge() {
+        assertEquals(60_000L, TomTomRoadDataRepository.cacheMaxAgeMs("public, max-age=60"));
+        assertEquals(0L, TomTomRoadDataRepository.cacheMaxAgeMs(null));
+        assertEquals(0L, TomTomRoadDataRepository.cacheMaxAgeMs("no-store, max-age=60"));
+        assertEquals(0L, TomTomRoadDataRepository.cacheMaxAgeMs("max-age=0"));
+        assertEquals(30L * 24L * 60L * 60L * 1_000L,
+                TomTomRoadDataRepository.cacheMaxAgeMs("max-age=99999999"));
+    }
 }

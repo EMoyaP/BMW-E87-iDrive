@@ -18,6 +18,8 @@ public class GpsSpeedProvider implements LocationListener {
     private static final long MAX_LOCATION_AGE_MS = 15_000L;
     private static final long MAX_SPEED_AGE_MS = 10_000L;
     private static final long MAX_INFERIOR_PROVIDER_HOLD_MS = 12_000L;
+    /** Reject mock-location jumps and corrupted receiver values for this E87 dashboard. */
+    static final double MAX_PLAUSIBLE_SPEED_KMH = 250d;
     static final String DEBUG_PREFERENCES = "ui";
     static final String KEY_LOG_COORDINATES = "debug_log_gps_coordinates";
     public interface Listener { void onLocation(Location location, Double kmh); }
@@ -198,7 +200,19 @@ public class GpsSpeedProvider implements LocationListener {
             logRejectedLocation(l, "menos fiable que la posición activa");
             return;
         }
-        Location accepted = withReliableBearing(l);
+        Location speedSafe = new Location(l);
+        boolean impossibleDirectSpeed = speedSafe.hasSpeed()
+                && !isPlausibleSpeedKmh(speedSafe.getSpeed() * 3.6d);
+        if (impossibleDirectSpeed) {
+            speedSafe.removeSpeed();
+            lastGpsSpeedLocation = null;
+            lastGpsSpeedProvider = "";
+            kmh = null;
+            timestamp = 0L;
+            logRejectedLocation(l, "velocidad GPS imposible "
+                    + Math.round(l.getSpeed() * 3.6d) + " km/h");
+        }
+        Location accepted = withReliableBearing(speedSafe);
         lastLocation = new Location(accepted);
         lastFixElapsedMs = candidateFixElapsed;
         locationTimestamp = Math.max(0L, System.currentTimeMillis() - ageMs);
@@ -226,9 +240,17 @@ public class GpsSpeedProvider implements LocationListener {
                     double uncertainty = Math.max(3d, Math.max(
                             speedPrevious.hasAccuracy() ? speedPrevious.getAccuracy() : 0f,
                             accepted.hasAccuracy() ? accepted.getAccuracy() : 0f) * .35d);
-                    kmh = distance <= uncertainty ? 0d
-                            : Math.min(300d, Math.max(0d, distance / (deltaMs / 1000d) * 3.6d));
-                    timestamp = locationTimestamp;
+                    double estimated = distance <= uncertainty ? 0d
+                            : Math.max(0d, distance / (deltaMs / 1000d) * 3.6d);
+                    if (isPlausibleSpeedKmh(estimated)) {
+                        kmh = estimated;
+                        timestamp = locationTimestamp;
+                    } else {
+                        kmh = null;
+                        timestamp = 0L;
+                        logRejectedLocation(accepted, "salto GPS incompatible con velocidad "
+                                + Math.round(estimated) + " km/h");
+                    }
                 }
             }
         } else {
@@ -291,6 +313,11 @@ public class GpsSpeedProvider implements LocationListener {
                                       float bearingAccuracyDegrees) {
         return hasBearing && (!hasBearingAccuracy || Float.isFinite(bearingAccuracyDegrees)
                 && bearingAccuracyDegrees <= 20f);
+    }
+
+    static boolean isPlausibleSpeedKmh(double speedKmh) {
+        return Double.isFinite(speedKmh) && speedKmh >= 0d
+                && speedKmh <= MAX_PLAUSIBLE_SPEED_KMH;
     }
 
     private Double freshSpeed() {

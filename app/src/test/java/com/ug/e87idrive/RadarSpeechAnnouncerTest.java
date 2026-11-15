@@ -52,4 +52,49 @@ public class RadarSpeechAnnouncerTest {
         assertFalse(RadarRepository.wrongExplicitDirection(185f, "S"));
         assertFalse(RadarRepository.wrongExplicitDirection(190f, "CRECIENTE"));
     }
+
+    @Test public void cameraDirectionUsesOppositeWindowAroundOneHundredEightyDegrees() {
+        assertTrue(RadarRepository.wrongExplicitDirection(125f, "0"));
+        assertTrue(RadarRepository.wrongExplicitDirection(180f, "0"));
+        assertFalse(RadarRepository.wrongExplicitDirection(124f, "0"));
+        assertFalse(RadarRepository.wrongExplicitDirection(90f, "0"));
+        assertFalse(RadarRepository.wrongExplicitDirection(50f, "0"));
+    }
+
+    @Test public void explicitOsmCameraHeadingOverridesOpposingRoadCorridors() {
+        String metadata = "{\"tags\":{\"direction\":\"330\"},"
+                + "\"corridors\":[{\"fromLat\":38.2273,\"fromLon\":-0.5537,"
+                + "\"toLat\":38.2258,\"toLon\":-0.5537},"
+                + "{\"fromLat\":38.2249,\"fromLon\":-0.5537,"
+                + "\"toLat\":38.2271,\"toLon\":-0.5537}]}";
+        RadarRepository.RadarDirection direction = RadarRepository.radarDirection("", metadata);
+        assertFalse(direction.bidirectional);
+        assertEquals(1, direction.bearings.length);
+        assertEquals(330f, direction.bearings[0], 0f);
+    }
+
+    @Test public void roadCorridorsAloneDoNotInventRadarDetectionDirection() {
+        String metadata = "{\"corridors\":[{\"fromLat\":38.22,\"fromLon\":-0.55,"
+                + "\"toLat\":38.23,\"toLon\":-0.55}]}";
+        RadarRepository.RadarDirection direction = RadarRepository.radarDirection("", metadata);
+        assertFalse(direction.bidirectional);
+        assertEquals(0, direction.bearings.length);
+    }
+
+    @Test public void twoWayConeRequiresAnExplicitBothDirectionsValue() {
+        RadarRepository.RadarDirection direction = RadarRepository.radarDirection("both", "");
+        assertTrue(direction.bidirectional);
+        assertEquals(0, direction.bearings.length);
+    }
+
+    @Test public void lufopZeroDirectionIsUnknownButOsmZeroIsNorth() {
+        RadarRepository.RadarDirection lufop = RadarRepository.radarDirection("LUFOP", "0", "");
+        assertFalse(lufop.bidirectional);
+        assertEquals(0, lufop.bearings.length);
+
+        RadarRepository.RadarDirection osm = RadarRepository.radarDirection("OSM", "0", "");
+        assertFalse(osm.bidirectional);
+        assertEquals(1, osm.bearings.length);
+        assertEquals(0f, osm.bearings[0], 0.01f);
+    }
 }

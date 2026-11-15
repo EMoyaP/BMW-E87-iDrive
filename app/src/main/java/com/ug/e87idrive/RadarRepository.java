@@ -135,6 +135,7 @@ final class RadarRepository {
     private static final float MAX_GPS_ACCURACY_METERS = 35f;
     private static final long TRAJECTORY_WINDOW_MS = 25_000L;
     private static final double HEADING_TOLERANCE_DEGREES = 55d;
+    private static final double DIRECTION_REVERSE_TOLERANCE_DEGREES = 55d;
     /** First fixed/section-camera dashboard and voice warning. The reminder is owned by
      * {@link RadarSpeechAnnouncer} at 300 m. */
     private static final int FIRST_WARNING_DISTANCE_METERS = 600;
@@ -394,7 +395,7 @@ final class RadarRepository {
         }
         if (lastSuccessfulUpdate(selected) > 0L
                 && now - lastSuccessfulUpdate(selected) < REFRESH_INTERVAL_MS) {
-            finish(callback, false, label(selected) + " ya se actualizó correctamente hace menos de 24 h");
+            finish(callback, true, label(selected) + " ya se actualizó correctamente hace menos de 24 h");
             return;
         }
         updateRunning = true;
@@ -734,13 +735,24 @@ final class RadarRepository {
                 : Math.max(0d, speedKmh);
         if (location.hasSpeed()) effectiveSpeed = Math.max(effectiveSpeed, location.getSpeed() * 3.6d);
         boolean moving = effectiveSpeed >= 9d;
-        Float enforcementBearing = explicitDirectionBearing(record.direction);
-        if (moving && location.hasBearing() && enforcementBearing != null) {
-            double difference = angularDifference(location.getBearing(), enforcementBearing);
-            if (difference > 60d) return new DirectionEvidence(false, false, true,
-                    "rumbo GPS=" + Math.round(location.getBearing()) + "° · radar="
-                            + Math.round(enforcementBearing) + "° · Δ="
-                            + Math.round(difference) + "°");
+        if (moving && location.hasBearing() && record.directionBearings.length > 0
+                && !record.bidirectional) {
+            double closest = 180d;
+            float closestBearing = record.directionBearings[0];
+            for (float enforcementBearing : record.directionBearings) {
+                double difference = angularDifference(location.getBearing(), enforcementBearing);
+                if (difference < closest) { closest = difference; closestBearing = enforcementBearing; }
+            }
+            // Compare circular headings: same direction is near 0°, opposite is near 180°.
+            // The middle band is ambiguous (turns, crossings, noisy GPS): keep a proximity
+            // warning if trajectory supports it, but the map renderer omits its cone.
+            if (closest >= 180d - DIRECTION_REVERSE_TOLERANCE_DEGREES) {
+                return new DirectionEvidence(false, false, true,
+                        "sentido opuesto confirmado · rumbo GPS="
+                                + Math.round(location.getBearing()) + "° · radar="
+                                + Math.round(closestBearing) + "° · Δ="
+                                + Math.round(closest) + "°");
+            }
         }
         boolean heading = false;
         double headingDifference = Double.NaN;
@@ -776,7 +788,8 @@ final class RadarRepository {
 
     static boolean wrongExplicitDirection(float vehicleBearing, String direction) {
         Float enforcement = explicitDirectionBearing(direction);
-        return enforcement != null && angularDifference(vehicleBearing, enforcement) > 60d;
+        return enforcement != null && angularDifference(vehicleBearing, enforcement)
+                >= 180d - DIRECTION_REVERSE_TOLERANCE_DEGREES;
     }
 
     private static Float explicitDirectionBearing(String direction) {
@@ -1016,6 +1029,62 @@ final class RadarRepository {
         }
     }
 
+    static final class RadarDirection {
+        final float[] bearings;
+        final boolean bidirectional;
+        RadarDirection(float[] bearings, boolean bidirectional) {
+            this.bearings = bearings == null ? new float[0] : bearings;
+            this.bidirectional = bidirectional;
+        }
+    }
+
+    static RadarDirection radarDirection(String direction, String metadata) {
+        java.util.ArrayList<Float> bearings = new java.util.ArrayList<>();
+        String declaredDirection = direction == null ? "" : direction.trim();
+        if (metadata != null && !metadata.isEmpty()) {
+            try {
+                org.json.JSONObject tags = new org.json.JSONObject(metadata).optJSONObject("tags");
+                if (tags != null) {
+                    String taggedDirection = tags.optString("direction", "").trim();
+                    if (!taggedDirection.isEmpty()) declaredDirection = taggedDirection;
+                }
+            } catch (Exception ignored) { }
+        }
+        // OSM corridors describe nearby road geometry, not the camera enforcement direction.
+        // At junctions they can include both carriageways and falsely create a two-way cone.
+        boolean bidirectional = isBidirectionalDirection(declaredDirection);
+        Float explicit = explicitDirectionBearing(declaredDirection);
+        if (explicit != null) bearings.add(explicit);
+        if (bidirectional && bearings.size() == 1) {
+            bearings.add(normalizeBearingValue(bearings.get(0) + 180f));
+        }
+        float[] values = new float[bearings.size()];
+        for (int i = 0; i < values.length; i++) values[i] = bearings.get(i);
+        return new RadarDirection(values, bidirectional || values.length == 2
+                && angularDifference(values[0], values[1]) >= 165d);
+    }
+
+    /** Lufop encodes an unspecified direction as 0; OSM numeric 0 remains a valid north bearing. */
+    static RadarDirection radarDirection(String source, String direction, String metadata) {
+        if (SOURCE_LUFOP.equals(source) && direction != null
+                && "0".equals(direction.trim())) {
+            return new RadarDirection(new float[0], false);
+        }
+        return radarDirection(direction, metadata);
+    }
+
+    private static boolean isBidirectionalDirection(String direction) {
+        String value = direction == null ? "" : direction.trim().toUpperCase(Locale.ROOT);
+        return value.contains("BOTH") || value.contains("AMBOS")
+                || value.contains("BIDIRECC") || value.contains("TWO-WAY")
+                || value.contains("TWO WAY") || value.contains("2 SENTIDOS");
+    }
+
+    private static float normalizeBearingValue(float bearing) {
+        float normalized = bearing % 360f;
+        return normalized < 0f ? normalized + 360f : normalized;
+    }
+
     private static final class RawRecord {
         String osmMetadata = "";
         final String id, type, road, direction, points, province, source;
@@ -1067,6 +1136,8 @@ final class RadarRepository {
 
     private static final class Record {
         Integer cameraLimitKmh;
+        float[] directionBearings = new float[0];
+        boolean bidirectional;
         final String id, type, road, direction, province, points, source;
         final double distanceMeters;
         final long updatedAt;
@@ -1206,12 +1277,29 @@ final class RadarRepository {
                     Record candidate = new Record(cursor.getString(0), cursor.getString(1), cursor.getString(2),
                             cursor.getString(3), cursor.getString(4), points, cursor.getString(6), distance,
                             cursor.getLong(7));
+                    RadarDirection direction = radarDirection(candidate.source,
+                            candidate.direction, cursor.getString(8));
+                    if (SOURCE_DGT.equals(candidate.source) && direction.bearings.length == 0
+                            && !direction.bidirectional && candidate.direction.trim().isEmpty()) {
+                        // DGT often gives the fixed installation but omits its enforcement
+                        // direction. Reuse a tightly coincident explicit OSM/Lufop heading so
+                        // the DGT alert is filtered by carriageway instead of warning both ways.
+                        direction = supplementalDirectionNear(points, 120);
+                    }
+                    if (candidate.cameraLimitKmh == null) {
+                        candidate.cameraLimitKmh = supplementalCameraLimitNear(points, 120);
+                    }
+                    candidate.directionBearings = direction.bearings;
+                    candidate.bidirectional = direction.bidirectional;
                     if (SOURCE_OSM.equals(candidate.source)) {
                         int limit = OsmRadarMatch.limit(location, cursor.getString(8));
                         if (limit < 0) continue;
                         candidate.cameraLimitKmh = limit == 0 ? null : limit;
-                        // Do not emit a second approach for an installation already represented
-                        // by the existing DGT/static layer. Never copy metadata between points.
+                        if (candidate.cameraLimitKmh == null) {
+                            candidate.cameraLimitKmh = mapCameraLimit(cursor.getString(8));
+                        }
+                        // Keep the DGT record as the single alert source for this installation;
+                        // its missing bearing was enriched only from an explicit nearby source.
                         if (hasLegacyNear(points, 120)) continue;
                     }
                     result.add(candidate);
@@ -1228,6 +1316,95 @@ final class RadarRepository {
                 return distance;
             });
             return result;
+        }
+
+        private RadarDirection supplementalDirectionNear(String cameraPoints, int maxMeters) {
+            String[] first = cameraPoints == null ? new String[0]
+                    : cameraPoints.split(";")[0].split(",");
+            if (first.length != 2) return new RadarDirection(new float[0], false);
+            final double latitude, longitude;
+            try {
+                latitude = Double.parseDouble(first[0]);
+                longitude = Double.parseDouble(first[1]);
+            } catch (NumberFormatException ignored) {
+                return new RadarDirection(new float[0], false);
+            }
+            double latDelta = maxMeters / 111_320d;
+            double lonDelta = maxMeters / Math.max(1d,
+                    111_320d * Math.cos(Math.toRadians(latitude)));
+            String selection = "source != ? AND min_lat <= ? AND max_lat >= ? "
+                    + "AND min_lon <= ? AND max_lon >= ?";
+            String[] args = {SOURCE_DGT, String.valueOf(latitude + latDelta),
+                    String.valueOf(latitude - latDelta), String.valueOf(longitude + lonDelta),
+                    String.valueOf(longitude - lonDelta)};
+            float selected = Float.NaN;
+            float selectedDistance = Float.MAX_VALUE;
+            try (Cursor cursor = getReadableDatabase().query("radars",
+                    new String[]{"direction", "points", "osm_metadata", "source"}, selection, args,
+                    null, null, null)) {
+                while (cursor.moveToNext()) {
+                    String points = cursor.getString(1);
+                    double distance = nearestDistance(latitude, longitude, points);
+                    if (distance > maxMeters) continue;
+                    RadarDirection supplemental = radarDirection(cursor.getString(3),
+                            cursor.getString(0), cursor.getString(2));
+                    if (supplemental.bidirectional) return supplemental;
+                    if (supplemental.bearings.length == 0) continue;
+                    float bearing = supplemental.bearings[0];
+                    if (!Float.isNaN(selected)
+                            && angularDifference(selected, bearing) > 55d) {
+                        // Conflicting nearby sources do not prove a two-way camera. Keep the
+                        // warning available but suppress directional filtering and map cones.
+                        return new RadarDirection(new float[0], false);
+                    }
+                    if (distance < selectedDistance) {
+                        selected = bearing;
+                        selectedDistance = (float) distance;
+                    }
+                }
+            }
+            return Float.isNaN(selected) ? new RadarDirection(new float[0], false)
+                    : new RadarDirection(new float[]{selected}, false);
+        }
+
+        private Integer supplementalCameraLimitNear(String cameraPoints, int maxMeters) {
+            String[] first = cameraPoints == null ? new String[0]
+                    : cameraPoints.split(";")[0].split(",");
+            if (first.length != 2) return null;
+            final double latitude, longitude;
+            try {
+                latitude = Double.parseDouble(first[0]);
+                longitude = Double.parseDouble(first[1]);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+            double latDelta = maxMeters / 111_320d;
+            double lonDelta = maxMeters / Math.max(1d,
+                    111_320d * Math.cos(Math.toRadians(latitude)));
+            String selection = "source != ? AND min_lat <= ? AND max_lat >= ? "
+                    + "AND min_lon <= ? AND max_lon >= ?";
+            String[] args = {SOURCE_DGT, String.valueOf(latitude + latDelta),
+                    String.valueOf(latitude - latDelta), String.valueOf(longitude + lonDelta),
+                    String.valueOf(longitude - lonDelta)};
+            Integer selected = null;
+            float selectedDistance = Float.MAX_VALUE;
+            try (Cursor cursor = getReadableDatabase().query("radars",
+                    new String[]{"points", "osm_metadata"}, selection, args,
+                    null, null, null)) {
+                while (cursor.moveToNext()) {
+                    String points = cursor.getString(0);
+                    double distance = nearestDistance(latitude, longitude, points);
+                    if (distance > maxMeters) continue;
+                    Integer limit = mapCameraLimit(cursor.getString(1));
+                    if (limit == null) continue;
+                    if (selected != null && selected.intValue() != limit.intValue()) return null;
+                    if (distance < selectedDistance) {
+                        selected = limit;
+                        selectedDistance = (float) distance;
+                    }
+                }
+            }
+            return selected;
         }
 
         synchronized ArrayList<OfflineRoadMapView.Radar> mapRadars(Location location,
@@ -1255,8 +1432,8 @@ final class RadarRepository {
                     Location.distanceBetween(latitude, longitude, point[0], point[1], distance);
                     if (distance[0] > radiusMeters) continue;
                     String source = cursor.getString(5);
-                    Float directionBearing = mapDirectionBearing(cursor.getString(3),
-                            cursor.getString(6));
+                    RadarDirection cameraDirection = radarDirection(source,
+                            cursor.getString(3), cursor.getString(6));
                     Integer cameraLimit = mapCameraLimit(cursor.getString(6));
                     boolean duplicate = false;
                     for (int i = 0; i < result.size(); i++) {
@@ -1267,15 +1444,18 @@ final class RadarRepository {
                         if (overlap[0] <= DGT_SUPPLEMENTAL_SAME_CAMERA_METERS) {
                             duplicate = true;
                             if (SOURCE_DGT.equals(source) && !SOURCE_DGT.equals(existing.source)) {
-                                Float mergedDirection = directionBearing != null
-                                        ? directionBearing : existing.directionBearing;
+                                float[] mergedDirection = cameraDirection.bearings.length > 0
+                                        ? cameraDirection.bearings : existing.directionBearings;
                                 Integer mergedLimit = cameraLimit != null
                                         ? cameraLimit : existing.limitKmh;
                                 result.set(i, new OfflineRoadMapView.Radar(cursor.getString(0),
                                         cursor.getString(1), cursor.getString(2), source,
-                                        point[0], point[1], mergedLimit, mergedDirection));
+                                        point[0], point[1], mergedLimit, mergedDirection,
+                                        cameraDirection.bidirectional || existing.bidirectional));
                             } else if (SOURCE_DGT.equals(existing.source) && overlap[0] <= 100f
-                                    && (existing.directionBearing == null && directionBearing != null
+                                    && (existing.directionBearings.length == 0
+                                    && cameraDirection.bearings.length > 0
+                                    || cameraDirection.bidirectional && !existing.bidirectional
                                     || existing.limitKmh == null && cameraLimit != null)) {
                                 // DGT is authoritative for the installation but may omit heading
                                 // and limit. A tightly coincident OSM/Lufop record can enrich only
@@ -1284,8 +1464,9 @@ final class RadarRepository {
                                         existing.type, existing.road, existing.source,
                                         existing.latitude, existing.longitude,
                                         existing.limitKmh != null ? existing.limitKmh : cameraLimit,
-                                        existing.directionBearing != null
-                                                ? existing.directionBearing : directionBearing));
+                                        existing.directionBearings.length > 0
+                                                ? existing.directionBearings : cameraDirection.bearings,
+                                        existing.bidirectional || cameraDirection.bidirectional));
                             }
                             break;
                         }
@@ -1293,7 +1474,8 @@ final class RadarRepository {
                     if (!duplicate) {
                         result.add(new OfflineRoadMapView.Radar(cursor.getString(0),
                                 cursor.getString(1), cursor.getString(2), source,
-                                point[0], point[1], cameraLimit, directionBearing));
+                                point[0], point[1], cameraLimit, cameraDirection.bearings,
+                                cameraDirection.bidirectional));
                     }
                 }
             }

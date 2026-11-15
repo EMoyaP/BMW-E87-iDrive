@@ -70,11 +70,20 @@ final class OfflineRoadMapView extends View {
         final double latitude;
         final double longitude;
         final Integer limitKmh;
-        /** Verified enforcement heading in true degrees, or null when the source is ambiguous. */
-        final Float directionBearing;
+        /** Verified enforcement headings in true degrees; may contain both carriageway headings. */
+        final float[] directionBearings;
+        /** Direction is explicitly bidirectional even when the road axis must be inferred locally. */
+        final boolean bidirectional;
 
         Radar(String id, String type, String road, String source, double latitude,
               double longitude, Integer limitKmh, Float directionBearing) {
+            this(id, type, road, source, latitude, longitude, limitKmh,
+                    directionBearing == null ? new float[0] : new float[]{directionBearing}, false);
+        }
+
+        Radar(String id, String type, String road, String source, double latitude,
+              double longitude, Integer limitKmh, float[] directionBearings,
+              boolean bidirectional) {
             this.id = id == null ? "" : id;
             this.type = type == null ? "" : type;
             this.road = road == null ? "" : road;
@@ -82,7 +91,9 @@ final class OfflineRoadMapView extends View {
             this.latitude = latitude;
             this.longitude = longitude;
             this.limitKmh = limitKmh;
-            this.directionBearing = directionBearing;
+            this.directionBearings = directionBearings == null ? new float[0]
+                    : java.util.Arrays.copyOf(directionBearings, directionBearings.length);
+            this.bidirectional = bidirectional;
         }
     }
 
@@ -178,7 +189,12 @@ final class OfflineRoadMapView extends View {
     private boolean headingReady;
     private boolean moving;
     private boolean hasLocation;
+    private Float gpsBearing;
+    private Location previousMapLocation;
+    private long previousMapLocationAt;
     private String currentRoadId = "";
+    private String visualRoadId = "";
+    private String radarAlertId = "";
     private String currentRoadRef = "";
     private String currentRoadName = "";
     private long lastFixAt;
@@ -203,6 +219,11 @@ final class OfflineRoadMapView extends View {
 
     void setRadars(List<Radar> value) {
         radars = value == null ? Collections.emptyList() : value;
+        invalidate();
+    }
+
+    void setRadarAlertId(String value) {
+        radarAlertId = value == null ? "" : value;
         invalidate();
     }
 
@@ -277,14 +298,34 @@ final class OfflineRoadMapView extends View {
         }
         latitude = location.getLatitude();
         longitude = location.getLongitude();
+        gpsBearing = location.hasBearing() && Float.isFinite(location.getBearing())
+                ? normalize(location.getBearing()) : null;
         locationAccuracyMeters = location.hasAccuracy() ? location.getAccuracy() : 20f;
         hasLocation = true;
+        long now = System.currentTimeMillis();
         double kmh = speedKmh != null && Double.isFinite(speedKmh)
                 ? Math.max(0d, speedKmh)
                 : location.hasSpeed() ? Math.max(0d, location.getSpeed() * 3.6d) : 0d;
-        moving = kmh >= 5d;
-        if (moving && location.hasBearing() && Float.isFinite(location.getBearing())) {
-            float target = normalize(location.getBearing());
+        float course = gpsBearing == null ? Float.NaN : gpsBearing;
+        boolean inferredMotion = false;
+        if (previousMapLocation != null) {
+            long elapsed = now - previousMapLocationAt;
+            float moved = previousMapLocation.distanceTo(location);
+            if (elapsed >= 500L && elapsed <= 15_000L && moved >= 4f && moved <= 300f) {
+                inferredMotion = moved / (elapsed / 1_000f) * 3.6f
+                        <= GpsSpeedProvider.MAX_PLAUSIBLE_SPEED_KMH;
+                if (inferredMotion && !Float.isFinite(course)) {
+                    course = previousMapLocation.bearingTo(location);
+                }
+            }
+        }
+        previousMapLocation = new Location(location);
+        previousMapLocationAt = now;
+        // Keep heading-up and centreline snapping usable when this receiver omits its speed
+        // field. A teleport or impossible mock jump is rejected by the bounded displacement.
+        moving = kmh >= 5d || inferredMotion;
+        if (moving && Float.isFinite(course)) {
+            float target = normalize(course);
             if (!headingReady) {
                 heading = target;
                 headingReady = true;
@@ -337,53 +378,126 @@ final class OfflineRoadMapView extends View {
     private void updateRenderOrigin() {
         renderLatitude = latitude;
         renderLongitude = longitude;
-        if (currentRoadId.isEmpty() || roads.isEmpty()) return;
-        Road active = null;
+        visualRoadId = currentRoadId;
+        if (roads.isEmpty()) return;
+        RoadProjection selected = null;
+        Road selectedRoad = null;
+        double bestScore = Double.MAX_VALUE;
+        Float reference = gpsBearing != null ? gpsBearing : headingReady ? heading : null;
+
+        // First retain the road selected by the speed matcher. If it has no limit (common on
+        // roundabout rings and connector links), visually map-match against every local road so
+        // the car reference points still sit on the road instead of drifting to raw GNSS.
         for (Road road : roads) {
-            if (currentRoadId.equals(road.osmId)) {
-                active = road;
-                break;
+            if (road.points.length < 4) continue;
+            boolean selectedBySpeed = !currentRoadId.isEmpty()
+                    && currentRoadId.equals(road.osmId);
+            if (!currentRoadId.isEmpty() && !selectedBySpeed) continue;
+            RoadProjection projection = projectOnRoad(road, latitude, longitude);
+            if (projection == null) continue;
+            double directionDifference = reference == null ? 0d
+                    : axisDifference(reference, projection.bearing);
+            if (moving && reference != null && directionDifference > 58d) continue;
+            double score = projection.distanceMeters + directionDifference * .35d;
+            if (selected == null || score < bestScore) {
+                selected = projection;
+                selectedRoad = road;
+                bestScore = score;
             }
         }
-        if (active == null || active.points.length < 4) return;
+
+        double tolerance = Math.max(12d, Math.min(35d, locationAccuracyMeters * 2d));
+        // The matched speed way may exist in SQLite but be absent from this visual window, or
+        // its clipped geometry may not reach the current fix. In either case, fall back to the
+        // nearest heading-compatible road actually drawn on the map. Without the distance check
+        // the car could stay at raw GNSS while a different nearby line is visibly under it.
+        if (!currentRoadId.isEmpty()
+                && (selected == null || selected.distanceMeters > tolerance)) {
+            selected = null;
+            selectedRoad = null;
+            bestScore = Double.MAX_VALUE;
+            for (Road road : roads) {
+                if (road.points.length < 4) continue;
+                RoadProjection projection = projectOnRoad(road, latitude, longitude);
+                if (projection == null) continue;
+                double directionDifference = reference == null ? 0d
+                        : axisDifference(reference, projection.bearing);
+                if (moving && reference != null && directionDifference > 58d) continue;
+                double score = projection.distanceMeters + directionDifference * .35d;
+                if (selected == null || score < bestScore) {
+                    selected = projection;
+                    selectedRoad = road;
+                    bestScore = score;
+                }
+            }
+        }
+
+        if (selected == null || selected.distanceMeters > tolerance
+                || selectedRoad == null) {
+            visualRoadId = "";
+            return;
+        }
+        renderLatitude = selected.latitude;
+        renderLongitude = selected.longitude;
+        visualRoadId = selectedRoad.osmId;
+        if (moving && Double.isFinite(selected.bearing)) {
+            float target = normalize((float) selected.bearing);
+            if (reference != null && angularDifference(target, reference) > 90f) {
+                target = normalize(target + 180f);
+            }
+            heading = headingReady ? interpolateBearing(heading, target, .42f) : target;
+            headingReady = true;
+        }
+    }
+
+    private static final class RoadProjection {
+        final double latitude, longitude, distanceMeters, bearing;
+        RoadProjection(double latitude, double longitude, double distanceMeters, double bearing) {
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.distanceMeters = distanceMeters;
+            this.bearing = bearing;
+        }
+    }
+
+    private static RoadProjection projectOnRoad(Road road, double latitude, double longitude) {
         double metersPerDegreeLon = 111_320d * Math.cos(Math.toRadians(latitude));
-        double bestDistance = Double.MAX_VALUE;
-        double bestEast = 0d;
-        double bestNorth = 0d;
-        for (int i = 0; i + 3 < active.points.length; i += 2) {
-            double firstEast = (active.points[i + 1] - longitude) * metersPerDegreeLon;
-            double firstNorth = (active.points[i] - latitude) * 111_320d;
-            double secondEast = (active.points[i + 3] - longitude) * metersPerDegreeLon;
-            double secondNorth = (active.points[i + 2] - latitude) * 111_320d;
-            double segmentEast = secondEast - firstEast;
-            double segmentNorth = secondNorth - firstNorth;
-            double squaredLength = segmentEast * segmentEast + segmentNorth * segmentNorth;
+        double bestDistance = Double.MAX_VALUE, bestLat = latitude, bestLon = longitude;
+        double bestBearing = Double.NaN;
+        for (int i = 0; i + 3 < road.points.length; i += 2) {
+            double firstEast = (road.points[i + 1] - longitude) * metersPerDegreeLon;
+            double firstNorth = (road.points[i] - latitude) * 111_320d;
+            double secondEast = (road.points[i + 3] - longitude) * metersPerDegreeLon;
+            double secondNorth = (road.points[i + 2] - latitude) * 111_320d;
+            double east = secondEast - firstEast, north = secondNorth - firstNorth;
+            double squaredLength = east * east + north * north;
             if (squaredLength < .01d) continue;
-            double fraction = -(firstEast * segmentEast + firstNorth * segmentNorth)
-                    / squaredLength;
-            fraction = Math.max(0d, Math.min(1d, fraction));
-            double projectedEast = firstEast + fraction * segmentEast;
-            double projectedNorth = firstNorth + fraction * segmentNorth;
+            double fraction = Math.max(0d, Math.min(1d,
+                    -(firstEast * east + firstNorth * north) / squaredLength));
+            double projectedEast = firstEast + fraction * east;
+            double projectedNorth = firstNorth + fraction * north;
             double distance = Math.hypot(projectedEast, projectedNorth);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                bestEast = projectedEast;
-                bestNorth = projectedNorth;
-            }
+            if (distance >= bestDistance) continue;
+            bestDistance = distance;
+            bestLat = latitude + projectedNorth / 111_320d;
+            bestLon = longitude + projectedEast / Math.max(1d, metersPerDegreeLon);
+            bestBearing = Math.toDegrees(Math.atan2(east, north));
+            if (bestBearing < 0d) bestBearing += 360d;
         }
-        // Never drag the map to a distant or wrongly matched way. The cap is tighter than the
-        // repository's search radius and scales modestly with the accuracy reported by Android.
-        double tolerance = Math.max(10d, Math.min(35d, locationAccuracyMeters * 1.5d));
-        if (bestDistance <= tolerance && metersPerDegreeLon > 1d) {
-            renderLatitude = latitude + bestNorth / 111_320d;
-            renderLongitude = longitude + bestEast / metersPerDegreeLon;
-        }
+        return bestDistance == Double.MAX_VALUE ? null
+                : new RoadProjection(bestLat, bestLon, bestDistance, bestBearing);
+    }
+
+    private static double axisDifference(double first, double second) {
+        double difference = Math.abs(first - second) % 360d;
+        if (difference > 180d) difference = 360d - difference;
+        return Math.min(difference, 180d - difference);
     }
 
     private void drawRoads(Canvas canvas, int width, int height) {
         // The central window shows roughly 420 m vertically. This is deliberately closer than
         // a full navigation overview so road geometry and numbered routes remain readable.
-        final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
+        final float pixelsPerMeter = mapPixelsPerMeter(width, height);
         final float metersPerDegreeLon = (float) (111_320d * Math.cos(Math.toRadians(renderLatitude)));
         float anchorX = vehicleAnchorX(width);
         float anchorY = vehicleAnchorY(height);
@@ -408,7 +522,7 @@ final class OfflineRoadMapView extends View {
                 }
             }
             if (first) continue;
-            boolean current = !currentRoadId.isEmpty() && currentRoadId.equals(road.osmId);
+            boolean current = !visualRoadId.isEmpty() && visualRoadId.equals(road.osmId);
             int color = roadColor(road, current);
             float widthPx = current ? 5.2f : roadWidth(road);
             roadPaint.setStyle(Paint.Style.STROKE);
@@ -427,7 +541,7 @@ final class OfflineRoadMapView extends View {
 
     private void drawRoadLabels(Canvas canvas, int width, int height) {
         if (roads.isEmpty()) return;
-        final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
+        final float pixelsPerMeter = mapPixelsPerMeter(width, height);
         final float metersPerDegreeLon = (float) (111_320d * Math.cos(Math.toRadians(renderLatitude)));
         labelPaint.setTypeface(android.graphics.Typeface.create("sans-serif-medium",
                 android.graphics.Typeface.NORMAL));
@@ -502,7 +616,7 @@ final class OfflineRoadMapView extends View {
 
     private void drawTrafficFlows(Canvas canvas, int width, int height) {
         if (trafficFlows.isEmpty()) return;
-        final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
+        final float pixelsPerMeter = mapPixelsPerMeter(width, height);
         final float metersPerDegreeLon = (float) (111_320d
                 * Math.cos(Math.toRadians(renderLatitude)));
         float anchorX = vehicleAnchorX(width), anchorY = vehicleAnchorY(height);
@@ -698,7 +812,7 @@ final class OfflineRoadMapView extends View {
 
     private void drawRadars(Canvas canvas, int width, int height) {
         if (radars.isEmpty()) return;
-        final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
+        final float pixelsPerMeter = mapPixelsPerMeter(width, height);
         final float metersPerDegreeLon = (float) (111_320d * Math.cos(Math.toRadians(renderLatitude)));
         labelPaint.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
         labelPaint.setTextSize(Math.max(8f, Math.min(11f, width / 55f)));
@@ -710,38 +824,7 @@ final class OfflineRoadMapView extends View {
             float x = screen[0];
             float y = screen[1];
             if (x < 18f || x > width - 18f || y < 22f || y > height - 22f) continue;
-            if (radar.directionBearing != null && Float.isFinite(radar.directionBearing)) {
-                // Convert the true enforcement heading into the heading-up map reference. The
-                // sector extends from the camera in the controlled travel heading. Its 100 m
-                // map length matches the conservative post-camera passage margin.
-                canvas.save();
-                canvas.rotate(normalize(radar.directionBearing
-                        - (headingReady ? heading : 0f)), x, y);
-                float coneLength = Math.max(42f, Math.min(110f, pixelsPerMeter * 100f));
-                float coneHalfWidth = Math.max(14f, Math.min(34f, coneLength * .32f));
-                Path cone = new Path();
-                cone.moveTo(x, y - 5f);
-                cone.lineTo(x - coneHalfWidth, y - coneLength);
-                cone.quadTo(x, y - coneLength - 8f,
-                        x + coneHalfWidth, y - coneLength);
-                cone.close();
-                paint.setStyle(Paint.Style.FILL);
-                paint.setColor(Color.argb(92, 255, 42, 35));
-                canvas.drawPath(cone, paint);
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(1.4f);
-                paint.setColor(Color.argb(205, 255, 111, 91));
-                canvas.drawPath(cone, paint);
-                paint.setStyle(Paint.Style.FILL);
-                Path headingTip = new Path();
-                headingTip.moveTo(x, y - coneLength - 8f);
-                headingTip.lineTo(x - 4f, y - coneLength);
-                headingTip.lineTo(x + 4f, y - coneLength);
-                headingTip.close();
-                paint.setColor(Color.rgb(255, 214, 199));
-                canvas.drawPath(headingTip, paint);
-                canvas.restore();
-            }
+            drawRadarCones(canvas, radar, x, y, pixelsPerMeter);
             // Draw the installation over the cone so the point remains exact and legible.
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(Color.argb(95, 241, 45, 45));
@@ -757,9 +840,93 @@ final class OfflineRoadMapView extends View {
         }
     }
 
+    private float mapPixelsPerMeter(int width, int height) {
+        float base = Math.min(width, height) / 420f * zoomScale;
+        if (radarAlertId.isEmpty() || radars.isEmpty()) return base;
+        Radar focus = null;
+        for (Radar radar : radars) {
+            if (radarAlertId.equals(radar.id)) { focus = radar; break; }
+        }
+        if (focus == null) return base;
+        float metersPerDegreeLon = (float) (111_320d
+                * Math.cos(Math.toRadians(renderLatitude)));
+        float[] point = roadPointToScreen(focus.latitude, focus.longitude, width, height,
+                base, metersPerDegreeLon);
+        float anchorX = vehicleAnchorX(width), anchorY = vehicleAnchorY(height);
+        float dx = Math.abs(point[0] - anchorX), dy = Math.abs(point[1] - anchorY);
+        float extensionX = 36f * base; // cone width, in metres, at the radar
+        float extensionY = 100f * base; // detection corridor continues 100 m beyond it
+        float availableX = Math.max(12f, width * .5f - 24f - extensionX);
+        float availableY = Math.max(12f, (point[1] < anchorY
+                ? anchorY - 24f : height - anchorY - 24f) - extensionY);
+        float factor = 1f;
+        if (dx > availableX) factor = Math.min(factor, availableX / dx);
+        if (dy > availableY) factor = Math.min(factor, availableY / dy);
+        // Preserve a useful street view while making the alert point and its downstream cone fit.
+        return base * Math.max(.28f, Math.min(1f, factor * .96f));
+    }
+
+    private void drawRadarCones(Canvas canvas, Radar radar, float x, float y,
+                                float pixelsPerMeter) {
+        float[] bearings = radar.directionBearings;
+        if (radar.bidirectional && bearings.length == 0 && headingReady) {
+            bearings = new float[]{heading, normalize(heading + 180f)};
+        } else if (radar.bidirectional && bearings.length == 1) {
+            bearings = new float[]{bearings[0], normalize(bearings[0] + 180f)};
+        }
+        for (float bearing : bearings) {
+            if (!Float.isFinite(bearing)) continue;
+            float visualBearing = bearing;
+            // A single-direction cone is drawn only when the current course agrees within the
+            // tolerance. Near 180 degrees is the opposite carriageway; the middle sector is
+            // uncertain and deliberately gets a warning/marker without a directional cone.
+            if (!radar.bidirectional && moving) {
+                if (!headingReady || angularDifference(heading, bearing) > 55f) continue;
+                // The source heading selects the right carriageway; the current map-matched
+                // course gives the cone the road's exact local tangent through bends and small
+                // metadata bearing errors. This keeps the cone on the active segment.
+                visualBearing = heading;
+            } else if (radar.bidirectional && moving && headingReady) {
+                visualBearing = angularDifference(heading, bearing) <= 90f
+                        ? heading : normalize(heading + 180f);
+            }
+            drawRadarCone(canvas, x, y, pixelsPerMeter, visualBearing);
+        }
+    }
+
+    private void drawRadarCone(Canvas canvas, float x, float y, float pixelsPerMeter,
+                               float directionBearing) {
+        // Apex sits on the detector; the broad end points downrange, where its beam covers.
+        canvas.save();
+        canvas.rotate(normalize(directionBearing - (headingReady ? heading : 0f)), x, y);
+        float coneLength = Math.max(30f, Math.min(110f, pixelsPerMeter * 100f));
+        float coneHalfWidth = Math.max(12f, Math.min(34f, coneLength * .32f));
+        Path cone = new Path();
+        cone.moveTo(x, y - 4f);
+        cone.lineTo(x - coneHalfWidth, y - coneLength);
+        cone.quadTo(x, y - coneLength - 8f, x + coneHalfWidth, y - coneLength);
+        cone.close();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb(92, 255, 42, 35));
+        canvas.drawPath(cone, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.4f);
+        paint.setColor(Color.argb(205, 255, 111, 91));
+        canvas.drawPath(cone, paint);
+        paint.setStyle(Paint.Style.FILL);
+        Path tip = new Path();
+        tip.moveTo(x, y - coneLength - 8f);
+        tip.lineTo(x - 4f, y - coneLength);
+        tip.lineTo(x + 4f, y - coneLength);
+        tip.close();
+        paint.setColor(Color.rgb(255, 214, 199));
+        canvas.drawPath(tip, paint);
+        canvas.restore();
+    }
+
     private void drawFuelStations(Canvas canvas, int width, int height) {
         if (fuelStations.isEmpty()) return;
-        final float pixelsPerMeter = Math.min(width, height) / 420f * zoomScale;
+        final float pixelsPerMeter = mapPixelsPerMeter(width, height);
         final float metersPerDegreeLon = (float) (111_320d * Math.cos(Math.toRadians(renderLatitude)));
         labelPaint.setTypeface(android.graphics.Typeface.create("sans-serif",
                 android.graphics.Typeface.BOLD));

@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
     private SpeedLimitView speedLimitView;
     private RadarNoticeView radarNoticeView;
     private InviveNoticeView inviveNoticeView;
-    private TextView speedLimitState, speedLimitRefresh, speedLimitUpdateInfo, speedSource;
+    private TextView speedLimitTitle, speedLimitState, speedLimitRefresh, speedLimitUpdateInfo, speedSource;
     private final java.util.Map<String, TextView> roleLabels = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, TextView> roleHints = new java.util.LinkedHashMap<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -106,6 +106,7 @@ public class MainActivity extends Activity {
     private WhereAmIProvider whereAmI;
     private DataUpdateCoordinator updateCoordinator;
     private RadarRepository radars;
+    private RadarRepository.Alert activeRadarAlert;
     private InviveRepository invive;
     private TrafficIncidentRepository trafficIncidents;
     private TomTomRoadDataRepository tomTomRoadData;
@@ -399,10 +400,6 @@ public class MainActivity extends Activity {
         statusParams.setMargins(dp(10), dp(3), dp(10), dp(7));
         root.addView(statusBar, statusParams);
         automaticUpdatePanel = buildAutomaticUpdatePanel();
-        FrameLayout.LayoutParams automaticParams = frameLp(dp(500), dp(62),
-                Gravity.BOTTOM | Gravity.END);
-        automaticParams.setMargins(0, 0, dp(12), dp(72));
-        screen.addView(automaticUpdatePanel, automaticParams);
         drivingOverlay = new DrivingDashboardView(this);
         drivingSign = new SpeedLimitView(this, TEXT, Color.rgb(225, 38, 38), MUTED);
         drivingSign.aura = true;
@@ -837,9 +834,9 @@ public class MainActivity extends Activity {
         LinearLayout limitColumn = vertical();
         limitColumn.setGravity(Gravity.CENTER_HORIZONTAL);
         limitColumn.setPadding(dp(4), dp(2), dp(2), dp(2));
-        TextView limitHeading = txt("LÍMITE DE LA VÍA", 10, BLUE, true);
-        limitHeading.setGravity(Gravity.CENTER);
-        limitColumn.addView(limitHeading, lp(-1, dp(25)));
+        speedLimitTitle = txt("LÍMITE DE LA VÍA", 10, BLUE, true);
+        speedLimitTitle.setGravity(Gravity.CENTER);
+        limitColumn.addView(speedLimitTitle, lp(-1, dp(25)));
         speedLimitView = new SpeedLimitView(this, TEXT, Color.rgb(225, 38, 38), MUTED);
         speedLimitView.setContentDescription("Límite de velocidad obtenido de una fuente de mapa");
         limitColumn.addView(speedLimitView, lp(dp(130), dp(130)));
@@ -1152,13 +1149,36 @@ public class MainActivity extends Activity {
         DrivingContext.Snapshot context = drivingContext.snapshot();
         Location currentLocation = context.location != null ? context.location : gps.getLastLocation();
         SpeedResolutionCoordinator.Result resolved = speedResolver.resolve(currentLocation);
-        drivingContext.road(resolved.match);
-        logSpeedLimitTransition(currentLocation, resolved);
         SpeedLimitRepository.Match match = resolved.match;
+        RadarRepository.Alert radarFallback = activeRadarAlert;
+        boolean radarLimitFallback = (match == null || !match.exact)
+                && radarFallback != null && radarFallback.trajectoryConfirmed
+                && radarFallback.cameraLimitKmh != null
+                && radarFallback.distanceMeters <= 300d;
+        if (radarLimitFallback) {
+            String roadRef = radarFallback.road == null ? "" : radarFallback.road;
+            match = new SpeedLimitRepository.Match(radarFallback.cameraLimitKmh,
+                    radarFallback.distanceMeters, radarFallback.updatedAt,
+                    radarFallback.province, true,
+                    resolved.match == null ? "" : resolved.match.roadClass,
+                    resolved.match == null ? null : resolved.match.osmId,
+                    resolved.match == null ? Double.NaN : resolved.match.headingDifferenceDegrees,
+                    resolved.match == null ? Double.NaN : resolved.match.roadBearingDegrees,
+                    resolved.match == null ? Double.NaN : resolved.match.alongMeters,
+                    roadRef, resolved.match == null ? "" : resolved.match.roadName);
+        }
+        if (speedLimitTitle != null) {
+            speedLimitTitle.setText(radarLimitFallback ? "LÍMITE RADAR" : "LÍMITE DE LA VÍA");
+        }
+        drivingContext.road(match);
+        SpeedResolutionCoordinator.Result displayedResolution = radarLimitFallback
+                ? new SpeedResolutionCoordinator.Result(match, false, false) : resolved;
+        logSpeedLimitTransition(currentLocation, displayedResolution, radarLimitFallback);
         if (whereAmI != null) whereAmI.resolve(currentLocation, match);
         if (drivingOverlay != null) {
             drivingSign.setLimit(match == null ? null : match.limitKmh, match != null && match.exact);
-            drivingOverlay.road(match == null ? null : match.limitKmh, match != null && match.exact);
+            drivingOverlay.road(match == null ? null : match.limitKmh,
+                    match != null && match.exact, radarLimitFallback);
             drivingOverlay.mapRoad(match == null ? null : match.osmId,
                     match == null ? null : match.roadRef,
                     match == null ? null : match.roadName,
@@ -1170,7 +1190,7 @@ public class MainActivity extends Activity {
             speedLimitView.setLimit(null);
             if (speedGauge != null) speedGauge.setRoadLimit(null);
             if (speedLimitState != null) {
-                speedLimitState.setText("Sin vía local cercana");
+                speedLimitState.setText("Sin dato fiable para este tramo");
                 speedLimitState.setTextColor(MUTED);
             }
         } else {
@@ -1178,7 +1198,8 @@ public class MainActivity extends Activity {
             if (speedGauge != null) speedGauge.setRoadLimit(match.exact ? match.limitKmh : null);
             if (speedLimitState != null) {
                 if (match.exact) {
-                    String source = resolved.dgt ? "LÍMITE DGT"
+                    String source = radarLimitFallback ? "LÍMITE RADAR"
+                            : resolved.dgt ? "LÍMITE DGT"
                             : resolved.tomTom ? "LÍMITE TOMTOM" : "LÍMITE OSM";
                     speedLimitState.setText(String.format(Locale.getDefault(), "%s · %.0f m",
                             source, match.distanceMeters));
@@ -1212,10 +1233,12 @@ public class MainActivity extends Activity {
      * Writes one compact, auditable event whenever the effective limit/source/road changes.
      * The feature is explicitly opt-in because coordinates are personal movement data.
      */
-    private void logSpeedLimitTransition(Location location, SpeedResolutionCoordinator.Result resolved) {
+    private void logSpeedLimitTransition(Location location, SpeedResolutionCoordinator.Result resolved,
+                                         boolean radarLimitFallback) {
         if (!isSpeedLimitTransitionDebugEnabled()) return;
         SpeedLimitRepository.Match match = resolved == null ? null : resolved.match;
         String source = match == null ? "SIN_DATO"
+                : radarLimitFallback ? "RADAR"
                 : resolved.dgt ? "DGT"
                 : resolved.tomTom ? "TOMTOM"
                 : match.exact ? "OSM" : "OSM_RECOMENDADA";
@@ -1371,6 +1394,19 @@ public class MainActivity extends Activity {
                 : speed != null && speed.isAvailable() && speed.value() instanceof Number
                 ? ((Number) speed.value()).doubleValue() : null;
         RadarRepository.Alert alert = radars.alert(currentLocation, speedValue);
+        RadarRepository.Alert previousRadarAlert = activeRadarAlert;
+        activeRadarAlert = alert;
+        boolean previousRadarLimitActive = previousRadarAlert != null
+                && previousRadarAlert.trajectoryConfirmed
+                && previousRadarAlert.cameraLimitKmh != null
+                && previousRadarAlert.distanceMeters <= 300d;
+        boolean currentRadarLimitActive = alert != null && alert.trajectoryConfirmed
+                && alert.cameraLimitKmh != null && alert.distanceMeters <= 300d;
+        boolean radarDisplayChanged = previousRadarLimitActive != currentRadarLimitActive
+                || previousRadarAlert == null != (alert == null)
+                || previousRadarAlert != null && alert != null
+                && (!previousRadarAlert.id.equals(alert.id)
+                || !java.util.Objects.equals(previousRadarAlert.cameraLimitKmh, alert.cameraLimitKmh));
         SpeedResolutionCoordinator.Result resolved = speedResolver.resolve(currentLocation);
         SpeedLimitRepository.Match limit = resolved.match;
         TrafficIncidentRepository.Alert trafficAlert = alert==null
@@ -1379,7 +1415,9 @@ public class MainActivity extends Activity {
         InviveRepository.Alert surveillance = alert == null && trafficAlert == null
                 ? invive.alert(currentLocation, limit, speedValue) : null;
         drivingContext.alerts(alert, surveillance);
+        if (radarDisplayChanged) refreshSpeedLimitWidget();
         if (drivingOverlay != null) drivingOverlay.radarLimit(alert == null ? null : alert.cameraLimitKmh);
+        if (drivingOverlay != null) drivingOverlay.mapRadarAlert(alert == null ? null : alert.id);
         if (alert == null) {
             radarNoticeView.setVisibility(View.GONE);
             if (drivingRadar != null) drivingRadar.setVisibility(View.GONE);
@@ -1709,10 +1747,14 @@ public class MainActivity extends Activity {
             if (i < active.size() - 1) statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         }
         if (active.isEmpty()) statusBar.addView(new View(this), lp(0, -1, 1));
+        if (automaticUpdatePanel != null) {
+            statusBar.addView(automaticUpdatePanel, lp(dp(460), -1));
+        }
         statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         statusBar.addView(statusMaintenanceButton(), lp(dp(58), -1));
         statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         statusBar.addView(statusToolButton(), lp(dp(58), -1));
+        refreshAutomaticUpdateProgress();
     }
 
     private String vehicleValue(VehicleField field) {

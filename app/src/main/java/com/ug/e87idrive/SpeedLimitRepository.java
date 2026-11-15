@@ -249,6 +249,16 @@ final class SpeedLimitRepository {
         Match raw = database.nearest(location.getLatitude(), location.getLongitude(), matchRadius,
                 bearing, null);
         Match result = stabilizeTrajectory(raw, location, matchRadius, bearing, speedKmh);
+        // A road may be present in the offline map while the strict legal-limit matcher rejects
+        // it (for example, an ambiguous junction or a small gap in the extracted geometry).
+        // If TomTom is unavailable, retain a nearby road-class recommendation as S-7 only.
+        // Never turn a distant segment or an unconfirmed exact limit into a legal sign.
+        if (result == null && raw == null) {
+            int advisoryRadius = Math.max(18, Math.min(35,
+                    location.hasAccuracy() ? Math.round(location.getAccuracy() * 1.25f) : 18));
+            result = database.nearestAdvisory(location.getLatitude(), location.getLongitude(),
+                    advisoryRadius, bearing);
+        }
         result = applyVerifiedAlicanteZonesFromDatabase(result, bearing);
         result = retainRecentExplicitRoadLimit(result, location, bearing, speedKmh, now);
         result = applyContextualAdvisory(result);
@@ -697,7 +707,15 @@ final class SpeedLimitRepository {
                 + "fuente=OpenStreetMap · límite rojo solo con maxspeed; recomendación azul por clase DGT\n";
     }
 
-    void close() { stop(); database.close(); }
+    void close() {
+        stop();
+        // Startup seed import and provincial refreshes hold this lock for their complete
+        // SQLite transaction. Waiting here prevents onDestroy() from closing the handle
+        // underneath endTransaction(), which otherwise crashes the process.
+        synchronized (databaseLock) {
+            database.close();
+        }
+    }
 
     private void autoRefreshIfNeeded() {
         if (!active || updateRunning || validatedNetwork() == null || lastLocation == null) return;
@@ -1858,6 +1876,57 @@ final class SpeedLimitRepository {
             // At crossings and tightly parallel roads, distance alone can be a coin toss. If
             // two almost-equivalent candidates would display different guidance, showing no
             // sign is safer than exposing a plausible-looking but wrong limit.
+            if (nearest != null && second != null
+                    && secondScore - nearestScore <= AMBIGUOUS_CANDIDATE_MARGIN_METERS
+                    && conflictingGuidance(nearest, second)) return null;
+            return nearest;
+        }
+
+        /** Short-range fallback for roads tagged with class but no posted maxspeed. */
+        Match nearestAdvisory(double latitude, double longitude, int maxDistanceMeters,
+                              Float vehicleBearing) {
+            SQLiteDatabase db = getReadableDatabase();
+            double latDelta = maxDistanceMeters / 111_320d;
+            double lonDelta = maxDistanceMeters / Math.max(1d,
+                    111_320d * Math.cos(Math.toRadians(latitude)));
+            String selection = "record_kind = 'ADVISORY' AND min_lat <= ? AND max_lat >= ? "
+                    + "AND min_lon <= ? AND max_lon >= ?";
+            String[] args = {String.valueOf(latitude + latDelta), String.valueOf(latitude - latDelta),
+                    String.valueOf(longitude + lonDelta), String.valueOf(longitude - lonDelta)};
+            Match nearest = null;
+            Match second = null;
+            double nearestScore = Double.MAX_VALUE;
+            double secondScore = Double.MAX_VALUE;
+            try (Cursor cursor = db.query("speed_limits",
+                    new String[]{"osm_id", "geometry", "updated_at", "province", "road_class",
+                            "road_ref", "road_name"}, selection, args, null, null, null)) {
+                while (cursor.moveToNext()) {
+                    String roadClass = cursor.getString(4);
+                    int recommendation = advisoryForRoadClass(roadClass);
+                    if (recommendation <= 0) continue;
+                    GeometryMatch geometry = nearestPolylineMatch(latitude, longitude,
+                            cursor.getString(1));
+                    if (geometry.distanceMeters > maxDistanceMeters) continue;
+                    double headingDifference = vehicleBearing == null ? Double.NaN
+                            : headingDifference(vehicleBearing, geometry.roadBearingDegrees);
+                    if (incompatibleMovingHeading(geometry.distanceMeters, headingDifference)) continue;
+                    Match candidate = new Match(recommendation, geometry.distanceMeters,
+                            cursor.getLong(2), cursor.getString(3), false, roadClass,
+                            cursor.getString(0), headingDifference, geometry.roadBearingDegrees,
+                            geometry.alongMeters, cursor.getString(5), cursor.getString(6));
+                    double score = mapMatchScore(geometry.distanceMeters, false,
+                            headingDifference, false);
+                    if (nearest == null || score < nearestScore) {
+                        second = nearest;
+                        secondScore = nearestScore;
+                        nearest = candidate;
+                        nearestScore = score;
+                    } else if (second == null || score < secondScore) {
+                        second = candidate;
+                        secondScore = score;
+                    }
+                }
+            }
             if (nearest != null && second != null
                     && secondScore - nearestScore <= AMBIGUOUS_CANDIDATE_MARGIN_METERS
                     && conflictingGuidance(nearest, second)) return null;

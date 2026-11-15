@@ -39,7 +39,6 @@ final class TomTomRoadDataRepository implements AutoCloseable {
 
     private static final String PREFERENCES = "tomtom_traffic";
     private static final long SNAP_INTERVAL_MS = 5L * 60L * 1_000L;
-    private static final long SNAP_TTL_MS = 7L * 60L * 1_000L;
     private static final long FLOW_INTERVAL_MS = 90_000L;
     private static final long FLOW_TTL_MS = 3L * 60L * 1_000L;
     private static final int MAX_HISTORY = 6;
@@ -99,6 +98,10 @@ final class TomTomRoadDataRepository implements AutoCloseable {
         if (!enabled() || !hasInternet()) return;
         long now = System.currentTimeMillis();
         Candidate cachedRoad = staticRoadCache.nearest(location);
+        Candidate inMemory = candidate;
+        if (inMemory != null && now < inMemory.expiresAt
+                && location.distanceTo(inMemory.projected) <= 85f) cachedRoad = inMemory;
+        else if (inMemory != null && now >= inMemory.expiresAt) candidate = null;
         if (cachedRoad != null) candidate = cachedRoad;
         if (!flowLoading && now - lastFlowAttempt >= FLOW_INTERVAL_MS
                 && TomTomUsageBudget.reserve(preferences, TomTomUsageBudget.FLOW,
@@ -123,7 +126,7 @@ final class TomTomRoadDataRepository implements AutoCloseable {
     SpeedLimitRepository.Match speedMatch(Location location, SpeedLimitRepository.Match road) {
         Candidate value = candidate;
         long now = System.currentTimeMillis();
-        if (value == null || location == null || now - value.fetchedAt > SNAP_TTL_MS
+        if (value == null || location == null || now >= value.expiresAt
                 || location.distanceTo(value.projected) > 85f) return null;
         String roadClass = road == null ? "" : road.roadClass;
         String osmId = road == null ? "" : road.osmId;
@@ -175,11 +178,15 @@ final class TomTomRoadDataRepository implements AutoCloseable {
                     .appendQueryParameter("measurementSystem", "auto")
                     .appendQueryParameter("offroadMargin", "45").build();
             connection = open(uri, 30_000);
+            long fetchedAt = System.currentTimeMillis();
+            long maxAgeMs = cacheMaxAgeMs(connection.getHeaderField("Cache-Control"));
             Candidate parsed = parseSnap(read(connection.getInputStream(), 2 * 1024 * 1024),
-                    fixes.get(fixes.size() - 1), requestedAt);
+                    fixes.get(fixes.size() - 1), fetchedAt, fetchedAt + maxAgeMs);
             if (parsed != null) {
-                candidate = parsed;
-                staticRoadCache.put(parsed);
+                candidate = parsed.expiresAt > fetchedAt ? parsed : null;
+                if (parsed.expiresAt > fetchedAt) staticRoadCache.put(parsed);
+                else AppSessionLog.event("TOMTOM LÍMITE",
+                        "La respuesta no autoriza caché local; no se conserva el resultado");
                 AppSessionLog.event("TOMTOM LÍMITE", parsed.limitKmh + " km/h · "
                         + first(parsed.roadRef, parsed.roadName, "vía identificada"));
             }
@@ -220,6 +227,11 @@ final class TomTomRoadDataRepository implements AutoCloseable {
     }
 
     static Candidate parseSnap(String json, Location current, long fetchedAt) throws Exception {
+        return parseSnap(json, current, fetchedAt, fetchedAt);
+    }
+
+    static Candidate parseSnap(String json, Location current, long fetchedAt, long expiresAt)
+            throws Exception {
         JSONArray route = new JSONObject(json).optJSONArray("route");
         Candidate best = null;
         double bestDistance = Double.MAX_VALUE;
@@ -244,7 +256,8 @@ final class TomTomRoadDataRepository implements AutoCloseable {
             JSONObject address = properties.optJSONObject("address");
             String roadName = address == null ? "" : address.optString("roadName", "");
             String roadRef = address == null ? "" : join(address.optJSONArray("roadNumbers"));
-            best = new Candidate(limit, roadRef, roadName, confidence, nearest, fetchedAt);
+            best = new Candidate(limit, roadRef, roadName, confidence, nearest, fetchedAt,
+                    expiresAt);
             bestDistance = distance;
         }
         return bestDistance <= 85d ? best : null;
@@ -308,6 +321,26 @@ final class TomTomRoadDataRepository implements AutoCloseable {
         return connection;
     }
 
+    /** Honor TomTom's explicit Cache-Control permission; an absent max-age means no local cache. */
+    static long cacheMaxAgeMs(String cacheControl) {
+        if (cacheControl == null || cacheControl.trim().isEmpty()) return 0L;
+        String normalized = cacheControl.toLowerCase(Locale.ROOT);
+        if (normalized.contains("no-store") || normalized.contains("no-cache")) return 0L;
+        for (String directive : normalized.split(",")) {
+            String value = directive.trim();
+            if (!value.startsWith("max-age=")) continue;
+            try {
+                long seconds = Long.parseLong(value.substring("max-age=".length())
+                        .replace("\"", "").trim());
+                if (seconds <= 0L) return 0L;
+                return Math.min(seconds, 30L * 24L * 60L * 60L) * 1_000L;
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
+    }
+
     private String key() { return preferences.getString("api_key", "").trim(); }
     private boolean enabled() { return !key().isEmpty() && preferences.getBoolean("enabled", false); }
     private boolean hasInternet() {
@@ -354,32 +387,41 @@ final class TomTomRoadDataRepository implements AutoCloseable {
 
     static final class Candidate {
         final int limitKmh; final String roadRef, roadName; final double confidence;
-        final Location projected; final long fetchedAt;
+        final Location projected; final long fetchedAt, expiresAt;
         Candidate(int limitKmh, String roadRef, String roadName, double confidence,
                   Location projected, long fetchedAt) {
+            this(limitKmh, roadRef, roadName, confidence, projected, fetchedAt, fetchedAt);
+        }
+        Candidate(int limitKmh, String roadRef, String roadName, double confidence,
+                  Location projected, long fetchedAt, long expiresAt) {
             this.limitKmh = limitKmh; this.roadRef = roadRef == null ? "" : roadRef;
             this.roadName = roadName == null ? "" : roadName; this.confidence = confidence;
             this.projected = new Location(projected); this.fetchedAt = fetchedAt;
+            this.expiresAt = Math.max(fetchedAt, expiresAt);
         }
     }
 
-    /** Persistent bounded knowledge for static road identity/limit data. Live traffic is never stored. */
+    /** TomTom road results remain local only for the provider's Cache-Control max-age. */
     private static final class StaticRoadCache extends SQLiteOpenHelper {
         private static final String NAME = "e87_tomtom_static_roads.db";
-        private static final int VERSION = 1;
-        private static final int MAX_ROWS = 1_000;
+        private static final int VERSION = 2;
 
         StaticRoadCache(Context context) { super(context, NAME, null, VERSION); }
 
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE roads (segment_key TEXT PRIMARY KEY, latitude REAL NOT NULL, "
                     + "longitude REAL NOT NULL, limit_kmh INTEGER NOT NULL, road_ref TEXT NOT NULL, "
-                    + "road_name TEXT NOT NULL, confidence REAL NOT NULL, fetched_at INTEGER NOT NULL)");
+                    + "road_name TEXT NOT NULL, confidence REAL NOT NULL, fetched_at INTEGER NOT NULL, "
+                    + "expires_at INTEGER NOT NULL)");
             db.execSQL("CREATE INDEX road_position ON roads(latitude, longitude)");
             db.execSQL("CREATE INDEX road_fetched ON roads(fetched_at)");
         }
 
-        @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { }
+        @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+            // Purge old no-expiry TomTom rows from earlier builds.
+            db.execSQL("DROP TABLE IF EXISTS roads");
+            onCreate(db);
+        }
 
         synchronized void put(Candidate value) {
             if (value == null || value.projected == null) return;
@@ -392,10 +434,9 @@ final class TomTomRoadDataRepository implements AutoCloseable {
             row.put("road_name", value.roadName);
             row.put("confidence", value.confidence);
             row.put("fetched_at", value.fetchedAt);
+            row.put("expires_at", value.expiresAt);
             SQLiteDatabase db = getWritableDatabase();
             db.insertWithOnConflict("roads", null, row, SQLiteDatabase.CONFLICT_REPLACE);
-            db.delete("roads", "segment_key NOT IN (SELECT segment_key FROM roads "
-                    + "ORDER BY fetched_at DESC LIMIT " + MAX_ROWS + ")", null);
         }
 
         synchronized Candidate nearest(Location location) {
@@ -406,9 +447,12 @@ final class TomTomRoadDataRepository implements AutoCloseable {
                     111_320d * Math.cos(Math.toRadians(lat)));
             Candidate best = null;
             float bestDistance = 86f;
+            long now = System.currentTimeMillis();
+            SQLiteDatabase db = getWritableDatabase();
+            db.delete("roads", "expires_at <= ?", new String[]{String.valueOf(now)});
             try (Cursor cursor = getReadableDatabase().query("roads",
                     new String[]{"latitude", "longitude", "limit_kmh", "road_ref",
-                            "road_name", "confidence", "fetched_at"},
+                            "road_name", "confidence", "fetched_at", "expires_at"},
                     "latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?",
                     new String[]{String.valueOf(lat - latDelta),
                             String.valueOf(lat + latDelta), String.valueOf(lon - lonDelta),
@@ -422,7 +466,7 @@ final class TomTomRoadDataRepository implements AutoCloseable {
                     bestDistance = distance;
                     best = new Candidate(cursor.getInt(2), cursor.getString(3),
                             cursor.getString(4), cursor.getDouble(5), projected,
-                            System.currentTimeMillis());
+                            cursor.getLong(6), cursor.getLong(7));
                 }
             }
             return best;
