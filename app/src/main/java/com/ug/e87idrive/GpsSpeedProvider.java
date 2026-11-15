@@ -38,6 +38,7 @@ public class GpsSpeedProvider implements LocationListener {
     private String lastLoggedState = "";
     private long lastLoggedAt;
     private boolean started;
+    private final DrivingRouteLogRecorder routeLogRecorder = new DrivingRouteLogRecorder();
 
     public GpsSpeedProvider(Context c, Listener l) {
         context=c; listener=l;
@@ -235,6 +236,7 @@ public class GpsSpeedProvider implements LocationListener {
             lastGpsSpeedProvider = "";
         }
         if (System.currentTimeMillis() - timestamp > MAX_SPEED_AGE_MS) kmh = null;
+        routeLogRecorder.onLocation(accepted, freshSpeed(), locationTimestamp);
         if(listener!=null) listener.onLocation(new Location(accepted), freshSpeed());
         logLocationState(accepted, false);
     }

@@ -32,7 +32,7 @@ final class JancarCarProvider implements VehicleDataProvider {
     static final String PACKAGE_NAME = "com.jancar.services";
     private static final String ACTION_CAR = "com.jancar.services.action.car";
     private static final String DESCRIPTOR = "com.jancar.services.car.ICar";
-    private static final long POLL_MS = 1_000L;
+    private static final long POLL_MS = 2_000L;
     private static final long ALERTS_MS = 12_000L;
     private static final long ODOMETER_MS = 15_000L;
     private static final long MAINTENANCE_MS = 60_000L;

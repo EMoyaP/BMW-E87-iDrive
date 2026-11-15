@@ -7,7 +7,6 @@ public final class IdriveApplication extends Application {
         super.onCreate();
         AppSessionLog.initialize(this);
         BundledDataUpgrade.apply(this);
-        SpeedPlayMediaReceiver.register(this);
         AutomaticOnlineUpdateScheduler.ensure(this);
     }
 }

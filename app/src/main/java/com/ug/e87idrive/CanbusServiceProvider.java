@@ -34,7 +34,7 @@ final class CanbusServiceProvider implements VehicleDataProvider {
     private static final String CAN_DESCRIPTOR = "com.autoai.canbus.ICanBus";
     private static final String CAN_LISTENER_DESCRIPTOR = "com.autoai.canbus.ICanBusListener";
     private static final String CAN_SERVICE_NAME = "CanBusManager";
-    private static final long POLL_MS = 1_000L;
+    private static final long POLL_MS = 2_000L;
 
     // Verified in the exported ICanBus/ICanBusListener AIDL stubs.
     private static final int REGISTER_LISTENER = 1;

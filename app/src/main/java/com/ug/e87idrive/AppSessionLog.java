@@ -50,9 +50,10 @@ final class AppSessionLog {
                     + "Inicio=" + timestamp() + "\n"
                     + "Android SDK=" + Build.VERSION.SDK_INT + " · dispositivo="
                     + Build.MANUFACTURER + " " + Build.MODEL + "\n"
+                    + "Privacidad: se guardan puntos GPS y velocidades solo durante trayectos en movimiento; "
                     + (GpsSpeedProvider.coordinateLoggingEnabled(context)
-                    ? "Privacidad: coordenadas GPS habilitadas explícitamente para DEBUG.\n\n"
-                    : "Privacidad: no se guardan coordenadas GPS.\n\n");
+                    ? "el DEBUG GPS añade posiciones también fuera del trayecto.\n\n"
+                    : "fuera del trayecto no se guardan coordenadas.\n\n");
             write(header, false);
         }
     }

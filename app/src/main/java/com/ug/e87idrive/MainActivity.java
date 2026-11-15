@@ -5,7 +5,6 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
-import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -85,15 +84,9 @@ public class MainActivity extends Activity {
     private LinearLayout gaugeHome;
     private boolean drivingViewActive;
     private GridLayout quickGrid;
-    private MediaSessionProvider.Snapshot latestMediaSnapshot;
-    private String homeTrackSignature;
-    private ProgressBar homeMediaProgress;
-    private TextView homeMediaTime;
-    private TextView clock, date, mediaTitle, mediaArtist, mediaAlbum, mediaSource, mediaState, fuelHeading, fuelFooter, fuelRefresh;
-    private TextView mediaPrevious, mediaPlayPause, mediaNext;
+    private TextView clock, date, fuelHeading, fuelFooter, fuelRefresh;
     private TextView phoneDevice, phoneConnection;
     private TextView radioBand, radioStation, radioDetail;
-    private ImageView mediaArtwork;
     private SpeedGaugeView speedGauge;
     private SpeedLimitView speedLimitView;
     private RadarNoticeView radarNoticeView;
@@ -105,7 +98,6 @@ public class MainActivity extends Activity {
     private GpsSpeedProvider gps;
     private DiagnosticEngine diagnostics;
     private VehicleDataRepository vehicleData;
-    private MediaSessionProvider media;
     private JancarRadioProvider oemRadio;
     private FuelStationProvider fuelStations;
     private SpeedLimitRepository speedLimits;
@@ -128,8 +120,11 @@ public class MainActivity extends Activity {
     private boolean exportOemAfterPicker;
     private boolean exportFullAfterPicker;
     private boolean exportSnapshotAfterPicker;
-    private int mediaRefreshTick;
-    private String lastMediaLog = "";
+    private boolean exportLogsAfterPicker;
+    private boolean exportAutoBundleAfterPicker;
+    private boolean usbWasMounted;
+    private boolean usbMountStateInitialized;
+    private boolean usbPromptedForCurrentMount;
     private boolean vehicleRefreshQueued;
     private final ExecutorService mapExecutor = Executors.newSingleThreadExecutor();
     private Location lastMapRoadCenter;
@@ -218,7 +213,6 @@ public class MainActivity extends Activity {
         vehicleData = new VehicleDataRepository(this, gps, diagnostics, () -> {
             scheduleVehicleRefresh();
         });
-        media = new MediaSessionProvider(this);
         oemRadio = new JancarRadioProvider(this, this::refreshRadioWidget);
         applyPalette();
         buildUi();
@@ -230,14 +224,13 @@ public class MainActivity extends Activity {
         super.onResume();
         AppSessionLog.event("APP", "Sesión visible; iniciando proveedores pasivos");
         foreground = true;
+        checkRemovableUsb();
         hideUi();
         if (hasBackgroundUpdate()) {
             toast("Actualización en segundo plano: "
                     + UpdateProgressStore.currentMessage(getApplicationContext()));
         }
         autoDetectApps();
-        SpeedPlayMediaReceiver.register(this);
-        media.requestListenerRebind();
         refreshAll();
         gps.start();
         bluetoothState.start();
@@ -267,7 +260,6 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         AppSessionLog.event("APP", "Sesión en segundo plano; deteniendo sondeos periódicos");
         foreground = false;
-        SpeedPlayMediaReceiver.unregister(this);
         handler.removeCallbacks(automaticUpdateUiRefresh);
         gps.stop();
         bluetoothState.stop();
@@ -594,9 +586,7 @@ public class MainActivity extends Activity {
 
         LinearLayout right = vertical();
         right.setPadding(dp(8), 0, 0, 0);
-        // Media access is still available from Ajustes and its passive receiver keeps
-        // collecting diagnostics, but an empty/unverified media card no longer dominates
-        // the home screen. The live vehicle gauge gets the entire right-hand area.
+        // The live vehicle gauge gets the full right-hand area.
         right.addView(vehicleWidget(), lp(-1, -1));
         upper.addView(right, lp(0, -1, 1));
         return upper;
@@ -634,15 +624,45 @@ public class MainActivity extends Activity {
 
     /** Keeps every existing role reachable after the full-height menu is replaced visually. */
     private void mainMenuModal() {
-        String[] options = {"Multimedia", "Radio", "Navegación", "Android Auto",
-                "Teléfono", "Aplicaciones", "Ajustes"};
-        String[] roles = {"media", "radio", "nav", "auto", "phone", null, null};
-        new AlertDialog.Builder(this).setTitle("Menú iDrive")
+        String[] options = {"Actualizar todo", "Actualizaciones individuales…",
+                "Exportar logs", "Exportar menú…"};
+        new AlertDialog.Builder(this).setTitle("BMW E87 iDrive")
                 .setItems(options, (dialog, which) -> {
-                    if (which == 5) quickAppsModal();
-                    else if (which == 6) settingsModal();
-                    else launchRole(roles[which]);
+                    if (which == 0) updateAllSources();
+                    else if (which == 1) individualUpdatesModal();
+                    else if (which == 2) exportAllSessionLogs();
+                    else exportMenu();
                 }).setNegativeButton("CERRAR", null).show();
+    }
+
+    private void exportMenu() {
+        String[] options = {"Logs de sesión", "Diagnóstico y snapshot", "Radio y CAN",
+                "Inventario completo + APK"};
+        new AlertDialog.Builder(this).setTitle("Exportar")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) exportAllSessionLogs();
+                    else if (which == 1) saveUsbSnapshot();
+                    else if (which == 2) requestOemExport(null);
+                    else requestFullExport();
+                }).setNegativeButton("CERRAR", null).show();
+    }
+
+    private void exportAllSessionLogs() {
+        if (!usbDiagnostics.hasDirectoryPermission()) {
+            exportLogsAfterPicker = true;
+            exportOemAfterPicker = false;
+            exportFullAfterPicker = false;
+            exportSnapshotAfterPicker = false;
+            startUsbCaptureAfterPicker = false;
+            new AlertDialog.Builder(this).setTitle("Autorizar memoria USB")
+                    .setMessage("Selecciona la carpeta de destino. Se copiarán todos los logs de sesión de iDrive "
+                            + "que la app conserva, incluidos los archivos recuperados de sesiones anteriores.")
+                    .setPositiveButton("SELECCIONAR CARPETA", (d, w) -> selectUsbDirectory(false))
+                    .setNegativeButton("CANCELAR", (d, w) -> exportLogsAfterPicker = false)
+                    .show();
+            return;
+        }
+        usbDiagnostics.exportSessionLogs(this::usbCallback);
     }
 
     private View dashboardLower() {
@@ -797,166 +817,6 @@ public class MainActivity extends Activity {
         row.addView(card, params);
     }
 
-    private View mediaWidget() {
-        LinearLayout box = card();
-        box.addView(txt("MULTIMEDIA", 13, BLUE, true));
-        LinearLayout content = horizontal();
-        content.setGravity(Gravity.CENTER_VERTICAL);
-        mediaArtwork = new ImageView(this);
-        mediaArtwork.setImageResource(R.drawable.ic_menu_media);
-        mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
-        mediaArtwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
-        mediaArtwork.setBackground(slotBg());
-        content.addView(mediaArtwork, lp(dp(92), dp(92)));
-        LinearLayout details = vertical();
-        details.setGravity(Gravity.CENTER_VERTICAL);
-        details.setPadding(dp(14), 0, 0, 0);
-        mediaTitle = txt("Acceso multimedia pendiente", 17, TEXT, false);
-        mediaTitle.setMaxLines(2);
-        mediaArtist = txt("Actívalo en Ajustes para leer carátula y título", 13, MUTED, false);
-        mediaArtist.setMaxLines(1);
-        mediaAlbum = txt("Álbum no publicado", 11, MUTED, false);
-        mediaAlbum.setMaxLines(1);
-        mediaSource = txt("MediaSession estándar", 10, MUTED, false);
-        details.addView(mediaTitle);
-        details.addView(mediaArtist);
-        details.addView(mediaAlbum);
-        details.addView(mediaSource);
-        content.addView(details, lp(0, -1, 1));
-        box.addView(content, lp(-1, 0, 1));
-        LinearLayout footer = horizontal();
-        mediaState = txt("", 10, BLUE, true);
-        footer.addView(mediaState, lp(0, dp(30), 1));
-        LinearLayout controls = horizontal();
-        mediaPrevious = mediaControlButton("◀", "Canción anterior", MediaSessionProvider.Command.PREVIOUS);
-        mediaPlayPause = mediaControlButton("▶", "Reproducir o pausar", MediaSessionProvider.Command.TOGGLE);
-        mediaNext = mediaControlButton("▶|", "Canción siguiente", MediaSessionProvider.Command.NEXT);
-        controls.addView(mediaPrevious, lp(dp(47), dp(30)));
-        controls.addView(mediaPlayPause, lp(dp(47), dp(30)));
-        controls.addView(mediaNext, lp(dp(47), dp(30)));
-        footer.addView(controls, lp(dp(145), dp(30)));
-        box.addView(footer);
-        TextView hint = txt("Tocar: abrir app · mantener: asignar", 9, MUTED, false);
-        box.addView(hint);
-        box.setOnClickListener(v -> launchRole("media"));
-        box.setOnLongClickListener(v -> { appPicker("media", "Multimedia"); return true; });
-        return box;
-    }
-
-    private void refreshMedia() {
-        if (media == null || apps == null) return;
-        // When SpeedPlay/Android Auto publishes its standard session, it takes precedence so
-        // the card follows the music actually routed through Android Auto (for example Spotify).
-        MediaSessionProvider.Snapshot snapshot = media.refreshPreferred(apps.getPackage("auto"));
-        String mediaLog = "paquetePreferido=" + apps.getPackage("auto")
-                + " · acceso=" + snapshot.accessGranted
-                + " · listener=" + snapshot.listenerConnected
-                + " · sesión=" + snapshot.sessionAvailable
-                + " · fuente=" + snapshot.source
-                + " · estado=" + snapshot.state
-                + " · título=" + snapshot.title
-                + " · artista=" + snapshot.artist
-                + " · álbum=" + snapshot.album;
-        if (!mediaLog.equals(lastMediaLog)) {
-            lastMediaLog = mediaLog;
-            AppSessionLog.event("MULTIMEDIA", mediaLog);
-        }
-        latestMediaSnapshot = snapshot;
-        if (mediaTitle != null) mediaTitle.setText(snapshot.title);
-        if (mediaArtist != null) mediaArtist.setText(snapshot.artist);
-        if (mediaAlbum != null) mediaAlbum.setText(
-                snapshot.album.isEmpty() ? "Álbum no publicado" : snapshot.album);
-        if (mediaSource != null) mediaSource.setText(snapshot.source);
-        if (mediaState != null) mediaState.setText(
-                snapshot.sessionAvailable ? snapshot.state : "LECTURA PASIVA");
-        updateMediaControls(snapshot);
-        boolean showTrack = snapshot.sessionAvailable && hasRealTrackTitle(snapshot.title)
-                && !"DETENIDO".equals(snapshot.state);
-        String trackTitle = showTrack ? snapshot.title : null;
-        String trackArtist = showTrack && snapshot.artist != null ? snapshot.artist : null;
-        // The home header keeps the BMW/iDrive identity. Music uses the driving header
-        // slot while moving and the otherwise empty shortcut grid while parked.
-        if (headerBrand != null) headerBrand.setTrack(null, null);
-        if (drivingOverlay != null) drivingOverlay.mediaTrack(trackTitle, trackArtist,
-                showTrack ? remainingTrackTime(snapshot) : null,
-                showTrack ? snapshot.artwork : null);
-        refreshQuick();
-        MediaNotificationListener.NavigationSnapshot instruction =
-                MediaNotificationListener.latestNavigation();
-        if (drivingOverlay != null) drivingOverlay.navigationInstruction(instruction);
-        String navLog = instruction == null ? "" : instruction.maneuver + " · "
-                + instruction.distance + " · " + instruction.raw;
-        if (!navLog.equals(lastNavigationLog)) {
-            lastNavigationLog = navLog;
-            if (!navLog.isEmpty()) AppSessionLog.event("NAVEGACIÓN AA", navLog);
-        }
-        if (mediaArtwork != null) {
-            if (snapshot.artwork != null) {
-                mediaArtwork.setColorFilter(null);
-                mediaArtwork.setPadding(0, 0, 0, 0);
-                mediaArtwork.setImageBitmap(snapshot.artwork);
-            } else {
-                mediaArtwork.setImageResource(R.drawable.ic_menu_media);
-                mediaArtwork.setColorFilter(Color.rgb(33, 68, 105));
-                mediaArtwork.setPadding(dp(10), dp(10), dp(10), dp(10));
-            }
-        }
-    }
-
-    private String lastNavigationLog = "";
-
-    private static boolean hasRealTrackTitle(String title) {
-        if (title == null) return false;
-        String value = title.trim();
-        return !value.isEmpty() && !"Emisora sin identificar".equalsIgnoreCase(value)
-                && !"Reproducción SpeedPlay".equalsIgnoreCase(value)
-                && !"Reproducción Android Auto".equalsIgnoreCase(value)
-                && !"No hay reproducción expuesta".equalsIgnoreCase(value)
-                && !"Acceso multimedia pendiente".equalsIgnoreCase(value);
-    }
-
-    private static String remainingTrackTime(MediaSessionProvider.Snapshot snapshot) {
-        if (snapshot == null || snapshot.durationMs <= 0 || snapshot.positionMs < 0) return null;
-        long position = snapshot.positionMs;
-        if ("REPRODUCIENDO".equals(snapshot.state)) {
-            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
-                    - snapshot.positionCapturedAtElapsedMs);
-        }
-        long seconds = Math.max(0L, (snapshot.durationMs - Math.min(position,
-                snapshot.durationMs) + 999L) / 1000L);
-        return String.format(Locale.ROOT, "−%d:%02d", seconds / 60L, seconds % 60L);
-    }
-
-    private TextView mediaControlButton(String glyph, String description, MediaSessionProvider.Command command) {
-        TextView button = txt(glyph, 16, TEXT, false);
-        button.setGravity(Gravity.CENTER);
-        button.setBackground(slotBg());
-        button.setContentDescription(description);
-        button.setOnClickListener(v -> {
-            String autoPackage = apps.getPackage("auto");
-            if (!media.control(command, autoPackage)) {
-                toast("La reproducción actual no expone este control estándar");
-                return;
-            }
-            handler.postDelayed(this::refreshMedia, 250L);
-        });
-        return button;
-    }
-
-    private void updateMediaControls(MediaSessionProvider.Snapshot snapshot) {
-        if (mediaPrevious == null || mediaPlayPause == null || mediaNext == null) return;
-        setMediaControl(mediaPrevious, snapshot.canPrevious, "◀");
-        setMediaControl(mediaPlayPause, snapshot.canPlayPause,
-                "REPRODUCIENDO".equals(snapshot.state) ? "Ⅱ" : "▶");
-        setMediaControl(mediaNext, snapshot.canNext, "▶|");
-    }
-
-    private void setMediaControl(TextView view, boolean enabled, String glyph) {
-        view.setText(glyph);
-        view.setEnabled(enabled);
-        view.setAlpha(enabled ? 1f : .35f);
-    }
 
     private View vehicleWidget() {
         LinearLayout box = card();
@@ -1074,7 +934,6 @@ public class MainActivity extends Activity {
         refreshQuick();
         refreshVehicle();
         refreshStatus();
-        refreshMedia();
         refreshPhoneWidget(bluetoothState.getState());
         for (String role : AppRepository.ROLES) {
             TextView text = roleLabels.get(role);
@@ -1119,24 +978,12 @@ public class MainActivity extends Activity {
             radioDetail.setText(oem.detail);
             return;
         }
-        MediaSessionProvider.Snapshot snapshot = media.refreshForPackage(packageName);
-        if (!snapshot.sessionAvailable) {
-            radioBand.setText("RADIO");
-            radioStation.setText("▶");
-            radioStation.setTextColor(ACCENT);
-            radioStation.setContentDescription("Abrir radio OEM");
-            radioStation.setOnClickListener(v -> launchRole("radio"));
-            radioDetail.setText(snapshot.accessGranted
-                    ? "Toca ▶ para abrir " + apps.label(packageName)
-                    : "Permite acceso multimedia · toca ▶");
-            return;
-        }
-        radioBand.setText(radioBand(snapshot.title + " " + snapshot.artist));
-        radioStation.setText(snapshot.title);
-        radioStation.setTextColor(BLUE);
-        radioStation.setOnClickListener(null);
-        radioStation.setContentDescription("Emisora actual: " + snapshot.title);
-        radioDetail.setText(snapshot.artist);
+        radioBand.setText("RADIO");
+        radioStation.setText("▶");
+        radioStation.setTextColor(ACCENT);
+        radioStation.setContentDescription("Abrir radio " + apps.label(packageName));
+        radioStation.setOnClickListener(v -> launchRole("radio"));
+        radioDetail.setText("Toca ▶ para abrir " + apps.label(packageName));
     }
 
     private String radioBand(String publishedText) {
@@ -1162,7 +1009,6 @@ public class MainActivity extends Activity {
 
     private void refreshQuick() {
         if (quickGrid == null) return;
-        if (renderHomeTrackCard()) return;
         quickGrid.removeAllViews();
         for (int i = 0; i < 6; i++) {
             String key = "quick_" + i;
@@ -1198,128 +1044,6 @@ public class MainActivity extends Activity {
             params.setMargins(dp(2), dp(2), dp(2), dp(2));
             quickGrid.addView(slot, params);
         }
-    }
-
-    private boolean renderHomeTrackCard() {
-        MediaSessionProvider.Snapshot snapshot = latestMediaSnapshot;
-        boolean show = snapshot != null && snapshot.sessionAvailable
-                && hasRealTrackTitle(snapshot.title) && !"DETENIDO".equals(snapshot.state);
-        String signature = show ? snapshot.title + "\u0000" + snapshot.artist + "\u0000"
-                + snapshot.album + "\u0000" + snapshot.state + "\u0000"
-                + (snapshot.artwork == null ? -1 : snapshot.artwork.getGenerationId()) : null;
-        if (java.util.Objects.equals(signature, homeTrackSignature)) {
-            if (show) updateHomeTrackProgress(snapshot);
-            return show;
-        }
-        boolean hadTrack = homeTrackSignature != null;
-        homeTrackSignature = signature;
-        if (!show && !hadTrack) return false;
-        quickGrid.removeAllViews();
-        homeMediaProgress = null;
-        homeMediaTime = null;
-        if (!show) return false;
-
-        LinearLayout panel = card();
-        panel.setOrientation(LinearLayout.HORIZONTAL);
-        panel.setGravity(Gravity.CENTER_VERTICAL);
-        panel.setPadding(dp(8), dp(6), dp(8), dp(6));
-        ImageView artwork = new ImageView(this);
-        artwork.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        if (snapshot.artwork != null) artwork.setImageBitmap(snapshot.artwork);
-        else {
-            artwork.setImageResource(R.drawable.ic_menu_media);
-            artwork.setColorFilter(Color.rgb(90, 170, 225));
-            artwork.setPadding(dp(12), dp(12), dp(12), dp(12));
-        }
-        artwork.setBackground(slotBg());
-        panel.addView(artwork, lp(dp(58), dp(58)));
-
-        LinearLayout details = vertical();
-        details.setGravity(Gravity.CENTER_VERTICAL);
-        details.setPadding(dp(9), 0, 0, 0);
-        TextView title = txt(snapshot.title, 13, TEXT, true);
-        title.setSingleLine(true);
-        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        TextView artist = txt(snapshot.artist, 11, MUTED, false);
-        artist.setSingleLine(true);
-        artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        TextView album = txt((snapshot.album.isEmpty() ? "ÁLBUM NO PUBLICADO" : snapshot.album)
-                + " · " + snapshot.state, 10, BLUE, false);
-        album.setSingleLine(true);
-        album.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        details.addView(title, lp(-1, dp(19)));
-        details.addView(artist, lp(-1, dp(17)));
-        details.addView(album, lp(-1, dp(16)));
-
-        LinearLayout playbackRow = horizontal();
-        playbackRow.setGravity(Gravity.CENTER_VERTICAL);
-        ProgressBar progress = new ProgressBar(this, null,
-                android.R.attr.progressBarStyleHorizontal);
-        progress.setMax(1000);
-        boolean hasDuration = snapshot.durationMs > 0;
-        long position = snapshot.positionMs;
-        if (position >= 0 && "REPRODUCIENDO".equals(snapshot.state)) {
-            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
-                    - snapshot.positionCapturedAtElapsedMs);
-        }
-        progress.setProgress(hasDuration && position >= 0
-                ? (int) Math.min(1000d, (double) position * 1000d / snapshot.durationMs) : 0);
-        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(BLUE));
-        progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(
-                Color.rgb(36, 54, 68)));
-        playbackRow.addView(progress, lp(0, dp(7), 1));
-        String remaining = remainingTrackTime(snapshot);
-        TextView time = txt(remaining == null ? "—" : remaining, 9, MUTED, true);
-        time.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        playbackRow.addView(time, lp(dp(48), dp(18)));
-        details.addView(playbackRow, lp(-1, dp(18)));
-        homeMediaProgress = progress;
-        homeMediaTime = time;
-
-        LinearLayout controls = horizontal();
-        controls.setGravity(Gravity.CENTER_VERTICAL);
-        TextView previous = mediaControlButton("◀", "Canción anterior",
-                MediaSessionProvider.Command.PREVIOUS);
-        TextView toggle = mediaControlButton("REPRODUCIENDO".equals(snapshot.state)
-                        ? "Ⅱ" : "▶", "Reproducir o pausar",
-                MediaSessionProvider.Command.TOGGLE);
-        TextView next = mediaControlButton("▶|", "Canción siguiente",
-                MediaSessionProvider.Command.NEXT);
-        setMediaControl(previous, snapshot.canPrevious, "◀");
-        setMediaControl(toggle, snapshot.canPlayPause,
-                "REPRODUCIENDO".equals(snapshot.state) ? "Ⅱ" : "▶");
-        setMediaControl(next, snapshot.canNext, "▶|");
-        controls.addView(previous, lp(dp(32), dp(24)));
-        controls.addView(toggle, lp(dp(32), dp(24)));
-        controls.addView(next, lp(dp(32), dp(24)));
-        details.addView(controls, lp(-1, dp(25)));
-        panel.addView(details, lp(0, -1, 1));
-        panel.setContentDescription("Reproduciendo " + snapshot.title + " · "
-                + snapshot.artist + (snapshot.album.isEmpty() ? "" : " · " + snapshot.album)
-                + " · " + snapshot.state);
-        panel.setOnClickListener(v -> launchRole("media"));
-        GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-        params.width = 0;
-        params.height = 0;
-        params.columnSpec = GridLayout.spec(0, 3, 1f);
-        params.rowSpec = GridLayout.spec(0, 2, 1f);
-        params.setMargins(dp(2), dp(2), dp(2), dp(2));
-        quickGrid.addView(panel, params);
-        return true;
-    }
-
-    private void updateHomeTrackProgress(MediaSessionProvider.Snapshot snapshot) {
-        if (homeMediaProgress == null || homeMediaTime == null || snapshot == null) return;
-        long position = snapshot.positionMs;
-        if (position >= 0 && "REPRODUCIENDO".equals(snapshot.state)) {
-            position += Math.max(0L, android.os.SystemClock.elapsedRealtime()
-                    - snapshot.positionCapturedAtElapsedMs);
-        }
-        int progress = snapshot.durationMs > 0 && position >= 0
-                ? (int) Math.min(1000d, (double) position * 1000d / snapshot.durationMs) : 0;
-        homeMediaProgress.setProgress(progress);
-        String remaining = remainingTrackTime(snapshot);
-        homeMediaTime.setText(remaining == null ? "—" : remaining);
     }
 
     private void refreshVehicle() {
@@ -1971,7 +1695,11 @@ public class MainActivity extends Activity {
                 VehicleField.PARKING_BRAKE, VehicleField.SEATBELT, VehicleField.DOORS};
         java.util.List<VehicleField> active = new java.util.ArrayList<>();
         for (VehicleField field : fields) {
-            if (VehicleStatusPolicy.isActive(field, vehicleValue(field))) active.add(field);
+            String value = vehicleValue(field);
+            // Show lights both on and off when the radio has a trustworthy reading.
+            // Other status tiles remain limited to actionable states.
+            if (field == VehicleField.LIGHTS ? value != null
+                    : VehicleStatusPolicy.isActive(field, value)) active.add(field);
         }
         if (!active.isEmpty()) statusBar.addView(statusDivider(), lp(dp(1), dp(34)));
         for (int i = 0; i < active.size(); i++) {
@@ -2072,147 +1800,18 @@ public class MainActivity extends Activity {
         FrameLayout button = new FrameLayout(this);
         button.setForegroundGravity(Gravity.CENTER);
         button.setBackground(slotBg());
-        button.setContentDescription("Abrir debug, permisos y actualizaciones");
+        button.setContentDescription("Ajustes de iDrive");
         ImageView settings = new ImageView(this);
         settings.setImageResource(R.drawable.ic_menu_settings);
         settings.setColorFilter(BLUE);
         settings.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        settings.setContentDescription("Herramientas y actualizaciones");
+        settings.setContentDescription("Configuración");
         button.addView(settings, frameLp(dp(34), dp(34), Gravity.CENTER));
-        button.setOnClickListener(v -> toolsModal());
+        button.setOnClickListener(v -> settingsModal());
         return button;
     }
 
     /** Three stable entry points keep the original debug/permission flow separate from updates. */
-    private void toolsModal() {
-        LinearLayout box = vertical();
-        box.setBackgroundColor(PANEL);
-        box.setPadding(dp(12), dp(10), dp(12), dp(10));
-        TextView note = txt("Herramientas de iDrive. Cada opción abre su pantalla original sin cambiar\n"
-                + "la lectura pasiva del vehículo ni los ajustes OEM.", 12, TEXT, false);
-        note.setPadding(dp(8), dp(4), dp(8), dp(12));
-        box.addView(note, lp(-1, dp(52)));
-
-        Button debug = dialogButton("DEBUG / USB · LOGS Y EXPORTACIÓN");
-        Button permissions = dialogButton("PERMISOS · UBICACIÓN Y MULTIMEDIA");
-        Button updates = dialogButton("ACTUALIZACIONES · MAPA, RADARES, INVIVE Y GASOLINERAS");
-        box.addView(debug, lp(-1, dp(56)));
-        box.addView(permissions, lp(-1, dp(56)));
-        box.addView(updates, lp(-1, dp(56)));
-        Switch drivingView = new Switch(this);
-        drivingView.setText("Vista de conducción automática");
-        drivingView.setTextColor(TEXT);
-        drivingView.setChecked(uiPreferences.getBoolean("automatic_driving_view", true));
-        drivingView.setOnCheckedChangeListener((button, enabled) -> {
-            uiPreferences.edit().putBoolean("automatic_driving_view", enabled).apply();
-            if (!enabled) setDrivingView(false);
-        });
-        box.addView(drivingView, lp(-1, dp(48)));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Herramientas")
-                .setView(box)
-                .setPositiveButton("CERRAR", null)
-                .create();
-        debug.setOnClickListener(v -> {
-            dialog.dismiss();
-            diagnosticModal();
-        });
-        permissions.setOnClickListener(v -> {
-            dialog.dismiss();
-            permissionsModal();
-        });
-        updates.setOnClickListener(v -> {
-            dialog.dismiss();
-            updatesModal();
-        });
-        showSized(dialog, .54f, .58f);
-    }
-
-    private void updatesModal() {
-        LinearLayout box = vertical();
-        box.setBackgroundColor(PANEL);
-        box.setPadding(dp(12), dp(8), dp(12), dp(8));
-        TextView description = txt("Con Internet disponible, actualiza los datos y después conduce sin conexión. "
-                + "OSM se limita a Alicante; las capas DGT son nacionales.\n"
-                + "Complemento fijo local: Datos Lufop.net y colaboradores de OpenStreetMap · ODbL 1.0. "
-                + "No se descarga ni se actualiza desde esta radio.", 12, TEXT, false);
-        description.setPadding(dp(8), dp(4), dp(8), dp(12));
-        box.addView(description);
-
-        Button updateAll = dialogButton("FORZAR TODAS LAS ACTUALIZACIONES");
-        box.addView(updateAll, lp(-1, dp(56)));
-
-        Button individualUpdates = dialogButton("DESCARGAS INDIVIDUALES…");
-        box.addView(individualUpdates, lp(-1, dp(48)));
-
-        Button tomTomButton = dialogButton("CONFIGURAR DATOS CONECTADOS TOMTOM");
-        box.addView(tomTomButton, lp(-1, dp(44)));
-
-        LinearLayout voiceRow = horizontal();
-        Switch radarVoice = new Switch(this);
-        radarVoice.setText("LOCUCIÓN · SOLO RADARES FIJOS");
-        radarVoice.setTextColor(TEXT);
-        radarVoice.setTextSize(TypedValue.COMPLEX_UNIT_PX, px(10));
-        radarVoice.setChecked(uiPreferences.getBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, true));
-        radarVoice.setPadding(dp(8), dp(2), dp(8), dp(2));
-        Button testVoice = dialogButton("PROBAR LOCUCIÓN");
-        voiceRow.addView(radarVoice, lp(0, dp(40), 1));
-        voiceRow.addView(testVoice, lp(dp(190), dp(40)));
-        box.addView(voiceRow, lp(-1, dp(40)));
-
-        FuelStationProvider.Snapshot fuelSnapshot = fuelStations.getSnapshot();
-        TextView network = txt("Red actual: " + fuelStations.networkLabel()
-                + "\n" + speedLimits.inventorySummary()
-                + "\n" + dgtSpeeds.inventorySummary()
-                + "\n" + radars.inventorySummary()
-                + "\n" + invive.inventorySummary()
-                + " · " + fuelStations.inventorySummary()
-                + "\nGasolineras: " + lastUpdateText(fuelSnapshot == null ? 0L : fuelSnapshot.updatedAt)
-                + "\nOSM Alicante: " + lastUpdateText(speedLimits.lastSuccessfulUpdate("ALICANTE"))
-                + "\nLímites DGT nacionales: " + lastUpdateText(dgtSpeeds == null ? 0L : dgtSpeeds.lastSuccessfulUpdate())
-                + "\nRadares DGT: " + lastRadarUpdateText()
-                + "\nComplemento fijo local: incluido en la APK (sin actualización)"
-                + "\nZonas INVIVE: " + lastInviveUpdateText()
-                + "\n" + trafficIncidents.tomTomStatus()
-                + (tomTomRoadData == null ? "" : "\n" + tomTomRoadData.quotaSummary())
-                + " · GPS actual: " + SpeedLimitRepository.provinceLabel(
-                        speedLimits.automaticProvince(gps.getLastLocation()))
-                + "\nAutomático: gasolineras cada 10 min; cada fuente oficial máx. una vez/24 h.",
-                10, MUTED, false);
-        network.setPadding(dp(8), dp(12), dp(8), dp(10));
-        ScrollView inventoryScroll = new ScrollView(this);
-        inventoryScroll.addView(network);
-        box.addView(inventoryScroll, lp(-1, dp(190)));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Actualizaciones y herramientas")
-                .setView(box)
-                .setPositiveButton("CERRAR", null)
-                .create();
-        // The gear exposes the original diagnostic/export flow. Close this
-        // lightweight chooser before opening another dialog so no action is
-        // hidden behind a second modal.
-        updateAll.setOnClickListener(v -> {
-            dialog.dismiss();
-            updateAllSources();
-        });
-        individualUpdates.setOnClickListener(v -> {
-            dialog.dismiss();
-            individualUpdatesModal();
-        });
-        tomTomButton.setOnClickListener(v -> { dialog.dismiss(); tomTomTrafficModal(); });
-        radarVoice.setOnCheckedChangeListener((button, enabled) -> {
-            uiPreferences.edit().putBoolean(RadarSpeechAnnouncer.PREFERENCE_ENABLED, enabled).apply();
-            toast(enabled ? "Locución activada para radares fijos" : "Locución de radares desactivada");
-        });
-        testVoice.setOnClickListener(v -> {
-            if (radarSpeech != null) radarSpeech.playTest();
-            toast("Prueba de locución: radar fijo, límite 50");
-        });
-        showSized(dialog, .88f, .86f);
-    }
-
     private void individualUpdatesModal() {
         LinearLayout box = vertical();
         box.setBackgroundColor(PANEL);
@@ -2241,7 +1840,7 @@ public class MainActivity extends Activity {
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Descargas individuales")
                 .setView(box)
-                .setNegativeButton("VOLVER", (ignored, which) -> updatesModal())
+                .setNegativeButton("CERRAR", null)
                 .create();
         osm.setOnClickListener(v -> { dialog.dismiss(); updateSingleOsm(); });
         fuel.setOnClickListener(v -> { dialog.dismiss(); updateSingleFuel(); });
@@ -2567,14 +2166,17 @@ public class MainActivity extends Activity {
         JancarCarProvider.MaintenanceSnapshot snapshot = vehicleData.maintenanceSnapshot();
         int tone = !snapshot.known ? BLUE : snapshot.active.isEmpty()
                 ? Color.rgb(79, 205, 132) : ACCENT;
-        FrameLayout button = new FrameLayout(this);
-        button.setForegroundGravity(Gravity.CENTER);
+        LinearLayout button = vertical();
+        button.setGravity(Gravity.CENTER);
         button.setBackground(slotBg());
         button.setContentDescription(!snapshot.known ? "Avisos de mantenimiento: datos aún no disponibles"
                 : snapshot.active.isEmpty() ? "Avisos de mantenimiento: sin avisos activos"
                 : "Avisos de mantenimiento: " + snapshot.active.size() + " activos");
         StatusIconView icon = new StatusIconView(this, StatusIconKind.MAINTENANCE, tone);
-        button.addView(icon, frameLp(dp(34), dp(34), Gravity.CENTER));
+        button.addView(icon, lp(dp(34), dp(31)));
+        TextView label = txt("REV.", 8, MUTED, true);
+        label.setGravity(Gravity.CENTER);
+        button.addView(label, lp(-1, dp(13)));
         button.setOnClickListener(v -> maintenanceModal());
         return button;
     }
@@ -3168,6 +2770,10 @@ public class MainActivity extends Activity {
 
     private String buildUsbSnapshotReport() {
         return "IDRIVE USB DEBUG · SNAPSHOT · JCRK01/CYA · SOLO LECTURA\n"
+                + "Incluye eventos observados por iDrive y el registro de sesión actual. "
+                + "La exportación adjunta además todos los logs de sesión conservados.\n"
+                + "Android no concede a esta app acceso general al logcat del sistema ni a logs privados de otras apps; "
+                + "por ello no equivale a una imagen completa de los logs internos de la radio.\n"
                 + "No contiene tramas CAN/UART ni códigos propietarios confirmados.\n\n"
                 + buildDiagnosticReport()
                 + (lastCorrelationReport.isEmpty() ? "" : "\n\n" + lastCorrelationReport);
@@ -3226,26 +2832,25 @@ public class MainActivity extends Activity {
     }
 
     private void settingsModal() {
-        String[] options = {"Datos del vehículo", "Gasolineras: combustible y radio", "Actualizar límites GPS",
+        String[] options = {"Datos del vehículo", "Gasolineras: combustible y radio",
                 "Accesos rápidos", "Cambiar Multimedia", "Cambiar Radio", "Cambiar Navegación",
-                "Cambiar Android Auto", "Cambiar Teléfono / Bluetooth", "Acceso a contenido multimedia",
-                "Diagnóstico JCRK01/CYA", "Modo día / noche", "Restaurar configuración"};
+                "Cambiar Android Auto", "Cambiar Teléfono / Bluetooth",
+                "Diagnóstico JCRK01/CYA", "Modo día / noche", "Restaurar configuración",
+                "TomTom: tráfico y límites conectados"};
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Ajustes iDrive")
                 .setItems(options, (d, which) -> {
                     switch (which) {
                         case 0: vehicleModal(); break;
                         case 1: fuelSettingsModal(); break;
-                        case 2: updateSpeedLimitsFromWifi(); break;
-                        case 3: quickAppsModal(); break;
-                        case 4: appPicker("media", "Multimedia"); break;
-                        case 5: appPicker("radio", "Radio"); break;
-                        case 6: appPicker("nav", "Navegación"); break;
-                        case 7: appPicker("auto", "Android Auto / S-Play"); break;
-                        case 8: appPicker("phone", "Teléfono / Bluetooth"); break;
-                        case 9: openMediaAccessSettings(); break;
-                        case 10: diagnosticModal(); break;
-                        case 11: themeModeModal(); break;
-                        case 12:
+                        case 2: quickAppsModal(); break;
+                        case 3: appPicker("media", "Multimedia"); break;
+                        case 4: appPicker("radio", "Radio"); break;
+                        case 5: appPicker("nav", "Navegación"); break;
+                        case 6: appPicker("auto", "Android Auto / S-Play"); break;
+                        case 7: appPicker("phone", "Teléfono / Bluetooth"); break;
+                        case 8: diagnosticModal(); break;
+                        case 9: themeModeModal(); break;
+                        case 10:
                             apps.clearAll();
                             vehiclePreferences.edit().clear().apply();
                             uiPreferences.edit().clear().apply();
@@ -3257,6 +2862,7 @@ public class MainActivity extends Activity {
                             autoDetectApps();
                             refreshAll();
                             break;
+                        case 11: tomTomTrafficModal(); break;
                     }
                 }).setNegativeButton("CERRAR", null).create();
         showSized(dialog, .74f, .84f);
@@ -3316,62 +2922,26 @@ public class MainActivity extends Activity {
         showSized(dialog, .70f, .55f);
     }
 
-    private void openMediaAccessSettings() {
-        try {
-            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
-        } catch (Exception e) {
-            toast("Esta unidad no expone el ajuste de acceso multimedia");
-        }
-    }
-
-    /** Entry point from Diagnóstico. Android requires the user to approve both access types. */
     private void permissionsModal() {
         boolean locationGranted = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED;
         boolean bluetoothGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
-        boolean mediaGranted = hasMediaAccess();
-        boolean mediaConnected = MediaNotificationListener.isConnected();
         String network = fuelStations == null ? "sin comprobar" : fuelStations.networkLabel();
         String message = "Ubicación precisa: " + (locationGranted ? "concedida" : "pendiente") + "\n"
                 + "Bluetooth: " + (bluetoothGranted ? "concedido/no necesario" : "pendiente") + "\n"
-                + "Acceso multimedia: " + (mediaGranted ? "concedido" : "pendiente") + "\n"
-                + "Lector multimedia: " + (mediaConnected ? "conectado" : mediaGranted
-                        ? "pendiente de reconexión" : "sin permiso") + "\n"
-                + "Red usada por Android: " + network + "\n"
-                + "Internet: permiso normal concedido al instalar\n\n"
-                + "La ubicación permite GPS y gasolineras. El acceso multimedia permite leer "
-                + "solo sesiones o notificaciones que SpeedPlay publique en Android. El análisis "
-                + "del firmware confirma que SpeedPlay puede no publicar la sesión de Android Auto.\n\n"
-                + "Bluetooth PAN no tiene un permiso que iDrive pueda solicitar: el teléfono comparte "
-                + "la conexión, pero la radio debe crear y publicar esa red al sistema Android.";
+                + "Red de Android: " + network + "\n"
+                + "Internet: permiso normal concedido al instalar.\n\n"
+                + "La ubicación se usa para GPS, límites y gasolineras. Bluetooth solo se consulta "
+                + "para el estado del teléfono. La conexión a Internet depende del Wi-Fi o del "
+                + "punto de acceso del teléfono.";
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Permisos de iDrive")
                 .setMessage(message)
-                .setPositiveButton(locationGranted && bluetoothGranted ? "UBICACIÓN OK" : "CONCEDER UBICACIÓN",
+                .setPositiveButton(locationGranted && bluetoothGranted ? "PERMISOS OK" : "CONCEDER UBICACIÓN",
                         (d, w) -> requestLocationIfNeeded())
-                .setNeutralButton(mediaGranted && !mediaConnected ? "RECONECTAR MULTIMEDIA"
-                                : mediaGranted ? "MULTIMEDIA OK" : "ACTIVAR MULTIMEDIA",
-                        (d, w) -> {
-                            if (mediaGranted && !mediaConnected) {
-                                media.requestListenerRebind();
-                                toast("Reconexión del lector multimedia solicitada");
-                            } else openMediaAccessSettings();
-                        })
                 .setNegativeButton("AJUSTES DE APP", (d, w) -> openAppDetailsSettings())
                 .create();
-        showSized(dialog, .68f, .54f);
-    }
-
-    private boolean hasMediaAccess() {
-        try {
-            String enabled = Settings.Secure.getString(getContentResolver(),
-                    "enabled_notification_listeners");
-            ComponentName listener = new ComponentName(this, MediaNotificationListener.class);
-            return enabled != null && (enabled.contains(listener.flattenToString())
-                    || enabled.contains(listener.flattenToShortString()));
-        } catch (Exception ignored) {
-            return false;
-        }
+        showSized(dialog, .68f, .48f);
     }
 
     private void openAppDetailsSettings() {
@@ -3534,10 +3104,14 @@ public class MainActivity extends Activity {
         boolean exportOem = exportOemAfterPicker;
         boolean exportFull = exportFullAfterPicker;
         boolean exportSnapshot = exportSnapshotAfterPicker;
+        boolean exportLogs = exportLogsAfterPicker;
+        boolean exportAutoBundle = exportAutoBundleAfterPicker;
         startUsbCaptureAfterPicker = false;
         exportOemAfterPicker = false;
         exportFullAfterPicker = false;
         exportSnapshotAfterPicker = false;
+        exportLogsAfterPicker = false;
+        exportAutoBundleAfterPicker = false;
         if (resultCode != RESULT_OK || !usbDiagnostics.acceptDirectoryResult(data)) {
             toast("No se autorizó una carpeta escribible para USB DEBUG");
             return;
@@ -3547,6 +3121,8 @@ public class MainActivity extends Activity {
         else if (exportOem) requestOemExport(null);
         else if (exportFull) requestFullExport();
         else if (exportSnapshot) saveUsbSnapshot();
+        else if (exportLogs) usbDiagnostics.exportSessionLogs(this::usbCallback);
+        else if (exportAutoBundle) usbDiagnostics.saveReport("usb_auto", buildUsbSnapshotReport(), this::usbCallback);
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
@@ -3567,23 +3143,82 @@ public class MainActivity extends Activity {
     }
 
     private void startClock() {
+        final long[] lastRenderedMinute = {-1L};
         handler.post(new Runnable() {
             @Override public void run() {
                 Date now = new Date();
-                clock.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(now));
-                date.setText(new SimpleDateFormat("EEEE, d MMMM yyyy", new Locale("es", "ES"))
-                        .format(now).toUpperCase(new Locale("es", "ES")));
-                if (foreground && ++mediaRefreshTick % 2 == 0) {
-                    refreshMedia();
+                long minute = now.getTime() / 60_000L;
+                if (minute != lastRenderedMinute[0]) {
+                    lastRenderedMinute[0] = minute;
+                    clock.setText(new SimpleDateFormat("HH:mm", Locale.getDefault()).format(now));
+                    date.setText(new SimpleDateFormat("EEEE, d MMMM yyyy", new Locale("es", "ES"))
+                            .format(now).toUpperCase(new Locale("es", "ES")));
+                }
+                if (foreground) {
+                    checkRemovableUsb();
                     refreshRadioWidget();
+                    if (whereAmI != null && gps != null && gps.getLastLocation() == null) {
+                        whereAmI.locationUnavailable();
+                    }
                 }
-                if (foreground && whereAmI != null && gps != null
-                        && gps.getLastLocation() == null) {
-                    whereAmI.locationUnavailable();
-                }
-                handler.postDelayed(this, 1000);
+                handler.postDelayed(this, 5_000L);
             }
         });
+    }
+
+    private void checkRemovableUsb() {
+        if (usbDiagnostics == null) return;
+        boolean mounted = usbDiagnostics.removableVolumeMounted();
+        if (!usbMountStateInitialized) {
+            usbMountStateInitialized = true;
+            usbWasMounted = mounted;
+            if (mounted) offerUsbLogCopy();
+            return;
+        }
+        if (mounted && !usbWasMounted) {
+            usbWasMounted = true;
+            usbPromptedForCurrentMount = false;
+            offerUsbLogCopy();
+        } else if (!mounted && usbWasMounted) {
+            usbWasMounted = false;
+            usbPromptedForCurrentMount = false;
+        }
+    }
+
+    private void offerUsbLogCopy() {
+        if (!foreground || isFinishing() || usbPromptedForCurrentMount) return;
+        usbPromptedForCurrentMount = true;
+        AppSessionLog.event("USB", "Memoria extraíble detectada; solicitando consentimiento para exportar logs");
+        new AlertDialog.Builder(this).setTitle("USB detectado")
+                .setMessage("¿Quieres copiar ahora todos los logs de sesión de iDrive y el informe de diagnóstico "
+                        + "a la memoria USB? Se incluirán las sesiones conservadas y los eventos Jancar y Android "
+                        + "que la app haya podido registrar. La radio seguirá funcionando normalmente si eliges No.")
+                .setPositiveButton("SÍ, COPIAR", (dialog, which) -> exportAutomaticUsbBundle())
+                .setNegativeButton("NO", (dialog, which) ->
+                        AppSessionLog.event("USB", "Usuario rechazó exportación automática; funcionamiento normal"))
+                .setOnCancelListener(dialog ->
+                        AppSessionLog.event("USB", "Diálogo de exportación cancelado; funcionamiento normal"))
+                .show();
+    }
+
+    private void exportAutomaticUsbBundle() {
+        if (!usbDiagnostics.hasDirectoryPermission()) {
+            exportAutoBundleAfterPicker = true;
+            exportOemAfterPicker = false;
+            exportFullAfterPicker = false;
+            exportSnapshotAfterPicker = false;
+            exportLogsAfterPicker = false;
+            startUsbCaptureAfterPicker = false;
+            new AlertDialog.Builder(this).setTitle("Elegir carpeta USB")
+                    .setMessage("Android necesita autorización para escribir en la memoria. Selecciona la carpeta IDRIVE_DEBUG; "
+                            + "después se copiarán automáticamente el informe y todos los logs de sesión conservados.")
+                    .setPositiveButton("ELEGIR CARPETA", (dialog, which) -> selectUsbDirectory(false))
+                    .setNegativeButton("CANCELAR", (dialog, which) -> exportAutoBundleAfterPicker = false)
+                    .show();
+            return;
+        }
+        AppSessionLog.event("USB", "Exportación automática consentida; preparando informe y sesiones guardadas");
+        usbDiagnostics.saveReport("usb_auto", buildUsbSnapshotReport(), this::usbCallback);
     }
 
     private void saveDiagnostic(boolean includeCorrelation) {
@@ -3624,14 +3259,10 @@ public class MainActivity extends Activity {
 
     private String buildDiagnosticReport() {
         return diagnostics.buildReport() + "\n\n" + vehicleData.diagnosticReport()
-                + "\n\n" + media.radioDiagnostic(apps.getPackage("radio"))
-                + "\n\n" + media.mediaDiagnostic(apps.getPackage("auto"))
                 + "\n\n" + oemRadio.diagnosticReport()
                 + "\n\n" + fuelStations.networkDiagnostic()
                 + "\n\nNAVEGACIÓN DE GASOLINERAS\n"
                 + "Destino actual=Google Maps local mediante google.navigation/geo.\n"
-                + "SpeedPlay exportado no publica un Intent o comando verificable para enviar destinos "
-                + "a la proyección Android Auto; no se transmite ningún protocolo supuesto.\n"
                 + "\n" + speedLimits.diagnostic()
                 + "\n" + dgtSpeeds.diagnostic()
                 + "\n" + invive.diagnostic()

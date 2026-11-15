@@ -1,7 +1,7 @@
 {
   "schema": "e87-data-bundle-v1",
-  "bundle_version": "20261113-060959",
-  "generated_at_utc": "2026-11-13T06:10:13.536983+00:00",
+  "bundle_version": "20261114-173309",
+  "generated_at_utc": "2026-11-14T19:38:51.501942+00:00",
   "repository": "EMoyaP/BMW-E87-iDrive",
   "coverage": [
     "Alicante",
@@ -15,7 +15,7 @@
     {
       "name": "e87_dgt_invive_spain.xml",
       "bytes": 4380763,
-      "sha256": "404c092fb9689ea1a03a31031f0203a25044037f28aa1ae95e7e6f72e85e4a2d",
+      "sha256": "282bfa49d9a85a7b637c55df852c577ae040d8f601784c328a8ad4557a415952",
       "records": 2662,
       "roles": [
         "surveillance"
@@ -54,9 +54,9 @@
     },
     {
       "name": "e87_osm_navigation_albacete.json.gz",
-      "bytes": 19889050,
-      "sha256": "b75a3eeaf69b0fd09d80e40bb4ab3857da84d4b02c894145c612e75d1077fec3",
-      "records": 133811,
+      "bytes": 19970456,
+      "sha256": "42f07aedf1e12816811f8cc6982adce6e4bc967bb4b3760e5ba86cdb8b2fdc5a",
+      "records": 134271,
       "roles": [
         "routing",
         "map_matching"
@@ -65,9 +65,9 @@
     },
     {
       "name": "e87_osm_navigation_alicante.json.gz",
-      "bytes": 23415316,
-      "sha256": "c761de98d261f4a75c3283e1ad1c94797cea4608de2c0a8be0cb85cb1bb308f6",
-      "records": 171535,
+      "bytes": 23448266,
+      "sha256": "a964c321f2f2a9a0d46728a62bd2ade9ad4b66cda0e7a08099f5de9105cf85ea",
+      "records": 171677,
       "roles": [
         "routing",
         "map_matching"
@@ -76,9 +76,9 @@
     },
     {
       "name": "e87_osm_navigation_almeria.json.gz",
-      "bytes": 10395245,
-      "sha256": "af0b65574d04979765a400e97f014f063803b5af26ad2ee33125cfe5df96ec5b",
-      "records": 77115,
+      "bytes": 10406170,
+      "sha256": "b29450a9041bb75901bd86eb2de6a054f7f3535fa9b8ec3df3aacdf5c798e0e9",
+      "records": 77206,
       "roles": [
         "routing",
         "map_matching"
@@ -87,9 +87,9 @@
     },
     {
       "name": "e87_osm_navigation_murcia.json.gz",
-      "bytes": 21004133,
-      "sha256": "f1b4682e3395c45203df4594adbd84a4bbc2379610747363d900c3f1f16b77ab",
-      "records": 158373,
+      "bytes": 20829300,
+      "sha256": "96f03ca6eee3c25861f16ccf8690c15eab495db83868c7e96390e8967d4f90a5",
+      "records": 156974,
       "roles": [
         "routing",
         "map_matching"
@@ -98,9 +98,9 @@
     },
     {
       "name": "e87_osm_navigation_valencia.json.gz",
-      "bytes": 33079857,
-      "sha256": "390d16a8e127589b02b3c50cfb189135cac58b926bd81da89f291b2eab471a40",
-      "records": 234834,
+      "bytes": 33186797,
+      "sha256": "7f28a431a48a031c98783b50b6578681cc41e9d29d7ed1c6673c00b05e96e0a7",
+      "records": 235370,
       "roles": [
         "routing",
         "map_matching"
@@ -109,8 +109,8 @@
     },
     {
       "name": "e87_osm_radars_albacete.json.gz",
-      "bytes": 14123,
-      "sha256": "d764badc9ffaa76210bf7d4256cf4c27c06a29de8286a9be92e3dd4277d4338a",
+      "bytes": 14045,
+      "sha256": "6382ccf34be20519241f613391a7b92b2a1e1ac2ea9576d9a59365f13ca210c7",
       "records": 223,
       "roles": [
         "radar",
@@ -120,8 +120,8 @@
     },
     {
       "name": "e87_osm_radars_alicante.json.gz",
-      "bytes": 19123,
-      "sha256": "73a850cb0079ddd702550d47afbff1f3d2182d353c6592fe33ed98f6c58240a3",
+      "bytes": 19278,
+      "sha256": "d10dd5168dda61a31db6b580d0d95cf240ae5cca40125bfa3c985c6677084e94",
       "records": 442,
       "roles": [
         "radar",
@@ -131,8 +131,8 @@
     },
     {
       "name": "e87_osm_radars_almeria.json.gz",
-      "bytes": 7772,
-      "sha256": "90faed4cf07fca88922a66e95731b5d23eef0411b8704f7145173c46312db1dd",
+      "bytes": 7773,
+      "sha256": "357d537fe3c5fa07fde59871fe8b5b0989fe3b055cebecb10a34c6c693a15086",
       "records": 145,
       "roles": [
         "radar",
@@ -142,9 +142,9 @@
     },
     {
       "name": "e87_osm_radars_murcia.json.gz",
-      "bytes": 13531,
-      "sha256": "f1e1dc8930f5ea4ef51df9b33be147b95d38cbcae13550e8104c44cd700bfd35",
-      "records": 234,
+      "bytes": 12585,
+      "sha256": "dc2ac374910a8fa6ea9036ed2c0f10228b77ab29e772cc55632fd58a1849dcf1",
+      "records": 228,
       "roles": [
         "radar",
         "routing"
@@ -153,9 +153,9 @@
     },
     {
       "name": "e87_osm_radars_valencia.json.gz",
-      "bytes": 23100,
-      "sha256": "43bc53224cb43ee333ba80b571ab156d5c4c679d14bf133e351d62c02f2e429c",
-      "records": 497,
+      "bytes": 23023,
+      "sha256": "9c8c1146902a3d478dee13d6e0fe5ca388265c70dd9b37f346a2271eaec64c7a",
+      "records": 494,
       "roles": [
         "radar",
         "routing"
@@ -164,63 +164,63 @@
     },
     {
       "name": "e87_speed_limits_albacete.tsv.gz",
-      "bytes": 10033664,
-      "sha256": "02cd93e8c30fe04c08142834b028a71b1025faca6b1d7836a500306624fa4e88",
-      "records": 129387,
+      "bytes": 10062560,
+      "sha256": "f13eebf93e5da279b3a9af026773dfb80456137b0f1cf45319875b4ce3cc1a67",
+      "records": 129779,
       "roles": [
         "dashboard",
         "map_matching",
         "routing"
       ],
-      "source": "OpenStreetMap"
+      "source": "Overpass (teselado)"
     },
     {
       "name": "e87_speed_limits_alicante.tsv.gz",
-      "bytes": 11338116,
-      "sha256": "bb2011b2dcbfa2e7d5abe819b6b58f378a0df658683b8b4b7af9f826d8d839c1",
-      "records": 167053,
+      "bytes": 11347272,
+      "sha256": "2af1e9f84f04bbe1e17b2f379ab21817da0b06699f2f6ca6b556c938b196dfc4",
+      "records": 167173,
       "roles": [
         "dashboard",
         "map_matching",
         "routing"
       ],
-      "source": "OpenStreetMap"
+      "source": "Overpass (teselado)"
     },
     {
       "name": "e87_speed_limits_almeria.tsv.gz",
-      "bytes": 5085313,
-      "sha256": "4e7c5fe5325335fc6a1a024357a44def8064c8ecc5232d542f350fbc3f5d5334",
-      "records": 74015,
+      "bytes": 5087639,
+      "sha256": "fffa1ae7b18b3482f8abfbdb23cd8a9bdcd429dfc5441b5e47b7829c08eb4e9d",
+      "records": 74097,
       "roles": [
         "dashboard",
         "map_matching",
         "routing"
       ],
-      "source": "OpenStreetMap"
+      "source": "Overpass (teselado)"
     },
     {
       "name": "e87_speed_limits_murcia.tsv.gz",
-      "bytes": 10278135,
-      "sha256": "25deb4d43aff00cb48d749cbe6b2761d825ba913de77b977dccb74d9fbebe4e3",
-      "records": 153293,
+      "bytes": 10209923,
+      "sha256": "ca94e2758aed6e51f7117761e115b0f78db9c3bd5a3aa44b08eb71b50f1c0498",
+      "records": 151991,
       "roles": [
         "dashboard",
         "map_matching",
         "routing"
       ],
-      "source": "OpenStreetMap"
+      "source": "Overpass (teselado)"
     },
     {
       "name": "e87_speed_limits_valencia.tsv.gz",
-      "bytes": 16060578,
-      "sha256": "53d46e3792eb60197967fe8ba6abf30c5ee731d1effce79bbd1aa41e84294274",
-      "records": 227355,
+      "bytes": 16115419,
+      "sha256": "1d23e97830cebf3bf51d37d55b5e545e98d956d366cf293f9790505cc4ea0898",
+      "records": 227874,
       "roles": [
         "dashboard",
         "map_matching",
         "routing"
       ],
-      "source": "OpenStreetMap"
+      "source": "Overpass (teselado)"
     }
   ]
 }

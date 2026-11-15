@@ -39,14 +39,11 @@ final class DrivingDashboardView extends FrameLayout {
             new int[]{Color.TRANSPARENT,Color.rgb(81,151,196),Color.TRANSPARENT},
             new float[]{0,.5f,1},Shader.TileMode.CLAMP);
     private Double speed;
-    private Bitmap mediaArtwork;
     private Integer limit;
     private Integer cameraLimit;
     void radarLimit(Integer value) { cameraLimit = value; invalidate(); }
     private boolean exact;
     private String range, consumption, temperature;
-    private String mediaTitle, mediaArtist, mediaRemaining;
-    private String maneuver, maneuverDistance;
     private View sign, radar, surveillance, incident, androidAuto, menu;
     private final FrameLayout whereAmIPanel;
     private final TextView whereAmIAddress;
@@ -127,18 +124,6 @@ final class DrivingDashboardView extends FrameLayout {
 
     void readings(Double speed, String range, String consumption, String temperature) {
         this.speed = speed; this.range = range; this.consumption = consumption; this.temperature = temperature;
-        invalidate();
-    }
-
-    void mediaTrack(String title, String artist, String remaining, Bitmap artwork) {
-        mediaTitle = title; mediaArtist = artist; mediaRemaining = remaining;
-        mediaArtwork = artwork;
-        invalidate();
-    }
-
-    void navigationInstruction(MediaNotificationListener.NavigationSnapshot value) {
-        maneuver = value == null ? null : value.maneuver;
-        maneuverDistance = value == null ? null : value.distance;
         invalidate();
     }
 
@@ -355,12 +340,8 @@ final class DrivingDashboardView extends FrameLayout {
             canvas.drawLine(point[0]+tangent[1]*5,point[1]-tangent[0]*5,
                     point[0]-tangent[1]*28,point[1]+tangent[0]*28,paint);
         }
-        if (maneuver != null) {
-            drawManeuver(canvas);
-        } else {
-            text(canvas, speed == null ? "—" : String.format(Locale.getDefault(), "%.0f", speed), 245, 354, 145, speed == null ? WHITE : active, false);
-            text(canvas, "km/h", 245, 392, 31, MUTED, false);
-        }
+        text(canvas, speed == null ? "—" : String.format(Locale.getDefault(), "%.0f", speed), 245, 354, 145, speed == null ? WHITE : active, false);
+        text(canvas, "km/h", 245, 392, 31, MUTED, false);
         // Three equal visual columns: identical baseline, type size and vertical rhythm.
         // The Android Auto shortcut occupies a separate fourth slot, so it never displaces a
         // reading or overlaps a radar/surveillance notice above it.
@@ -401,44 +382,8 @@ final class DrivingDashboardView extends FrameLayout {
     }
 
     private void drawBrand(Canvas canvas) {
-        // Independent roundel and live type: no rectangular screenshot or visible crop.
-        if (hasTrack()) {
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.BLACK);
-            canvas.drawRect(465, 20, 925, 100, paint);
-            float textLeft = 485;
-            float textWidth = 420;
-            if (mediaArtwork != null && !mediaArtwork.isRecycled()) {
-                RectF art = new RectF(476, 29, 532, 85);
-                paint.setColor(Color.rgb(10, 24, 36));
-                canvas.drawRoundRect(art, 5, 5, paint);
-                RectF inner = new RectF(478, 31, 530, 83);
-                canvas.save();
-                Path clip = new Path();
-                clip.addRoundRect(inner, 4, 4, Path.Direction.CW);
-                canvas.clipPath(clip);
-                canvas.drawBitmap(mediaArtwork, null, inner, paint);
-                canvas.restore();
-                textLeft = 546;
-                textWidth = 350;
-            }
-            float textCenter = textLeft + textWidth / 2f;
-            String visibleTitle = fitted(mediaTitle, 24, textWidth);
-            text(canvas, visibleTitle, textCenter, 57,
-                    fittedSize(visibleTitle, 24, textWidth), WHITE, true);
-            String visibleArtist = fitted(mediaArtist, 15, textWidth);
-            if (!visibleArtist.isEmpty()) {
-                text(canvas, visibleArtist, textCenter, 80,
-                        fittedSize(visibleArtist, 15, textWidth), MUTED, false);
-            }
-            if (mediaRemaining != null && !mediaRemaining.trim().isEmpty()) {
-                paint.setTextAlign(Paint.Align.RIGHT);
-                paint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-                paint.setTextSize(12);
-                paint.setColor(Color.rgb(91, 171, 246));
-                canvas.drawText(mediaRemaining, 919, 97, paint);
-            }
-        } else if(brand!=null) {
+        // Stable BMW/iDrive identity; radio metadata is not available reliably on this unit.
+        if (brand!=null) {
             canvas.save(); canvas.clipPath(emblemClip);
             canvas.drawBitmap(brand,brandSource,brandDestination,paint); canvas.restore();
             paint.setTextAlign(Paint.Align.LEFT); paint.setTextSize(33);
@@ -451,50 +396,6 @@ final class DrivingDashboardView extends FrameLayout {
         paint.setShader(brandLine); paint.setStrokeWidth(1);
         canvas.drawLine(465,101,925,101,paint); paint.setShader(null);
         text(canvas,"118d  ·  E87",695,125,17,MUTED,false);
-    }
-
-    private boolean hasTrack() {
-        return mediaTitle != null && !mediaTitle.trim().isEmpty();
-    }
-
-    private void drawManeuver(Canvas canvas) {
-        String glyph;
-        switch (maneuver) {
-            case "LEFT": glyph = "↰"; break;
-            case "RIGHT": glyph = "↱"; break;
-            case "ROUNDABOUT": glyph = "⟳"; break;
-            case "EXIT": glyph = "↗"; break;
-            default: glyph = "↑"; break;
-        }
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.rgb(86, 190, 255));
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        paint.setTextSize(112);
-        canvas.drawText(glyph, 245, 337, paint);
-        text(canvas, maneuverDistance == null ? "" : maneuverDistance,
-                245, 397, 42, WHITE, true);
-    }
-
-    private static String fitted(String value, float size, float width) {
-        if (value == null) return "";
-        String clean = value.replace('\n', ' ').replace('\r', ' ').trim();
-        Paint measure = new Paint(Paint.ANTI_ALIAS_FLAG);
-        measure.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        measure.setTextSize(size);
-        while (clean.length() > 1 && measure.measureText(clean) > width) {
-            clean = clean.substring(0, clean.length() - 2).trim() + "…";
-        }
-        return clean;
-    }
-
-    private static float fittedSize(String value, float size, float width) {
-        if (value == null) return size;
-        Paint measure = new Paint(Paint.ANTI_ALIAS_FLAG);
-        measure.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-        measure.setTextSize(size);
-        float actual = measure.measureText(value);
-        return actual > width ? Math.max(13, size * width / actual) : size;
     }
 
     private float distanceFor(double speed) {

@@ -58,16 +58,6 @@
         </activity>
 
         <service
-            android:name=".MediaNotificationListener"
-            android:label="iDrive · multimedia"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService"/>
-            </intent-filter>
-        </service>
-
-        <service
             android:name=".DataUpdateJobService"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="true"/>
@@ -76,17 +66,6 @@
             android:name=".AutomaticOnlineUpdateJobService"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false"/>
-
-        <!-- Passive SpeedPlay metadata observer. It never sends commands. -->
-        <receiver
-            android:name=".SpeedPlayMediaReceiver"
-            android:enabled="@bool/speedplay_manifest_receiver_enabled"
-            android:exported="true"
-            tools:ignore="ExportedReceiver">
-            <intent-filter>
-                <action android:name="com.suding.speedplay.ACTION_MEDIA_PLAY_INFO"/>
-            </intent-filter>
-        </receiver>
 
         <provider
             android:name=".DiagnosticFileProvider"

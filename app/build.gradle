@@ -94,12 +94,26 @@ android {
         applicationId "com.ug.e87idrive"
         minSdk 23
         targetSdk 35
-        versionCode 85
-        versionName "2.0.5"
+        versionCode 88
+        versionName "2.0.8"
         buildConfigField "String", "TOMTOM_API_KEY", "\"${tomTomBundledKeyJava}\""
     }
 
     buildFeatures { buildConfig true }
+
+    // Keep test builds installable beside the signed radio release so field diagnostics
+    // never require uninstalling the production app or erasing its local data.
+    buildTypes {
+        release {
+            // Use the same local signing key as the previously installed radio APK so
+            // Keep this release installable as an in-place upgrade on the radio.
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+    }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

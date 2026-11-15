@@ -213,6 +213,24 @@ public final class UsbDiagnosticRecorder {
         });
     }
 
+    /** Exports every retained runtime session log without generating the larger diagnostic bundle. */
+    public void exportSessionLogs(Callback callback) {
+        io.execute(() -> {
+            try {
+                Uri directory = configuredDirectory();
+                if (directory == null) throw new IllegalStateException("No hay una carpeta USB autorizada");
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date());
+                String exported = writeRuntimeLog(directory, timestamp);
+                if (exported.isEmpty()) throw new IllegalStateException("No hay logs de sesión para exportar");
+                lastError = "";
+                notifyCallback(callback, true, "Todos los logs de iDrive exportados: " + exported);
+            } catch (Exception error) {
+                lastError = shortError(error);
+                notifyCallback(callback, false, "No se pudieron exportar los logs: " + lastError);
+            }
+        });
+    }
+
     /**
      * Copies a narrow, caller-provided OEM artifact allowlist to the user-approved directory.
      * No package is executed, loaded or modified. Limits keep the operation suitable for this head unit.

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>BMW E87 · Rutas de conducción</title>
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <style>
+    :root { color-scheme: dark; --bg:#06111d; --panel:#0a1b2a; --line:#173a55; --blue:#67b8ed; --muted:#a4b8c9; --text:#eef5fb; }
+    * { box-sizing:border-box; }
+    body { margin:0; height:100vh; min-height:520px; display:grid; grid-template-rows:auto 1fr; background:var(--bg); color:var(--text); font:15px "Segoe UI",Arial,sans-serif; }
+    header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px 18px; background:linear-gradient(120deg,#071421,#0a2032); border-bottom:1px solid var(--line); }
+    h1 { font-size:19px; margin:0 8px 0 0; white-space:nowrap; }
+    button,select,.picker { min-height:38px; border:1px solid #285677; border-radius:7px; background:#071725; color:var(--text); padding:8px 12px; font:inherit; }
+    button,.picker { cursor:pointer; }
+    button:hover,.picker:hover { background:#102c42; border-color:var(--blue); }
+    select { min-width:190px; }
+    .picker input { display:none; }
+    #summary { margin-left:auto; color:var(--muted); font-size:13px; }
+    main { display:grid; grid-template-columns:minmax(0,1fr) 320px; min-height:0; }
+    #mapPane { position:relative; min-width:0; min-height:0; background:#071421; }
+    #map { position:absolute; inset:0; background:#071421; }
+    #routePanel { min-height:0; overflow:auto; padding:14px; background:#081725; border-left:1px solid var(--line); }
+    #routePanel h2 { margin:0 0 10px; color:#b9d7eb; font-size:15px; }
+    #routeList { display:flex; flex-direction:column; gap:9px; }
+    .routeCard { border:1px solid #24445c; border-radius:8px; background:#0b1d2c; padding:10px 11px; cursor:pointer; }
+    .routeCard:hover,.routeCard.active { border-color:#57b8ed; background:#10283a; }
+    .routeTitle { color:#8fd1fb; font-size:12px; font-weight:700; margin-bottom:5px; }
+    .routeTime { font-size:14px; font-weight:600; margin-bottom:7px; }
+    .routeStats { display:grid; grid-template-columns:1fr 1fr; gap:5px 10px; color:var(--muted); font-size:12px; }
+    .routeStats b { display:block; color:var(--text); font-size:13px; margin-top:2px; }
+    #routeHint { color:var(--muted); font-size:12px; line-height:1.45; }
+    #empty { position:absolute; z-index:500; top:18px; left:50%; transform:translateX(-50%); width:min(620px,calc(100% - 32px)); padding:17px 20px; border:1px solid #24506d; border-radius:10px; background:#061522ee; box-shadow:0 12px 38px #0008; line-height:1.5; }
+    #empty strong { color:#9dd8ff; }
+    .legend { position:absolute; z-index:450; right:14px; bottom:18px; padding:10px 12px; border:1px solid #31546d; border-radius:8px; background:#061522e8; font-size:12px; box-shadow:0 5px 22px #0006; }
+    .legend b { display:block; margin-bottom:6px; }
+    .ramp { display:flex; gap:5px; align-items:center; color:var(--muted); }
+    .swatch { width:22px; height:8px; border-radius:5px; }
+    .leaflet-container { font-family:inherit; }
+    @media(max-width:900px) { main { grid-template-columns:minmax(0,1fr) 270px; } }
+    @media(max-width:650px) { body { min-height:450px; } main { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) 230px; } #routePanel { border-left:0; border-top:1px solid var(--line); } #summary { margin-left:0; width:100%; } h1 { width:100%; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>BMW E87 · Rutas de conducción</h1>
+    <label class="picker">Cargar logs del USB<input id="files" type="file" webkitdirectory multiple accept=".txt,.log,.json"></label>
+    <select id="day" aria-label="Filtrar rutas por fecha" disabled><option>Todas las rutas</option></select>
+    <button id="fit" disabled>Ver rutas</button>
+    <span id="summary">Selecciona la carpeta IDRIVE_DEBUG del USB.</span>
+  </header>
+  <main>
+    <section id="mapPane">
+      <div id="map"></div>
+      <div id="empty"><strong>Carga los logs exportados por la radio.</strong><br>El mapa base OSM muestra nombres y comercios cuando hay conexión. El visor carga automáticamente los segmentos locales, deduplica copias de logs y permite filtrar por fecha. Los tramos más oscuros indican más recorridos distintos.</div>
+      <div class="legend"><b>Densidad de recorridos</b><div class="ramp"><span>Menos veces</span><i class="swatch" style="background:#82d4ff"></i><i class="swatch" style="background:#3196d2"></i><i class="swatch" style="background:#17659d"></i><i class="swatch" style="background:#0b3557"></i><span>Más veces</span></div></div>
+    </section>
+    <aside id="routePanel"><h2>Recorridos</h2><div id="routeHint">Carga la carpeta de logs para ver horario, duración y velocidades registradas.</div><div id="routeList"></div></aside>
+  </main>
+  <script src="vendor/leaflet.js"></script>
+  <script>
+  (() => {
+    const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([38.25,-0.65], 10);
+    map.getContainer().style.background='#06111d';
+    map.createPane('roadsPane'); map.getPane('roadsPane').style.zIndex=350;
+    map.createPane('tracksPane'); map.getPane('tracksPane').style.zIndex=450;
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom:19, attribution:'© OpenStreetMap contributors'
+    }).addTo(map);
+    const palette = ['#82d4ff','#3196d2','#17659d','#0b3557'];
+    const filesEl=document.getElementById('files'), dayEl=document.getElementById('day');
+    const fitEl=document.getElementById('fit'), summaryEl=document.getElementById('summary');
+    const emptyEl=document.getElementById('empty');
+    const routeListEl=document.getElementById('routeList'), routeHintEl=document.getElementById('routeHint');
+    let tracks=[], drawn=[], roadLayers=[], selectedTrackId=null;
+    const timestampRe=/^(\d{4}-\d\d-\d\d)\s+(\d\d:\d\d:\d\d\.\d{1,3})/;
+    const coordRe=/\blat\s*=\s*(-?\d{1,2}(?:\.\d+)?)\s*[·,; ]+\s*lon\s*=\s*(-?\d{1,3}(?:\.\d+)?)/i;
+    const speedRe=/\b(?:velocidad|speed)\s*=\s*([\d.,]+)\s*km\/h/i;
+    const rad=(v)=>v*Math.PI/180;
+    function cell(p) { const latStep=.00025, lonStep=.00025*Math.cos(rad(p.lat)); return Math.round(p.lat/latStep)+':'+Math.round(p.lon/lonStep); }
+    function clearDrawn(){drawn.forEach(x=>map.removeLayer(x));drawn=[];}
+    function clearRoads(){roadLayers.forEach(x=>map.removeLayer(x));roadLayers=[];}
+    function boundsForTracks(){
+      const pts=tracks.flatMap(t=>t.points); if(!pts.length)return null;
+      return {minLat:Math.min(...pts.map(p=>p.lat))-.035,maxLat:Math.max(...pts.map(p=>p.lat))+.035,
+        minLon:Math.min(...pts.map(p=>p.lon))-.045,maxLon:Math.max(...pts.map(p=>p.lon))+.045};
+    }
+    function roadStyle(kind){
+      const k=(kind||'').toLowerCase();
+      if(k==='motorway'||k==='motorway_link')return {color:'#315d78',weight:2.5};
+      if(k==='trunk'||k==='trunk_link')return {color:'#294b65',weight:2.1};
+      if(k==='primary'||k==='primary_link')return {color:'#233f58',weight:1.8};
+      if(k==='secondary'||k==='secondary_link')return {color:'#1d354c',weight:1.5};
+      if(k==='tertiary'||k==='tertiary_link')return {color:'#182d42',weight:1.25};
+      return {color:'#142638',weight:.9};
+    }
+    async function importRoadStream(stream,fileName,bounds){
+      if(typeof DecompressionStream==='undefined')throw new Error('Este navegador no permite abrir cartografía gzip. Usa Edge o Chrome actualizados.');
+      const reader=stream.pipeThrough(new DecompressionStream('gzip')).pipeThrough(new TextDecoderStream()).getReader();
+      let pending='', lines=0, roadCount=0;
+      const consume=line=>{
+        if(!line||line[0]==='#')return;
+        const c=line.split('\t'); if(c.length<9)return;
+        const pts=[];
+        for(const pair of c[8].split(';')){const xy=pair.split(',');if(xy.length<2)continue;const lat=Number(xy[0]),lon=Number(xy[1]);if(Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180)pts.push([lat,lon]);}
+        if(pts.length<2||!pts.some(p=>p[0]>=bounds.minLat&&p[0]<=bounds.maxLat&&p[1]>=bounds.minLon&&p[1]<=bounds.maxLon))return;
+        const style=roadStyle(c[3]), ref=(c[6]||'').trim(), name=(c[7]||'').trim(), label=[ref,name].filter(Boolean).join(' · ');
+        const layer=L.polyline(pts,{pane:'roadsPane',color:style.color,weight:style.weight,opacity:.28,interactive:!!label});
+        if(label)layer.bindTooltip(label,{sticky:true,direction:'top',opacity:.92});
+        layer.addTo(map);roadLayers.push(layer);roadCount++;
+      };
+      while(true){const {value,done}=await reader.read();if(done)break;pending+=value;let cut;while((cut=pending.indexOf('\n'))>=0){consume(pending.slice(0,cut).replace(/\r$/,''));pending=pending.slice(cut+1);lines++;if(lines%20000===0){summaryEl.textContent=`Leyendo cartografía ${fileName}… ${lines.toLocaleString('es-ES')} filas`;await new Promise(resolve=>setTimeout(resolve,0));}}}
+      if(pending)consume(pending.replace(/\r$/,''));
+      return roadCount;
+    }
+    async function loadRoads(){
+      if(!tracks.length)return;
+      const bounds=boundsForTracks(); clearRoads();
+      try{
+        const response=await fetch('/api/roads'); if(!response.ok)throw new Error('No está disponible el servidor local de cartografía. Abre el acceso directo del escritorio.');
+        const names=await response.json(); let count=0;
+        for(let i=0;i<names.length;i++){
+          summaryEl.textContent=`Cargando cartografía OSM ${i+1}/${names.length}: ${names[i]}`;
+          const data=await fetch('/api/roads/'+encodeURIComponent(names[i]));
+          if(!data.ok)throw new Error('No se pudo leer '+names[i]);
+          count+=await importRoadStream(data.body,names[i],bounds);
+        }
+        render(); summaryEl.textContent+=` · ${count.toLocaleString('es-ES')} tramos OSM`;
+      }catch(error){clearRoads();render();summaryEl.textContent=error.message;}
+    }
+    function addPath(points, density) {
+      if(points.length<2) return;
+      for(let i=1;i<points.length;i++) {
+        const a=points[i-1], b=points[i];
+        if(haversine(a,b)>700) continue;
+        const count=Math.max(density.get(cell(a))?.size||1,density.get(cell(b))?.size||1);
+        const bucket=count===1?0:count<=3?1:count<=7?2:3;
+        const line=L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{pane:'tracksPane',color:palette[bucket],weight:bucket===3?6:4,opacity:.96,lineCap:'round',lineJoin:'round'}).addTo(map);
+        drawn.push(line);
+      }
+    }
+    function haversine(a,b){const d1=rad(b.lat-a.lat),d2=rad(b.lon-a.lon),q=Math.sin(d1/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(d2/2)**2;return 12742000*Math.asin(Math.sqrt(q));}
+    function makeDensity(selected) {
+      const density=new Map();
+      selected.forEach((tr,trackIndex)=>{ for(let i=1;i<tr.points.length;i++) {
+        const a=tr.points[i-1],b=tr.points[i],distance=haversine(a,b); if(distance>700)continue;
+        const steps=Math.max(1,Math.ceil(distance/18));
+        for(let j=0;j<=steps;j++){const t=j/steps,p={lat:a.lat+(b.lat-a.lat)*t,lon:a.lon+(b.lon-a.lon)*t},k=cell(p);if(!density.has(k))density.set(k,new Set());density.get(k).add(trackIndex);}
+      }});
+      return density;
+    }
+    function clock(ms){return new Date(ms).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});}
+    function duration(ms){const minutes=Math.max(0,Math.round(ms/60000));const h=Math.floor(minutes/60),m=minutes%60;return h?`${h} h ${String(m).padStart(2,'0')} min`:`${m} min`;}
+    function routeDistance(track){let meters=0;for(let i=1;i<track.points.length;i++)meters+=haversine(track.points[i-1],track.points[i]);return meters/1000;}
+    function routeSpeeds(track){
+      const points=track.points.filter(p=>Number.isFinite(p.speed));
+      if(!points.length)return null;
+      let weighted=0,elapsed=0;
+      for(let i=1;i<points.length;i++){const dt=(points[i].time-points[i-1].time)/1000;if(dt<=0||dt>60)continue;weighted+=(points[i].speed+points[i-1].speed)*.5*dt;elapsed+=dt;}
+      return {min:Math.min(...points.map(p=>p.speed)),max:Math.max(...points.map(p=>p.speed)),mean:elapsed?weighted/elapsed:points.reduce((s,p)=>s+p.speed,0)/points.length};
+    }
+    function renderRouteCards(selected){
+      routeListEl.replaceChildren();
+      routeHintEl.textContent=selected.length?`${selected.length} recorrido(s) · pulsa una ficha para enfocarlo en el mapa.`:'No hay recorridos para esta fecha.';
+      selected.forEach((track,index)=>{
+        const speeds=routeSpeeds(track);
+        const first=track.points[0],last=track.points[track.points.length-1];
+        const card=document.createElement('article');card.className='routeCard'+(track.id===selectedTrackId?' active':'');
+        card.innerHTML=`<div class="routeTitle">${new Date(track.day+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'2-digit',month:'short'})} · RECORRIDO ${index+1}</div><div class="routeTime">${clock(first.time)} – ${clock(last.time)}</div><div class="routeStats"><span>Tiempo<b>${duration(last.time-first.time)}</b></span><span>Distancia<b>${routeDistance(track).toFixed(1)} km</b></span><span>Vel. mínima<b>${speeds?Math.round(speeds.min)+' km/h':'Sin registro'}</b></span><span>Media GPS<b>${speeds?speeds.mean.toFixed(1)+' km/h':'Sin registro'}</b></span><span>Vel. máxima<b>${speeds?Math.round(speeds.max)+' km/h':'Sin registro'}</b></span></div>`;
+        card.addEventListener('click',()=>{selectedTrackId=selectedTrackId===track.id?null:track.id;render();});
+        routeListEl.appendChild(card);
+      });
+    }
+    function render() {
+      clearDrawn(); const selectedDay=dayEl.value;
+      const byDay=selectedDay==='*'?tracks:tracks.filter(t=>t.day===selectedDay);
+      if(selectedTrackId!==null&&!byDay.some(t=>t.id===selectedTrackId))selectedTrackId=null;
+      const selected=selectedTrackId===null?byDay:byDay.filter(t=>t.id===selectedTrackId);
+      const density=makeDensity(selected), bounds=[];
+      selected.forEach(t=>{t.points.forEach(p=>bounds.push([p.lat,p.lon]));addPath(t.points,density);});
+      if(bounds.length){map.fitBounds(bounds,{padding:[28,28],maxZoom:16});emptyEl.style.display='none';}
+      else {emptyEl.style.display='block';}
+      renderRouteCards(byDay);
+      const points=selected.reduce((n,t)=>n+t.points.length,0);
+      const days=new Set(selected.map(t=>t.day)).size;
+      summaryEl.textContent=`${selected.length} trayecto(s) · ${points.toLocaleString('es-ES')} posiciones · ${days} día(s)`;
+    }
+    async function readFile(file) {
+      if(file.size>80*1024*1024) return '';
+      try{return await file.text();}catch(_){return '';}
+    }
+    filesEl.addEventListener('change',async()=>{
+      const files=[...filesEl.files].filter(f=>/\.(txt|log|json)$/i.test(f.name));
+      if(!files.length){summaryEl.textContent='No se encontraron archivos de texto compatibles.';return;}
+      summaryEl.textContent=`Leyendo ${files.length} archivos…`;
+      const unique=new Map(); let read=0;
+      for(const file of files){
+        const content=await readFile(file); read++;
+        for(const line of content.split(/\r?\n/)){
+          const ts=line.match(timestampRe), xy=line.match(coordRe); if(!ts||!xy)continue;
+          const lat=Number(xy[1]),lon=Number(xy[2]); if(!Number.isFinite(lat)||!Number.isFinite(lon)||Math.abs(lat)>90||Math.abs(lon)>180)continue;
+          const iso=ts[1]+'T'+ts[2].replace(',','.'); const time=Date.parse(iso); if(!Number.isFinite(time))continue;
+          const speedMatch=line.match(speedRe),speed=speedMatch?Number(speedMatch[1].replace(',','.')):null;
+          const key=time+':'+lat.toFixed(6)+':'+lon.toFixed(6);
+          if(!unique.has(key))unique.set(key,{time,day:ts[1],lat,lon,speed:Number.isFinite(speed)?speed:null});
+          else if(unique.get(key).speed===null&&Number.isFinite(speed))unique.get(key).speed=speed;
+        }
+        if(read%12===0)summaryEl.textContent=`Leyendo ${read}/${files.length} archivos…`;
+      }
+      const rows=[...unique.values()].sort((a,b)=>a.time-b.time);
+      tracks=[]; let current=null, previous=null;
+      for(const p of rows){
+        if(!current||p.time-previous.time>8*60*1000||p.day!==previous.day){current={day:p.day,points:[]};tracks.push(current);}
+        const point={lat:p.lat,lon:p.lon,time:p.time,speed:p.speed};
+        if(!current.points.length||haversine(current.points[current.points.length-1],point)>2)current.points.push(point);
+        previous=p;
+      }
+      tracks=tracks.filter(t=>t.points.length>=2);
+      tracks.forEach((t,id)=>{t.id=id;});selectedTrackId=null;
+      const days=[...new Set(tracks.map(t=>t.day))].sort().reverse();
+      dayEl.innerHTML='<option value="*">Todas las rutas</option>'+days.map(d=>`<option value="${d}">${new Date(d+'T12:00:00').toLocaleDateString('es-ES',{weekday:'short',day:'2-digit',month:'long',year:'numeric'})}</option>`).join('');
+      dayEl.disabled=!tracks.length;fitEl.disabled=!tracks.length;
+      if(!tracks.length){summaryEl.textContent=`No se encontraron trayectos con GPS en ${files.length} archivos.`;emptyEl.style.display='block';return;}
+      dayEl.value='*'; render(); await loadRoads();
+    });
+    dayEl.addEventListener('change',render); fitEl.addEventListener('click',render);
+  })();
+  </script>
+</body>
+</html>
